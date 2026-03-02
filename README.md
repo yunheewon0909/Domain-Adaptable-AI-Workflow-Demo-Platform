@@ -272,6 +272,68 @@ Worker 로그에서 poll/claim/execution 상태를 확인합니다.
 docker compose logs --tail=200 worker
 ```
 
+### 7.2.2 Operational jobs: warmup / verify
+
+R5-M1에서 운영 점검용 job 2종을 추가했다.
+
+- `POST /rag/warmup` -> `type=ollama_warmup`
+- `POST /rag/verify` -> `type=rag_verify_index`
+
+두 엔드포인트 모두 기존 reindex enqueue 패턴과 동일하게 동작한다.
+
+- 성공: `202` + `{"job_id":"...","status":"queued"}`
+- 중복(queued/running 존재): `409` + `{"detail":"<job_type> already queued/running","existing_job_id":"..."}`
+
+```bash
+# warmup enqueue
+curl -sS -X POST http://127.0.0.1:8000/rag/warmup
+
+# verify enqueue
+curl -sS -X POST http://127.0.0.1:8000/rag/verify
+
+# list/filter
+curl -sS "http://127.0.0.1:8000/jobs?type=ollama_warmup"
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_verify_index"
+```
+
+`ollama_warmup` runner는 아래를 probe한다.
+
+- Embedding endpoint: `POST /v1/embeddings` (`OLLAMA_EMBED_MODEL`)
+- Chat endpoint: `POST /v1/chat/completions` (`OLLAMA_MODEL`)
+
+성공 시 `result_json` 예시:
+
+```json
+{
+  "embed_ok": true,
+  "chat_ok": true,
+  "embed_latency_ms": 18,
+  "chat_latency_ms": 42,
+  "embed_model": "nomic-embed-text",
+  "chat_model": "qwen2.5:7b-instruct-q4_K_M"
+}
+```
+
+중요: **Warmup MVP는 모델 자동 pull을 수행하지 않는다.**
+모델 미존재/404/연결 오류 시 job은 실패하며, 에러 메시지에 아래 actionable 가이드를 포함한다.
+
+```bash
+docker compose exec -T ollama ollama pull <model>
+```
+
+`rag_verify_index` runner는 `RAG_DB_PATH`의 SQLite를 검사한다.
+
+- required tables: `documents`, `chunks`
+- counts: `documents`, `chunks` (`chunks > 0` 필수)
+- embedding dim: `embedding_dim > 0` 필수
+- strict dim check: `RAG_EXPECTED_EMBED_DIM > 0`이면 정확히 일치해야 성공
+- sample query sanity check: `RAG_VERIFY_SAMPLE_QUERY` (기본값 `maintenance automation`)로 top-1 검색 결과가 1개 이상이어야 성공
+
+관련 env:
+
+- `RAG_EXPECTED_EMBED_DIM` (default `768`, `0`이면 strict dim check 비활성화)
+- `RAG_VERIFY_SAMPLE_QUERY` (default `maintenance automation`)
+
 ### 7.3 Worker 단독 검증(호스트)
 
 ```bash
@@ -310,6 +372,7 @@ compose에서 명시적으로 사용하는 주요 환경변수:
 - RAG index dir (compose override): `RAG_INDEX_DIR=/workspace/data/rag_index`
 - RAG sqlite path (compose override): `RAG_DB_PATH=/workspace/data/rag_index/rag.db`
 - Worker Ollama env for subprocess runner: `OLLAMA_BASE_URL`, `OLLAMA_EMBED_BASE_URL`, `OLLAMA_EMBED_MODEL`
+- Verify runner settings: `RAG_EXPECTED_EMBED_DIM` (default `768`, disable with `0`), `RAG_VERIFY_SAMPLE_QUERY`
 - Ollama base URL: `OLLAMA_BASE_URL=http://ollama:11434/v1`
 - Ollama model: `OLLAMA_MODEL=qwen2.5:7b-instruct-q4_K_M`
 - Ollama fallback model: `OLLAMA_FALLBACK_MODEL=qwen2.5:3b-instruct-q4_K_M`

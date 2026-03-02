@@ -12,6 +12,18 @@ from typing import Any, Callable
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+SUPPORTED_JOB_TYPES = (
+    "rag_reindex",
+    "ollama_warmup",
+    "rag_verify_index",
+)
+
+RUNNER_MODULE_BY_JOB_TYPE = {
+    "rag_reindex": "api.services.rag.reindex_job_runner",
+    "ollama_warmup": "api.services.rag.warmup_job_runner",
+    "rag_verify_index": "api.services.rag.verify_index_job_runner",
+}
+
 
 def _get_database_url() -> str:
     return os.getenv(
@@ -129,20 +141,34 @@ def _coerce_job_id(job_id: Any) -> int | str:
     return str(job_id)
 
 
-def _claim_next_rag_reindex_job(engine: Engine) -> dict[str, Any] | None:
+def _build_job_type_params(job_types: tuple[str, ...]) -> tuple[str, dict[str, str]]:
+    placeholders = ", ".join(f":job_type_{index}" for index, _ in enumerate(job_types))
+    params = {f"job_type_{index}": job_type for index, job_type in enumerate(job_types)}
+    return placeholders, params
+
+
+def _claim_next_job(engine: Engine, *, job_types: tuple[str, ...]) -> dict[str, Any] | None:
+    if not job_types:
+        return None
+
+    placeholders, type_params = _build_job_type_params(job_types)
+
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
             row = connection.execute(
                 text(
                     """
-                    SELECT id, payload_json, attempts, max_attempts
+                    SELECT id, type, payload_json, attempts, max_attempts
                     FROM jobs
-                    WHERE type = 'rag_reindex' AND status = 'queued'
+                    WHERE status = 'queued' AND type IN ("""
+                    + placeholders
+                    + """)
                     ORDER BY created_at ASC, id ASC
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
                     """
-                )
+                ),
+                type_params,
             ).mappings().first()
             if row is None:
                 return None
@@ -164,6 +190,7 @@ def _claim_next_rag_reindex_job(engine: Engine) -> dict[str, Any] | None:
 
             return {
                 "id": _coerce_job_id(row["id"]),
+                "type": str(row["type"]),
                 "payload_json": _normalize_payload(row["payload_json"]),
                 "attempts": int(row["attempts"] or 0),
                 "max_attempts": int(row["max_attempts"] or _get_default_max_attempts()),
@@ -173,13 +200,16 @@ def _claim_next_rag_reindex_job(engine: Engine) -> dict[str, Any] | None:
         row = connection.execute(
             text(
                 """
-                SELECT id, payload_json, attempts, max_attempts
+                SELECT id, type, payload_json, attempts, max_attempts
                 FROM jobs
-                WHERE type = 'rag_reindex' AND status = 'queued'
+                WHERE status = 'queued' AND type IN ("""
+                + placeholders
+                + """)
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
                 """
-            )
+            ),
+            type_params,
         ).mappings().first()
         if row is None:
             return None
@@ -203,13 +233,46 @@ def _claim_next_rag_reindex_job(engine: Engine) -> dict[str, Any] | None:
 
         return {
             "id": _coerce_job_id(row["id"]),
+            "type": str(row["type"]),
             "payload_json": _normalize_payload(row["payload_json"]),
             "attempts": int(row["attempts"] or 0),
             "max_attempts": int(row["max_attempts"] or _get_default_max_attempts()),
         }
 
 
-def _run_reindex_subprocess(payload_json: dict[str, Any] | None = None) -> dict[str, Any]:
+def _claim_next_rag_reindex_job(engine: Engine) -> dict[str, Any] | None:
+    return _claim_next_job(engine, job_types=("rag_reindex",))
+
+
+def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
+    env = os.environ.copy()
+    keys_to_propagate = [
+        "WORKER_API_PROJECT_DIR",
+        "OLLAMA_BASE_URL",
+        "OLLAMA_MODEL",
+        "OLLAMA_FALLBACK_MODEL",
+        "OLLAMA_EMBED_BASE_URL",
+        "OLLAMA_EMBED_MODEL",
+        "OLLAMA_TIMEOUT_SECONDS",
+        "RAG_SOURCE_DIR",
+        "RAG_INDEX_DIR",
+        "RAG_DB_PATH",
+        "RAG_EXPECTED_EMBED_DIM",
+        "RAG_VERIFY_SAMPLE_QUERY",
+    ]
+    for key in keys_to_propagate:
+        value = os.getenv(key)
+        if value is not None:
+            env[key] = value
+
+    env["WORKER_API_PROJECT_DIR"] = api_project_dir
+    return env
+
+
+def _run_job_subprocess(job_type: str, payload_json: dict[str, Any] | None = None) -> dict[str, Any]:
+    if job_type not in RUNNER_MODULE_BY_JOB_TYPE:
+        raise RuntimeError(f"unsupported job type for subprocess runner: {job_type}")
+
     api_project_dir = os.getenv("WORKER_API_PROJECT_DIR", "/workspace/apps/api")
     command = [
         "uv",
@@ -218,38 +281,47 @@ def _run_reindex_subprocess(payload_json: dict[str, Any] | None = None) -> dict[
         api_project_dir,
         "python",
         "-m",
-        "api.services.rag.reindex_job_runner",
+        RUNNER_MODULE_BY_JOB_TYPE[job_type],
     ]
     if payload_json is not None:
         command.extend(["--payload-json", json.dumps(payload_json)])
+
     completed = subprocess.run(
         command,
         capture_output=True,
         text=True,
         check=False,
         cwd="/workspace",
+        env=_build_subprocess_env(api_project_dir),
     )
     if completed.returncode != 0:
         stderr = completed.stderr.strip() or completed.stdout.strip()
         stderr_first_line = stderr.splitlines()[0] if stderr else "<empty>"
         print(
-            f"[worker] reindex subprocess failed exit={completed.returncode} stderr_first={stderr_first_line}",
+            (
+                f"[worker] {job_type} subprocess failed "
+                f"exit={completed.returncode} stderr_first={stderr_first_line}"
+            ),
             flush=True,
         )
-        raise RuntimeError(f"reindex subprocess failed (exit={completed.returncode}): {stderr}")
+        raise RuntimeError(f"{job_type} subprocess failed (exit={completed.returncode}): {stderr}")
 
     output = completed.stdout.strip().splitlines()
     if not output:
-        raise RuntimeError("reindex subprocess produced no output")
+        raise RuntimeError(f"{job_type} subprocess produced no output")
 
     try:
         parsed = json.loads(output[-1])
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"reindex subprocess returned invalid JSON: {output[-1]}") from exc
+        raise RuntimeError(f"{job_type} subprocess returned invalid JSON: {output[-1]}") from exc
 
     if not isinstance(parsed, dict):
-        raise RuntimeError("reindex subprocess payload must be an object")
+        raise RuntimeError(f"{job_type} subprocess payload must be an object")
     return parsed
+
+
+def _run_reindex_subprocess(payload_json: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _run_job_subprocess("rag_reindex", payload_json)
 
 
 def _mark_job_succeeded(engine: Engine, job_id: int | str, result_json: dict[str, Any]) -> None:
@@ -311,6 +383,7 @@ def _process_claimed_job(
     runner: Callable[[dict[str, Any] | None], dict[str, Any]],
 ) -> None:
     job_id = _coerce_job_id(job["id"])
+    job_type = str(job.get("type", "unknown"))
     attempts = int(job.get("attempts", 0))
     max_attempts = int(job.get("max_attempts") or _get_default_max_attempts())
     payload = _normalize_payload(job.get("payload_json"))
@@ -326,13 +399,19 @@ def _process_claimed_job(
             error_message=str(exc),
         )
         print(
-            f"[worker] job failed job_id={job_id} attempts={attempts + 1}/{max_attempts} error={exc}",
+            (
+                f"[worker] job failed job_id={job_id} type={job_type} "
+                f"attempts={attempts + 1}/{max_attempts} error={exc}"
+            ),
             flush=True,
         )
         return
 
     _mark_job_succeeded(engine, job_id, result_json)
-    print(f"[worker] job succeeded job_id={job_id} result={result_json}", flush=True)
+    print(
+        f"[worker] job succeeded job_id={job_id} type={job_type} result={result_json}",
+        flush=True,
+    )
 
 
 def main() -> None:
@@ -350,12 +429,17 @@ def main() -> None:
     heartbeat_thread.start()
 
     while True:
-        job = _claim_next_rag_reindex_job(engine)
+        job = _claim_next_job(engine, job_types=SUPPORTED_JOB_TYPES)
         if job is None:
             sleep(poll_seconds)
             continue
 
-        _process_claimed_job(engine, job, runner=_run_reindex_subprocess)
+        job_type = str(job.get("type", ""))
+        _process_claimed_job(
+            engine,
+            job,
+            runner=lambda payload, *, _job_type=job_type: _run_job_subprocess(_job_type, payload),
+        )
 
 
 if __name__ == "__main__":

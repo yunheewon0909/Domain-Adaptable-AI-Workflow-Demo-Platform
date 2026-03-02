@@ -26,6 +26,8 @@ class Settings:
     rag_db_path: str
     rag_chunk_size: int
     rag_chunk_overlap: int
+    rag_expected_embed_dim: int
+    rag_verify_sample_query: str
     ollama_base_url: str
     ollama_model: str
     ollama_fallback_model: str
@@ -53,6 +55,12 @@ def get_settings() -> Settings:
         rag_db_path=rag_db_path,
         rag_chunk_size=_to_int(os.getenv("RAG_CHUNK_SIZE"), default=500, minimum=100),
         rag_chunk_overlap=_to_int(os.getenv("RAG_CHUNK_OVERLAP"), default=50, minimum=0),
+        rag_expected_embed_dim=_to_int(
+            os.getenv("RAG_EXPECTED_EMBED_DIM"),
+            default=768,
+            minimum=0,
+        ),
+        rag_verify_sample_query=os.getenv("RAG_VERIFY_SAMPLE_QUERY", "maintenance automation"),
         ollama_base_url=ollama_base_url,
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M"),
         ollama_fallback_model=os.getenv("OLLAMA_FALLBACK_MODEL", "qwen2.5:3b-instruct-q4_K_M"),

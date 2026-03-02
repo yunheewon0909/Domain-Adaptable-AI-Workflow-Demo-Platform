@@ -33,6 +33,48 @@ class ReindexEnqueueRequest(BaseModel):
     payload_json: dict[str, Any] | None = None
 
 
+def _enqueue_job(
+    *,
+    job_type: str,
+    payload_json: dict[str, Any] | None = None,
+    active_types: tuple[str, ...] | None = None,
+) -> JSONResponse:
+    conflict_types = active_types or (job_type,)
+
+    with Session(get_engine()) as session:
+        existing = session.scalar(
+            select(JobRecord)
+            .where(JobRecord.type.in_(conflict_types))
+            .where(JobRecord.status.in_(["queued", "running"]))
+            .order_by(JobRecord.created_at.asc(), JobRecord.id.asc())
+            .limit(1)
+        )
+        if existing is not None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": f"{job_type} already queued/running",
+                    "existing_job_id": existing.id,
+                },
+            )
+
+        job = JobRecord(
+            id=_next_job_id(session),
+            type=job_type,
+            status="queued",
+            payload_json=payload_json,
+            attempts=0,
+            max_attempts=3,
+            updated_at=datetime.now(timezone.utc),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+        job_status = job.status
+
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": job_status})
+
+
 @app.on_event("startup")
 def startup() -> None:
     get_engine()
@@ -131,39 +173,17 @@ def health() -> dict[str, str]:
 @app.post("/rag/reindex")
 def enqueue_rag_reindex(request: ReindexEnqueueRequest | None = None) -> JSONResponse:
     payload_json = request.payload_json if request is not None else None
+    return _enqueue_job(job_type="rag_reindex", payload_json=payload_json)
 
-    with Session(get_engine()) as session:
-        existing = session.scalar(
-            select(JobRecord)
-            .where(JobRecord.type == "rag_reindex")
-            .where(JobRecord.status.in_(["queued", "running"]))
-            .order_by(JobRecord.created_at.asc(), JobRecord.id.asc())
-            .limit(1)
-        )
-        if existing is not None:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "detail": "rag_reindex already queued/running",
-                    "existing_job_id": existing.id,
-                },
-            )
 
-        job = JobRecord(
-            id=_next_job_id(session),
-            type="rag_reindex",
-            status="queued",
-            payload_json=payload_json,
-            attempts=0,
-            max_attempts=3,
-            updated_at=datetime.now(timezone.utc),
-        )
-        session.add(job)
-        session.commit()
-        job_id = job.id
-        job_status = job.status
+@app.post("/rag/warmup")
+def enqueue_rag_warmup() -> JSONResponse:
+    return _enqueue_job(job_type="ollama_warmup")
 
-    return JSONResponse(status_code=202, content={"job_id": job_id, "status": job_status})
+
+@app.post("/rag/verify")
+def enqueue_rag_verify_index() -> JSONResponse:
+    return _enqueue_job(job_type="rag_verify_index")
 
 
 @app.get("/jobs")
