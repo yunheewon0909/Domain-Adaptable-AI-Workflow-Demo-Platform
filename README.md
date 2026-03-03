@@ -386,6 +386,28 @@ docker compose exec -T ollama ollama pull <model>
 - `RAG_EXPECTED_EMBED_DIM` (default `768`, `0`이면 strict dim check 비활성화)
 - `RAG_VERIFY_SAMPLE_QUERY` (default `maintenance automation`)
 
+#### Job 조회 치트시트
+
+```bash
+# 최근 N개(기본)
+curl -sS "http://127.0.0.1:8000/jobs" | head
+
+# type 필터
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental"
+
+# status 필터
+curl -sS "http://127.0.0.1:8000/jobs?status=queued"
+
+# type + status
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental&status=queued"
+
+# detail
+curl -sS "http://127.0.0.1:8000/jobs/<job_id>"
+```
+
+- 상태 전이: `queued -> running -> succeeded/failed`
+- 완료 후 `GET /jobs/<job_id>`의 `result_json`에서 `unchanged/new/updated/removed` 및 오류 메시지를 확인한다.
+
 ### 7.3 Worker 단독 검증(호스트)
 
 ```bash
@@ -413,6 +435,20 @@ Compose 경로에서는 `api` 컨테이너가 시작 시 아래 순서로 자동
 
 따라서 7.2(호스트 단독 검증)과 달리 Compose에서는 수동 migration 명령을 별도로 실행할 필요가 없다.
 
+Troubleshooting / Dev note:
+
+- 코드/README를 수정한 뒤 컨테이너를 재시작하지 않으면 이전 버전 API가 계속 실행될 수 있다.
+
+```bash
+# 빠른 재시작
+docker compose restart api worker
+
+# 이미지 반영 강제
+docker compose up -d --build --force-recreate
+```
+
+- openapi에서 `mode` 파라미터가 안 보이면(또는 `mode=invalid`가 422가 아니면) old 컨테이너를 먼저 의심한다.
+
 compose에서 명시적으로 사용하는 주요 환경변수:
 
 - API DB: `API_DATABASE_URL`
@@ -434,10 +470,22 @@ compose에서 명시적으로 사용하는 주요 환경변수:
 
 `RAG_DB_PATH` 우선순위 규칙: `RAG_DB_PATH`가 설정되면 그 값을 사용하고, 비어있으면 `RAG_INDEX_DIR/rag.db`를 기본값으로 사용한다.
 
+컨테이너 vs 호스트 경로(중요):
+
+- Host 기본: `data/sample_docs`, `data/rag_index/rag.db`
+- Compose(컨테이너) 기본 override: `/workspace/data/sample_docs`, `/workspace/data/rag_index/rag.db`
+- 호스트에서 만든 파일이 compose에서 보이려면 repo working tree를 공유 마운트(= `/workspace`)해야 한다.
+
 Ollama 모델 영속성:
 
 - compose는 `/root/.ollama`를 외부 볼륨 `ollama-models`에 마운트한다.
-- 모델 보존이 필요하면 `docker compose down -v`를 사용하지 말고 `docker compose down --remove-orphans`를 사용한다.
+- 모델/볼륨을 삭제할 수 있는 위험 명령 예시(주의):
+  - `docker compose down -v` (프로젝트 볼륨 삭제 가능)
+  - `docker system prune --volumes` (볼륨까지 정리되어 모델 손실 가능)
+  - `docker volume rm ollama-models` (외부 볼륨 직접 삭제)
+- 안전한 대안:
+  - `docker compose down --remove-orphans`
+- `ollama-models` 볼륨은 external로 유지되며, 위 위험 명령을 피하면 모델 재다운로드를 방지할 수 있다.
 - 최초 1회 볼륨 생성:
   - `docker volume create ollama-models || true`
 
