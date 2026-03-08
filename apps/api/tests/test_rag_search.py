@@ -8,12 +8,12 @@ from sqlalchemy.orm import Session
 from api.config import get_settings
 from api.db import Base, get_engine
 from api.main import app, get_embedding_client
+from api.models import JobRecord
 from api.services.rag.chunker import chunk_documents
 from api.services.rag.embedder import embed_chunks
 from api.services.rag.index_store import persist_index
-from api.services.rag.loader import load_documents
-from api.models import JobRecord
 from api.services.rag.ingest import ingest_documents
+from api.services.rag.loader import load_documents
 from api.services.rag.query import search_index
 
 
@@ -41,6 +41,7 @@ def rag_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tupl
     monkeypatch.setenv("API_DB_ECHO", "false")
     monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
     monkeypatch.setenv("RAG_DB_PATH", str(rag_db_path))
+    monkeypatch.setenv("RAG_SOURCE_DIR", str(tmp_path / "sample_docs"))
 
     get_settings.cache_clear()
     get_engine.cache_clear()
@@ -48,7 +49,6 @@ def rag_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tupl
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
 
-    # keep existing API DB path healthy while testing rag route
     with Session(engine) as session:
         session.add(JobRecord(id="seed-job", status="queued"))
         session.commit()
@@ -117,7 +117,7 @@ def test_rag_search_endpoint_returns_hits(rag_client: tuple[TestClient, Path], t
     payload = response.json()
     assert isinstance(payload, list)
     assert len(payload) >= 1
-    assert {"chunk_id", "source_path", "score", "text"}.issubset(payload[0].keys())
+    assert {"chunk_id", "source_path", "title", "score", "text"}.issubset(payload[0].keys())
 
 
 def test_rag_search_endpoint_without_index_returns_503(

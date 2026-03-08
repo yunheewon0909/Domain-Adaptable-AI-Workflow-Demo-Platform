@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Domain-Adaptable AI Workflow Demo Platform</title>
+    <link rel="stylesheet" href="/demo/assets/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <p class="eyebrow">Demo-first reviewer experience</p>
+        <h1>Domain-Adaptable AI Workflow Demo Platform</h1>
+        <p class="subtitle">
+          Select a dataset, run one of three workflow templates, and inspect typed results with mandatory evidence.
+        </p>
+      </header>
+
+      <section class="panel controls">
+        <div class="field">
+          <label for="dataset-select">Dataset</label>
+          <select id="dataset-select"></select>
+        </div>
+
+        <div class="field">
+          <span class="label">Workflow</span>
+          <div id="workflow-list" class="workflow-list"></div>
+        </div>
+
+        <div class="field">
+          <label for="prompt-input">Prompt</label>
+          <textarea id="prompt-input" rows="5" placeholder="Describe the question, decision, or report you want to run."></textarea>
+        </div>
+
+        <button id="run-button" class="run-button">Run workflow</button>
+        <p id="run-hint" class="hint"></p>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Job status</h2>
+          <pre id="job-status" class="mono empty">No workflow run yet.</pre>
+        </article>
+
+        <article class="panel">
+          <h2>Result</h2>
+          <div id="result-panel" class="result-panel empty">Run a workflow to see structured output.</div>
+        </article>
+      </section>
+
+      <section class="panel evidence-panel">
+        <h2>Evidence</h2>
+        <div id="evidence-panel" class="evidence-list empty">Evidence will appear here after a successful run.</div>
+      </section>
+    </main>
+
+    <script src="/demo/assets/app.js" defer></script>
+  </body>
+</html>

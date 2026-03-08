@@ -17,6 +17,7 @@ SUPPORTED_JOB_TYPES = (
     "rag_reindex_incremental",
     "ollama_warmup",
     "rag_verify_index",
+    "workflow_run",
 )
 
 RUNNER_MODULE_BY_JOB_TYPE = {
@@ -24,6 +25,7 @@ RUNNER_MODULE_BY_JOB_TYPE = {
     "rag_reindex_incremental": "api.services.rag.incremental_reindex_job_runner",
     "ollama_warmup": "api.services.rag.warmup_job_runner",
     "rag_verify_index": "api.services.rag.verify_index_job_runner",
+    "workflow_run": "api.services.workflows.job_runner",
 }
 
 
@@ -250,6 +252,7 @@ def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
     env = os.environ.copy()
     keys_to_propagate = [
         "WORKER_API_PROJECT_DIR",
+        "API_DATABASE_URL",
         "OLLAMA_BASE_URL",
         "OLLAMA_MODEL",
         "OLLAMA_FALLBACK_MODEL",
@@ -268,6 +271,10 @@ def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
             env[key] = value
 
     env["WORKER_API_PROJECT_DIR"] = api_project_dir
+    if "API_DATABASE_URL" not in env:
+        worker_db_url = os.getenv("WORKER_DATABASE_URL")
+        if worker_db_url is not None:
+            env["API_DATABASE_URL"] = worker_db_url
     return env
 
 

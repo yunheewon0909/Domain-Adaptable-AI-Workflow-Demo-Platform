@@ -1,17 +1,30 @@
-# Industrial AI Harness Platform
+# Domain-Adaptable AI Workflow Demo Platform
 
 ## 0. Portfolio Snapshot
-Industrial AI Harness Platform은 산업 현장의 AI 운영 자동화를 위해 API/Worker/RAG를 한 레포에서 검증 가능한 형태로 묶은 실행 플랫폼입니다. Postgres 기반 Job Queue와 Worker 상태 전이를 통해 비동기 운영 작업(`warmup`, `verify`, `reindex`)을 안정적으로 처리합니다. 실행 철학은 `호스트(macOS)=brew+uv 중심`, `위험 실행(OMX madmax/codex)=Docker sandbox 격리`입니다.
+이 레포는 기존 API/Worker/RAG/Ollama/Compose 기반을 재사용해, **dataset selector + workflow catalog + evidence-backed result**를 한 화면에서 보여주는 co-hosted demo platform입니다.
+
+Phase-1에서 바로 시연 가능한 핵심은 다음입니다.
+
+- `/demo` 정적 UI에서 dataset 전환
+- 정확히 3개의 workflow 실행: `briefing`, `recommendation`, `report_generator`
+- `workflow_run` job queue + worker 처리
+- mandatory `evidence[]` 포함 typed output
+- minimal dataset registry skeleton (`datasets` table + active dataset selection)
+- 기존 `/rag/search`, `/ask`, `/rag/warmup`, `/rag/verify`, `/rag/reindex` 유지
+
+기존 산업 도메인 중심 표시 이름은 **default dataset narrative**로만 남기고, 제품 표시는 **domain-adaptable AI workflow demo platform** 방향으로 정리했다.
 
 ## 1. Implemented Features
-- [x] **API (FastAPI)**: `/health`, `/jobs`, `/jobs/{job_id}`로 상태 확인/큐 조회/상세 조회 제공.
-- [x] **Job Queue via Postgres**: `jobs` 테이블 기반으로 `queued -> running -> succeeded/failed` 상태 전이 관리.
-- [x] **Worker Runtime**: heartbeat upsert, queued job poll/claim, retry/backoff 재시도, 완료 시 `result_json` 기록.
-- [x] **RAG v1**: `data/sample_docs` ingestion(`rag-ingest`)으로 `data/rag_index/rag.db` 생성, `/rag/search`, `/ask`(RAG+Ollama) 제공.
-- [x] **Operational Jobs**: `/rag/warmup`, `/rag/verify`, `/rag/reindex`(full/incremental) enqueue + 백그라운드 실행.
-- [x] **OMX Sandbox**: `omx --madmax`, `codex`를 컨테이너 내부로 격리하고 SSH agent forwarding, `~/.codex` read-only mount + one-time copy 적용.
+- [x] **Co-hosted demo UI**: `/demo`에서 dataset dropdown, workflow selector, prompt input, job status, result, evidence panel 제공.
+- [x] **Workflow catalog (Phase-1 fixed)**: `briefing`, `recommendation`, `report_generator` 3종만 노출.
+- [x] **Workflow queue path**: `type=workflow_run`, `jobs.workflow_key`, `jobs.dataset_key`, worker subprocess runner 추가.
+- [x] **Minimal dataset registry**: `datasets` control-plane table, `GET /datasets`, `POST /datasets/active`, active dataset resolver.
+- [x] **Retrieval-first typed outputs**: 모든 workflow 결과는 typed contract + mandatory `evidence[]`를 저장.
+- [x] **RAG primitives retained**: `/rag/search`, `/ask`, local SQLite/JSON fallback retrieval, Ollama-backed answer path 유지.
+- [x] **Operational jobs retained**: `/rag/warmup`, `/rag/verify`, `/rag/reindex` enqueue + worker 처리 유지.
+- [x] **OMX sandbox retained**: `omx --madmax`, `codex`를 컨테이너 내부로 격리하고 SSH agent forwarding, `~/.codex` read-only mount + one-time copy 유지.
 
-## 2. Quick Demo (5~10분)
+## 2. Quick Demo (3~5분)
 
 ### A) Compose 트랙 (권장)
 1) **서비스 기동**
@@ -26,164 +39,109 @@ docker compose exec -T ollama ollama pull qwen2.5:3b-instruct-q4_K_M
 docker compose exec -T ollama ollama pull qwen2.5:7b-instruct-q4_K_M
 docker compose exec -T ollama ollama pull nomic-embed-text
 ```
-기대 결과: pull 완료 후 `/ask`, `/rag/warmup` 실패율이 크게 줄어듭니다.
+기대 결과: `/ask`, `workflow_run`, `/rag/warmup` 경로가 안정적으로 동작.
 
-3) **헬스체크**
+3) **헬스체크 + catalog 확인**
 ```bash
 curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/datasets
+curl -s http://127.0.0.1:8000/workflows
 ```
-기대 결과: HTTP 200 + `{"status":"ok"}`.
+기대 결과: health OK, dataset 2종(`industrial_demo`, `enterprise_docs`), workflow 3종 확인.
 
-4) **Warmup job enqueue**
-```bash
-curl -sS -X POST http://127.0.0.1:8000/rag/warmup
+4) **Demo UI 열기**
+```text
+http://127.0.0.1:8000/demo
 ```
-기대 결과: HTTP 202 + `{"job_id":"...","status":"queued"}` (중복 시 409).
+기대 결과: dataset selector + workflow cards + prompt input + result/evidence panel이 한 화면에 표시.
 
-5) **Reindex job enqueue (incremental 또는 full)**
+5) **CLI로 workflow enqueue 확인**
 ```bash
-curl -sS -X POST 'http://127.0.0.1:8000/rag/reindex?mode=incremental'
-# 또는
-curl -sS -X POST 'http://127.0.0.1:8000/rag/reindex?mode=full'
-```
-기대 결과: HTTP 202 + queued job 생성, 이후 상태가 `running -> succeeded/failed`로 전이.
-
-6) **Verify job enqueue**
-```bash
-curl -sS -X POST http://127.0.0.1:8000/rag/verify
-```
-기대 결과: HTTP 202 + verify job 생성, 성공 시 `result_json`에 인덱스 점검 결과 기록.
-
-7) **RAG 검색 + 질의응답**
-```bash
-curl -sG "http://127.0.0.1:8000/rag/search" \
-  --data-urlencode "q=maintenance automation" \
-  --data-urlencode "k=3"
-curl -s -X POST "http://127.0.0.1:8000/ask" \
+curl -sS -X POST http://127.0.0.1:8000/workflows/briefing/jobs \
   -H "Content-Type: application/json" \
-  -d '{"question":"What maintenance actions are recommended?","k":3}'
+  -d '{"dataset_key":"industrial_demo","prompt":"Prepare a reviewer briefing for this dataset.","k":4}'
 ```
-기대 결과: `/rag/search`는 검색 hit 배열을, `/ask`는 `answer + sources[] + meta`를 반환.
+기대 결과: HTTP `202` + `job_id/status/workflow_key/dataset_key` 반환, worker가 이후 `result_json.evidence[]`를 저장.
 
-### B) Host-only 트랙 (가능 시)
-1) **RAG 인덱스 생성**
+6) **Job filtering 확인**
 ```bash
-uv run --project apps/api rag-ingest
-```
-기대 결과: `data/rag_index/rag.db` 생성.
-
-2) **API 실행**
-```bash
-uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-기대 결과: 로컬 `:8000`에서 API 응답 가능.
-
-3) **검색/질의 API 확인**
-```bash
-curl -sG "http://127.0.0.1:8000/rag/search" \
-  --data-urlencode "q=maintenance automation" \
-  --data-urlencode "k=3"
-curl -s -X POST "http://127.0.0.1:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What maintenance actions are recommended?","k":3}'
-```
-기대 결과: `/rag/search`는 `chunk_id/source_path/score/text`, `/ask`는 `answer/sources/meta` 포함.
-
-### Job Status 확인 (Queue/Worker 진행상태)
-상태 전이는 `queued -> running -> succeeded/failed` 순서로 진행됩니다.
-1) **enqueue 응답에서 `job_id` 확인** (위 Quick Demo enqueue 응답과 연결)
-```bash
-curl -sS -X POST http://127.0.0.1:8000/rag/warmup
-```
-기대 결과: `{"job_id":"...","status":"queued"}`에서 `job_id`를 복사해 이후 상세 조회에 사용합니다.
-2) **전체 job 목록 보기 (`GET /jobs`)**
-```bash
-curl -sS http://127.0.0.1:8000/jobs
-```
-기대 결과: 현재 큐의 job 목록이 배열(JSON)로 반환됩니다.
-3) **type/status로 필터링 (`GET /jobs?type=...&status=...`)**
-```bash
-curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental&status=queued"
-curl -sS "http://127.0.0.1:8000/jobs?type=ollama_warmup&status=running"
-curl -sS "http://127.0.0.1:8000/jobs?type=rag_verify_index&status=queued"
-```
-기대 결과: 지정한 `type`/`status` 조건의 job만 조회됩니다 (`queued`, `running` 확인).
-4) **특정 job 상세 (`GET /jobs/{job_id}`)**
-```bash
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=briefing&dataset_key=industrial_demo&status=queued"
 curl -sS http://127.0.0.1:8000/jobs/<job_id>
 ```
-기대 결과: 상세 JSON의 `status`, `attempts`, `error`, `result_json` 필드에서 진행 상태/실패 원인/결과를 확인합니다.
-5) **worker 로그로 실제 처리 확인**
+기대 결과: workflow/dataset/status 기준으로 job 조회 가능.
+
+7) **RAG primitive 확인(선택)**
 ```bash
-docker compose logs --tail=200 worker
-docker compose logs -f --tail=200 worker
+curl -sG "http://127.0.0.1:8000/rag/search" \
+  --data-urlencode "q=maintenance automation" \
+  --data-urlencode "k=3" \
+  --data-urlencode "dataset_key=industrial_demo"
+curl -s -X POST "http://127.0.0.1:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What maintenance actions are recommended?","k":3,"dataset_key":"industrial_demo"}'
 ```
-기대 결과: `[worker] heartbeat upserted ...`, `[worker] job succeeded ...`, `[worker] job failed ...` 로그로 처리 진행을 확인할 수 있습니다.
-6) **(선택) DB 직접 조회**
+기대 결과: `/rag/search`는 evidence-style hit 배열을, `/ask`는 `answer + sources[] + meta`를 반환.
+
+### B) Host-only 트랙 (가능 시)
+1) **마이그레이션 + API 실행**
 ```bash
-docker compose exec -T postgres psql -U postgres -d industrial_ai -c "select id,type,status,updated_at from jobs order by updated_at desc limit 10;"
+uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
+uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
-기대 결과: API 조회와 동일한 최신 job 상태를 DB에서 직접 확인할 수 있습니다.
-`queued`에서 오래 멈추면 먼저 `worker` 컨테이너/로그를 확인하세요. 코드 변경 직후라면 `docker compose restart api worker` 또는 `docker compose up -d --build --force-recreate`로 재기동합니다. enqueue 시 `409 already queued/running`이 오면 동일 타입 job이 이미 진행 중인지 확인하세요.
-자세한 조회 패턴은 아래 `7.2.2 Operational jobs`의 `Job 조회 치트시트`를 참고하세요.
+
+2) **데모 API 확인**
+```bash
+curl -s http://127.0.0.1:8000/datasets
+curl -s http://127.0.0.1:8000/workflows
+curl -s http://127.0.0.1:8000/demo | head
+```
+
+3) **workflow enqueue 확인**
+```bash
+curl -sS -X POST http://127.0.0.1:8000/workflows/report_generator/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_key":"enterprise_docs","prompt":"Generate a one-page report for the pilot review.","k":4}'
+```
+
+### Job Status 확인 (Queue/Worker 진행상태)
+상태 전이는 `queued -> running -> succeeded/failed` 순서로 진행된다.
+
+```bash
+# 전체 job 목록
+curl -sS http://127.0.0.1:8000/jobs
+
+# 기존 operational job filter
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_verify_index&status=queued"
+
+# workflow demo filter
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=recommendation&dataset_key=enterprise_docs&status=queued"
+
+# 상세 조회
+curl -sS http://127.0.0.1:8000/jobs/<job_id>
+```
+
+worker 진행 상황은 `docker compose logs -f --tail=200 worker`로 확인한다.
 
 ## 3. Repo Navigation
-- `apps/api/src/api/main.py`: FastAPI 엔드포인트(`/health`, `/jobs`, `/jobs/{job_id}`, `/rag/*`, `/ask`).
-- `apps/worker/src/worker/main.py`: worker loop, heartbeat, poll/claim, job runner dispatch.
-- `apps/api/src/api/services/rag/`: ingestion/query/warmup/verify/reindex runner 로직.
-- `data/sample_docs/`: RAG 입력 문서 샘플.
-- `data/rag_index/`: 런타임 인덱스 출력(`rag.db`, git ignored).
+- `apps/api/src/api/main.py`: router/static mount 중심 FastAPI 조립 파일.
+- `apps/api/src/api/routers/`: `datasets`, `workflows`, `jobs`, `demo`, `rag`, `health` 라우터.
+- `apps/api/src/api/services/datasets/`: default dataset seed, active dataset selection, dataset path resolver.
+- `apps/api/src/api/services/workflows/`: workflow contracts, catalog, profile prompts, runner/service.
+- `apps/api/src/api/services/retrieval/service.py`: dataset-aware evidence retrieval + grounding context 조립.
+- `apps/api/src/api/static/demo/`: co-hosted static HTML/CSS/JS demo UI.
+- `apps/worker/src/worker/main.py`: job claim/retry/heartbeat + `workflow_run` subprocess dispatch.
+- `data/sample_docs`, `data/rag_index`: legacy default industrial dataset artifact paths.
+- `data/datasets/enterprise_docs/`: Phase-1 secondary demo dataset source/index skeleton.
 - `compose.yml`, `compose.omx.yml`, `Dockerfile`, `entrypoint.sh`: 실행/격리/부트스트랩 진입점.
 
-Week-1 MVP를 위한 초기 스켈레톤 저장소입니다.  
-원칙은 `호스트(macOS) = Homebrew + uv 중심`, `위험 실행(OMX madmax/codex) = Docker sandbox 내부 전용`입니다.
+## 3.1 현재 목적
+- domain-adaptable AI workflow demo를 한 레포에서 바로 검토/시연 가능하게 유지한다.
+- 기존 API/FastAPI + Worker + RAG + Ollama + Compose 기반을 재사용한다.
+- schema/API/worker/UI 계약을 작게 고정하고, Phase-1 범위 밖 플랫폼 재설계는 피한다.
 
-## 1. 목적
-
-- 산업용 AI 하네스 플랫폼의 최소 실행 뼈대를 만든다.
-- API/FastAPI와 Worker를 분리해 이후 DB/큐를 단계적으로 붙일 수 있게 한다.
-- 운영 규칙(커밋 게이트, 문서 우선 업데이트)을 코드와 문서에 함께 강제한다.
-
-## 2. Week-1 범위
-
-- `apps/api`: FastAPI `/health`, `/jobs`(DB 조회) + Alembic jobs 마이그레이션
-- `apps/worker`: DB heartbeat upsert + retry/backoff
-- `shared/db/interface.py`: 다음 마일스톤용 DB 인터페이스 자리만 제공
-- `Dockerfile`, `entrypoint.sh`, `compose.omx.yml`: OMX 격리 샌드박스
-- `compose.yml`: api/worker/postgres 최소 실행 골격
-- Week-2 R1-R4: 로컬 RAG ingestion + search + ask API (`data/sample_docs` -> chunk/embed -> `data/rag_index/rag.db`, `/rag/search`, `/ask`)
-
-## 2.1 마일스톤 진행 상태
-
-- [x] M0: 레포 초기화 + 기본 문서/규칙 + 디렉토리 트리
-- [x] M1: OMX 도커 샌드박스 파일 + 호스트 검증
-- [x] M2: uv 기반 Python api/worker 스켈레톤
-- [x] M3: Postgres 서비스 + API DB 설정 플럼빙 + Alembic 스캐폴드
-- [x] M4: Alembic jobs 마이그레이션 + `/jobs` DB 조회
-- [x] M5: worker heartbeat DB upsert + retry/backoff
-
-## 2.2 Week-2 RAG v1 진행 상태
-
-- [x] R1: `data/sample_docs` -> chunk -> embed -> `data/rag_index` ingestion
-- [x] R2 (accepted): 로컬 인덱스 기반 `/rag/search` 조회 API
-- [x] R3: `POST /ask` + Ollama(OpenAI-compatible) 생성 경로 + compose `ollama` 서비스
-- [x] R4: Ollama embeddings + SQLite(`rag.db`) 기반 retrieval 전환 (JSON fallback 1-release 호환)
-
-## 3. 아키텍처(초기)
-
-```text
-macOS host
-  ├─ uv / git / docker (host tools)
-  ├─ repo working tree
-  └─ Docker OMX sandbox
-       ├─ Node 20+, @openai/codex, oh-my-codex
-       ├─ forwarded SSH agent socket
-       └─ host ~/.codex(ro) -> container $CODEX_HOME(rw, one-time copy)
-
-Week-1 services
-  ├─ api (FastAPI)
-  └─ worker (heartbeat loop)
-```
+## 3.2 Phase-1 범위 요약
+- 포함: demo UI, workflow catalog 3종, minimal dataset registry, `workflow_run`, README 동기화
+- 제외: `apps/web`, multi-user/auth, full dataset versioning, generalized upload pipeline, `job_runs`, retry/history redesign, retrieval engine 교체, broad Kubernetes packaging
 
 ## 4. 호스트 사전 준비(필수)
 
@@ -361,12 +319,13 @@ docker compose -f compose.omx.yml run --rm omx-sandbox
 ```bash
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
 
-# jobs / worker_heartbeats 테이블 migration 적용
+# jobs / worker_heartbeats / datasets schema migration 적용
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 
 uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 curl -s http://127.0.0.1:8000/health
-curl -s http://127.0.0.1:8000/jobs
+curl -s http://127.0.0.1:8000/datasets
+curl -s http://127.0.0.1:8000/workflows
 
 # migration head 확인
 uv run --project apps/api alembic -c apps/api/alembic.ini heads
@@ -375,7 +334,35 @@ uv run --project apps/api alembic -c apps/api/alembic.ini heads
 기대 응답:
 
 - `/health` -> `{"status":"ok"}`
-- `/jobs` -> `jobs` 테이블 조회 결과(JSON 배열)
+- `/datasets` -> dataset registry 목록 + active dataset 상태
+- `/workflows` -> `briefing`, `recommendation`, `report_generator` 3종
+
+### 7.2.0 Workflow Demo API / UI
+
+Phase-1 demo reviewer path는 `/demo`와 아래 API 조합이다.
+
+```bash
+# dataset 목록
+curl -s http://127.0.0.1:8000/datasets
+
+# active dataset 전환
+curl -sS -X POST http://127.0.0.1:8000/datasets/active \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_key":"enterprise_docs"}'
+
+# workflow catalog
+curl -s http://127.0.0.1:8000/workflows
+
+# workflow enqueue
+curl -sS -X POST http://127.0.0.1:8000/workflows/recommendation/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_key":"enterprise_docs","prompt":"Recommend next actions for the pilot review.","k":4}'
+
+# workflow-aware job filter
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=recommendation&dataset_key=enterprise_docs&status=queued"
+```
+
+브라우저에서 `http://127.0.0.1:8000/demo`를 열면 같은 흐름을 한 화면에서 수행할 수 있다.
 
 ### 7.2.1 Reindex Job Queue API
 
@@ -527,8 +514,11 @@ docker compose exec -T ollama ollama pull <model>
 # 최근 N개(기본)
 curl -sS "http://127.0.0.1:8000/jobs" | head
 
-# type 필터
+# operational type 필터
 curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental"
+
+# workflow demo 필터
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=briefing&dataset_key=industrial_demo"
 
 # status 필터
 curl -sS "http://127.0.0.1:8000/jobs?status=queued"
@@ -536,12 +526,15 @@ curl -sS "http://127.0.0.1:8000/jobs?status=queued"
 # type + status
 curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental&status=queued"
 
+# workflow + dataset + status
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=report_generator&dataset_key=enterprise_docs&status=queued"
+
 # detail
 curl -sS "http://127.0.0.1:8000/jobs/<job_id>"
 ```
 
 - 상태 전이: `queued -> running -> succeeded/failed`
-- 완료 후 `GET /jobs/<job_id>`의 `result_json`에서 `unchanged/new/updated/removed` 및 오류 메시지를 확인한다.
+- 완료 후 `GET /jobs/<job_id>`의 `result_json`에서 operational metrics 또는 workflow `evidence[]`/typed output을 확인한다.
 
 ### 7.3 Worker 단독 검증(호스트)
 
@@ -559,6 +552,7 @@ uv run --project apps/worker python -m worker.main
 기대 로그(요약):
 
 - `worker_heartbeats` 테이블에 upsert heartbeat 수행
+- `workflow_run`, `rag_reindex*`, `ollama_warmup`, `rag_verify_index`를 poll/claim 가능
 - DB 오류 시 exponential backoff + jitter로 재시도
 
 ### 7.4 Compose(postgres/api/worker/ollama) 검증(선택)
@@ -591,9 +585,10 @@ compose에서 명시적으로 사용하는 주요 환경변수:
 - Worker poll interval: `WORKER_POLL_SECONDS` (default `5`)
 - Worker retry cap fallback: `JOB_MAX_ATTEMPTS` (default `3`)
 - Worker API project path for subprocess runner: `WORKER_API_PROJECT_DIR`
-- RAG source dir (compose override): `RAG_SOURCE_DIR=/workspace/data/sample_docs`
-- RAG index dir (compose override): `RAG_INDEX_DIR=/workspace/data/rag_index`
-- RAG sqlite path (compose override): `RAG_DB_PATH=/workspace/data/rag_index/rag.db`
+- Default dataset source dir (compose override): `RAG_SOURCE_DIR=/workspace/data/sample_docs`
+- Default dataset index dir (compose override): `RAG_INDEX_DIR=/workspace/data/rag_index`
+- Default dataset sqlite path (compose override): `RAG_DB_PATH=/workspace/data/rag_index/rag.db`
+- Secondary demo dataset path: `/workspace/data/datasets/enterprise_docs/{source,index}`
 - Worker Ollama env for subprocess runner: `OLLAMA_BASE_URL`, `OLLAMA_EMBED_BASE_URL`, `OLLAMA_EMBED_MODEL`
 - Verify runner settings: `RAG_EXPECTED_EMBED_DIM` (default `768`, disable with `0`), `RAG_VERIFY_SAMPLE_QUERY`
 - Ollama base URL: `OLLAMA_BASE_URL=http://ollama:11434/v1`
@@ -607,8 +602,9 @@ compose에서 명시적으로 사용하는 주요 환경변수:
 
 컨테이너 vs 호스트 경로(중요):
 
-- Host 기본: `data/sample_docs`, `data/rag_index/rag.db`
+- Host 기본 dataset artifact: `data/sample_docs`, `data/rag_index/rag.db`
 - Compose(컨테이너) 기본 override: `/workspace/data/sample_docs`, `/workspace/data/rag_index/rag.db`
+- Secondary demo dataset artifact: `data/datasets/enterprise_docs/source`, `data/datasets/enterprise_docs/index/index.json`
 - 호스트에서 만든 파일이 compose에서 보이려면 repo working tree를 공유 마운트(= `/workspace`)해야 한다.
 
 Ollama 모델 영속성:
@@ -640,13 +636,17 @@ docker compose exec -T ollama ollama pull nomic-embed-text
 
 # HTTP 라우트 확인
 curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/datasets
+curl -s http://127.0.0.1:8000/workflows
+curl -s http://127.0.0.1:8000/demo | head
 curl -s http://127.0.0.1:8000/jobs
 curl -sG "http://127.0.0.1:8000/rag/search" \
   --data-urlencode "q=maintenance automation" \
-  --data-urlencode "k=3"
+  --data-urlencode "k=3" \
+  --data-urlencode "dataset_key=industrial_demo"
 curl -s -X POST "http://127.0.0.1:8000/ask" \
   -H "Content-Type: application/json" \
-  -d '{"question":"What maintenance actions are recommended?","k":3}'
+  -d '{"question":"What maintenance actions are recommended?","k":3,"dataset_key":"industrial_demo"}'
 
 # 로그 확인
 docker compose logs -f --tail=120 worker
@@ -673,6 +673,8 @@ docker compose exec -T postgres psql -U postgres -d industrial_ai -c "select wor
 uv run --project apps/api pytest -q apps/api/tests
 uv run --project apps/worker pytest -q apps/worker/tests
 ```
+
+현재 스위트에는 Phase-1 migration, dataset/workflow API, workflow service typed output, worker `workflow_run` 저장 검증이 포함된다.
 
 위처럼 각 테스트 루트를 명시하면 api/worker 간 테스트 교차 탐색을 막을 수 있다.
 특히 워크스페이스 루트에서 실행할 때도 의도한 스위트만 실행된다.
@@ -745,7 +747,7 @@ curl -sG "http://127.0.0.1:8000/rag/search" \
 
 기대 결과(요약):
 
-- `/rag/search`가 `chunk_id`, `source_path`, `score`, `text` 필드를 포함한 JSON 배열 반환
+- `/rag/search`가 `chunk_id`, `source_path`, `title`, `score`, `text` 필드를 포함한 JSON 배열 반환
 - `rag.db`가 없고 `index.json`이 있으면 JSON fallback으로 검색
 - 둘 다 없으면 503 + `rag-ingest` 실행 안내 메시지 반환
 - Compose 실행 중에도 동일하게 `http://127.0.0.1:8000/rag/search`로 조회 가능
@@ -757,9 +759,10 @@ curl -sG "http://127.0.0.1:8000/rag/search" \
 
 요청/응답 요약:
 
-- Request: `{"question":"...", "k":3}` (`question` 필드명 고정)
+- Request: `{"question":"...", "k":3, "dataset_key":"industrial_demo"}` (`dataset_key`는 optional)
 - Response: `{"answer": "...", "sources": [...], "meta": {...}}`
-- `sources`에는 `chunk_id`, `source_path`, `score`, `text`가 포함된다.
+- `sources`에는 `chunk_id`, `source_path`, `title`, `score`, `text`가 포함된다.
+- `meta`에는 `dataset_key`, `dataset_title`이 함께 포함된다.
 
 #### 7.9.1 macOS 런타임 선택: Ollama vs LM Studio
 
@@ -798,24 +801,31 @@ curl -sG "http://127.0.0.1:8000/rag/search" \
 │   │   │   ├── env.py
 │   │   │   ├── script.py.mako
 │   │   │   └── versions/
-│   │   │       └── 20260227_0001_create_jobs_table.py
-│   │   │       └── 20260227_0002_create_worker_heartbeats_table.py
+│   │   │       ├── 20260227_0001_create_jobs_table.py
+│   │   │       ├── 20260227_0002_create_worker_heartbeats_table.py
+│   │   │       ├── 20260302_0003_extend_jobs_for_rag_reindex.py
+│   │   │       └── 20260308_0004_add_datasets_and_workflow_fields.py
 │   │   └── src/api/
 │   │       ├── config.py
 │   │       ├── db.py
+│   │       ├── dependencies.py
 │   │       ├── ingest.py
-│   │       ├── models.py
 │   │       ├── main.py
-│   │       └── services/rag/
-│   │           ├── ingest.py
-│   │           ├── query.py
-│   │           └── ...
+│   │       ├── models.py
+│   │       ├── routers/
+│   │       ├── services/datasets/
+│   │       ├── services/retrieval/
+│   │       ├── services/workflows/
+│   │       └── static/demo/
 │   └── worker
 │       ├── pyproject.toml
 │       └── src/worker/main.py
 ├── data
 │   ├── sample_docs/
-│   └── rag_index/ (runtime output, git ignored)
+│   ├── rag_index/
+│   └── datasets/
+│       ├── industrial_demo/
+│       └── enterprise_docs/
 └── shared
     └── db/interface.py
 ```

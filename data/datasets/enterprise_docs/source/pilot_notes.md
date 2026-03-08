@@ -1,0 +1,1 @@
+The pilot review highlighted three needs: concise executive briefings, clear rationale for recommendations, and a lightweight report that shows findings, actions, and supporting evidence on a single screen.

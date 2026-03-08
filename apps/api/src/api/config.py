@@ -4,6 +4,20 @@ import os
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
+
+def get_project_root() -> Path:
+    return PROJECT_ROOT
+
+
+def resolve_project_path(value: str | Path) -> Path:
+    path = value if isinstance(value, Path) else Path(value)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
 def _to_bool(value: str | None, *, default: bool) -> bool:
     if value is None:
         return default

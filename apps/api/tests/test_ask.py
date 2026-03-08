@@ -4,8 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.config import get_settings
-from api.llm import ChatResult, LLMClientError
 from api.main import app, get_embedding_client, get_llm_client
+from api.llm import ChatResult, LLMClientError
 from api.services.rag.ingest import ingest_documents
 
 
@@ -60,6 +60,7 @@ def test_ask_endpoint_returns_answer_sources_and_meta(
 
     monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
     monkeypatch.setenv("RAG_DB_PATH", str(rag_db_path))
+    monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434/v1")
     get_settings.cache_clear()
 
@@ -78,7 +79,9 @@ def test_ask_endpoint_returns_answer_sources_and_meta(
     assert payload["answer"] == "mocked answer"
     assert isinstance(payload["sources"], list)
     assert payload["sources"]
-    assert {"chunk_id", "source_path", "score", "text"}.issubset(payload["sources"][0].keys())
+    assert {"chunk_id", "source_path", "title", "score", "text"}.issubset(
+        payload["sources"][0].keys()
+    )
     assert payload["meta"] == {
         "provider": "ollama",
         "model": "fake-model",
@@ -86,6 +89,8 @@ def test_ask_endpoint_returns_answer_sources_and_meta(
         "retrieval_k": 2,
         "retrieved_count": len(payload["sources"]),
         "ollama_base_url": "http://ollama:11434/v1",
+        "dataset_key": "industrial_demo",
+        "dataset_title": "Industrial Operations Demo",
     }
 
     assert len(fake_client.calls) == 1
@@ -144,6 +149,7 @@ def test_ask_endpoint_maps_llm_failure_to_502(
 
     monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
     monkeypatch.setenv("RAG_DB_PATH", str(rag_db_path))
+    monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
     get_settings.cache_clear()
 
     app.dependency_overrides[get_llm_client] = lambda: FailingLLMClient()

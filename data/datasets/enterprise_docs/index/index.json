@@ -1,0 +1,55 @@
+{
+  "version": "r1",
+  "generated_at": "2026-03-08T13:24:38.735382+00:00",
+  "chunk_count": 2,
+  "records": [
+    {
+      "chunk_id": "pilot_notes-chunk-1",
+      "doc_id": "pilot_notes",
+      "source_path": "pilot_notes.md",
+      "text": "The pilot review highlighted three needs: concise executive briefings, clear rationale for recommendations, and a lightweight report that shows findings, actions, and supporting evidence on a single screen.",
+      "embedding": [
+        -0.21597456288123157,
+        0.2548888985355075,
+        0.08755725522212092,
+        -0.03696861887156214,
+        -0.03307718530613456,
+        0.3210432691477766,
+        -0.2665631992317903,
+        -0.31326040201692146,
+        0.336609003409487,
+        0.45335201037231493,
+        -0.3599576048020526,
+        -0.013620017478996592,
+        -0.03307718530613456,
+        -0.16538592653067283,
+        0.08755725522212092,
+        -0.3482833041057698
+      ]
+    },
+    {
+      "chunk_id": "quarterly_enablement-chunk-2",
+      "doc_id": "quarterly_enablement",
+      "source_path": "quarterly_enablement.md",
+      "text": "Customer-facing teams need a short enablement brief before the Q2 launch. The current materials emphasize faster onboarding, a reusable workflow catalog, and evidence-backed recommendations for account teams.",
+      "embedding": [
+        0.33289411183374085,
+        0.046403421649551704,
+        -0.07868406279706604,
+        -0.19166630681336597,
+        -0.46201667642379796,
+        -0.1513155053789731,
+        0.21184170753056242,
+        -0.0020175400717196345,
+        0.17149090609616952,
+        0.2158767876740017,
+        -0.1028945436577017,
+        0.01412278050203744,
+        -0.29254331039934806,
+        -0.35710459269437655,
+        -0.44184127570660153,
+        -0.2602626692518338
+      ]
+    }
+  ]
+}
