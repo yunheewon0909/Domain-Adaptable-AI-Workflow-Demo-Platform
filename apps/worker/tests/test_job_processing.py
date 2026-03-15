@@ -248,12 +248,14 @@ def test_worker_claims_and_processes_workflow_run_job_with_evidence(tmp_path) ->
     job = _claim_next_job(engine, job_types=("workflow_run",))
     assert job is not None
     assert job["type"] == "workflow_run"
-    _process_claimed_job(
-        engine,
-        job,
-        runner=lambda payload: {
+
+    def workflow_runner(payload: dict[str, object] | None) -> dict[str, object]:
+        assert payload is not None
+        prompt = payload.get("prompt")
+        assert isinstance(prompt, str)
+        return {
             "summary": "Demo-ready briefing",
-            "key_points": [payload["prompt"]],
+            "key_points": [prompt],
             "evidence": [
                 {
                     "chunk_id": "c-1",
@@ -263,7 +265,12 @@ def test_worker_claims_and_processes_workflow_run_job_with_evidence(tmp_path) ->
                     "score": 0.91,
                 }
             ],
-        },
+        }
+
+    _process_claimed_job(
+        engine,
+        job,
+        runner=workflow_runner,
     )
 
     with engine.connect() as connection:

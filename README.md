@@ -65,10 +65,10 @@ curl -sS -X POST http://127.0.0.1:8000/workflows/briefing/jobs \
 
 6) **Job filtering 확인**
 ```bash
-curl -sS "http://127.0.0.1:8000/jobs?workflow_key=briefing&dataset_key=industrial_demo&status=queued"
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=briefing&dataset_key=industrial_demo"
 curl -sS http://127.0.0.1:8000/jobs/<job_id>
 ```
-기대 결과: workflow/dataset/status 기준으로 job 조회 가능.
+기대 결과: workflow/dataset 기준으로 job 조회 가능. worker poll 타이밍에 따라 `queued`는 바로 `running` 또는 `succeeded`로 바뀔 수 있으므로, 검증 시에는 먼저 `job_id` 상세 조회를 우선한다.
 
 7) **RAG primitive 확인(선택)**
 ```bash
@@ -111,10 +111,10 @@ curl -sS -X POST http://127.0.0.1:8000/workflows/report_generator/jobs \
 curl -sS http://127.0.0.1:8000/jobs
 
 # 기존 operational job filter
-curl -sS "http://127.0.0.1:8000/jobs?type=rag_verify_index&status=queued"
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_verify_index"
 
 # workflow demo filter
-curl -sS "http://127.0.0.1:8000/jobs?workflow_key=recommendation&dataset_key=enterprise_docs&status=queued"
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=recommendation&dataset_key=enterprise_docs"
 
 # 상세 조회
 curl -sS http://127.0.0.1:8000/jobs/<job_id>
@@ -359,10 +359,10 @@ curl -sS -X POST http://127.0.0.1:8000/workflows/recommendation/jobs \
   -d '{"dataset_key":"enterprise_docs","prompt":"Recommend next actions for the pilot review.","k":4}'
 
 # workflow-aware job filter
-curl -sS "http://127.0.0.1:8000/jobs?workflow_key=recommendation&dataset_key=enterprise_docs&status=queued"
+curl -sS "http://127.0.0.1:8000/jobs?workflow_key=recommendation&dataset_key=enterprise_docs"
 ```
 
-브라우저에서 `http://127.0.0.1:8000/demo`를 열면 같은 흐름을 한 화면에서 수행할 수 있다.
+브라우저에서 `http://127.0.0.1:8000/demo`를 열면 같은 흐름을 한 화면에서 수행할 수 있다. worker poll이 빠르면 `status=queued` 필터는 빈 배열이 될 수 있으므로, 검증 시에는 `GET /jobs/<job_id>` 또는 workflow/dataset 단순 필터를 우선 사용한다.
 
 ### 7.2.1 Reindex Job Queue API
 
@@ -410,8 +410,8 @@ curl -sS -X POST 'http://127.0.0.1:8000/rag/reindex?mode=invalid'
 # {"detail":[...query mode validation error...]}
 
 # list/filter
-curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex&status=queued"
-curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental&status=queued"
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex"
+curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental"
 
 # detail
 curl -sS http://127.0.0.1:8000/jobs/<job_id>
@@ -439,6 +439,7 @@ curl -sS "http://127.0.0.1:8000/jobs/${job_id}"
 
 - `GET /jobs?type=rag_reindex_incremental`가 계속 빈 배열이면 mode 매핑이 깨졌을 가능성이 있다.
 - 현재 버전에서는 `mode=incremental` -> `type=rag_reindex_incremental`로 enqueue되도록 수정되어 있다.
+- worker가 바로 claim하면 `status=queued` 필터는 빈 배열이 될 수 있다. 검증 시에는 반환된 `job_id` 상세 조회가 가장 안정적이다.
 
 Worker 로그에서 poll/claim/execution 상태를 확인합니다.
 
@@ -679,6 +680,7 @@ uv run --project apps/worker pytest -q apps/worker/tests
 위처럼 각 테스트 루트를 명시하면 api/worker 간 테스트 교차 탐색을 막을 수 있다.
 특히 워크스페이스 루트에서 실행할 때도 의도한 스위트만 실행된다.
 검증 로그와 실패 지점을 서비스 단위로 분리해 추적하기 쉽다.
+현재 각 프로젝트 `pyproject.toml`에 `pytest`용 `pythonpath = ["src"]`가 설정되어 있어, repo root에서 그대로 실행해도 `api`/`worker` import가 정상 동작한다.
 
 ### 7.6 Type-check (Pyright)
 

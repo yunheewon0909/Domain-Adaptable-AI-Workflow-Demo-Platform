@@ -104,10 +104,10 @@ def execute_workflow(
         top_k = int(payload.get("k", 4))
         workflow = get_workflow_definition(workflow_key)
         dataset = resolve_dataset(session, dataset_key)
-    except KeyError as exc:
-        raise WorkflowExecutionError(f"workflow not found: {workflow_key}") from exc
     except DatasetNotFoundError as exc:
         raise WorkflowExecutionError(f"dataset not found: {dataset_key or 'active'}") from exc
+    except KeyError as exc:
+        raise WorkflowExecutionError(f"workflow not found: {workflow_key}") from exc
     except ValueError as exc:
         raise WorkflowExecutionError(str(exc)) from exc
 
