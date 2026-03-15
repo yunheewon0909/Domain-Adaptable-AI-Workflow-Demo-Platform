@@ -182,6 +182,7 @@ If you want to run without Docker Compose, start Postgres and Ollama separately,
 
 ```bash
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
+export OLLAMA_TIMEOUT_SECONDS=120
 
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
@@ -190,12 +191,14 @@ uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 In another shell:
 
 ```bash
+cd /path/to/Industrial-AI-Harness-Platform
 export WORKER_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
+export OLLAMA_TIMEOUT_SECONDS=120
 export WORKER_ID=worker-local
 export WORKER_HEARTBEAT_SECONDS=30
 export WORKER_POLL_SECONDS=5
 export JOB_MAX_ATTEMPTS=3
-export WORKER_API_PROJECT_DIR=/workspace/apps/api
+export WORKER_API_PROJECT_DIR="$(pwd)/apps/api"
 
 uv run --project apps/worker python -m worker.main
 ```

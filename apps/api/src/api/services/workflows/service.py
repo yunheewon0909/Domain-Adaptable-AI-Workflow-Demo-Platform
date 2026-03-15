@@ -71,6 +71,109 @@ def _render_schema_hint(workflow_key: str) -> str:
     return '{"title":"...","executive_summary":"...","findings":["..."],"actions":["..."]}'
 
 
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _extract_string_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = _normalize_text(value)
+        return text or None
+
+    if isinstance(value, dict):
+        preferred_keys = (
+            "action",
+            "finding",
+            "recommendation",
+            "summary",
+            "title",
+            "text",
+            "description",
+            "label",
+            "name",
+        )
+        for key in preferred_keys:
+            candidate = value.get(key)
+            extracted = _extract_string_value(candidate)
+            if extracted:
+                return extracted
+
+        for candidate in value.values():
+            extracted = _extract_string_value(candidate)
+            if extracted:
+                return extracted
+
+    if isinstance(value, list):
+        for candidate in value:
+            extracted = _extract_string_value(candidate)
+            if extracted:
+                return extracted
+
+    return None
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        extracted = _extract_string_value(item)
+        if extracted and extracted not in seen:
+            normalized.append(extracted)
+            seen.add(extracted)
+    return normalized
+
+
+def _build_evidence_fallback_findings(evidence: list[Any]) -> list[str]:
+    fallback_findings: list[str] = []
+    for item in evidence[:3]:
+        snippet = ""
+        for raw_line in item.text.splitlines():
+            cleaned = re.sub(r"^[#>*`\\-\\d.()\\s]+", "", raw_line).strip()
+            if cleaned:
+                snippet = cleaned
+                break
+
+        text = _normalize_text(f"{item.title}: {snippet or item.text}")
+        if text:
+            fallback_findings.append(text)
+
+    return fallback_findings
+
+
+def _normalize_workflow_output(
+    workflow_key: str,
+    parsed: dict[str, Any],
+    *,
+    evidence: list[Any],
+) -> dict[str, Any]:
+    normalized = dict(parsed)
+
+    if workflow_key == "briefing":
+        if summary := _extract_string_value(normalized.get("summary")):
+            normalized["summary"] = summary
+        normalized["key_points"] = _normalize_string_list(normalized.get("key_points"))
+        return normalized
+
+    if workflow_key == "recommendation":
+        if rationale := _extract_string_value(normalized.get("rationale")):
+            normalized["rationale"] = rationale
+        normalized["recommendations"] = _normalize_string_list(normalized.get("recommendations"))
+        return normalized
+
+    if title := _extract_string_value(normalized.get("title")):
+        normalized["title"] = title
+    if executive_summary := _extract_string_value(normalized.get("executive_summary")):
+        normalized["executive_summary"] = executive_summary
+
+    findings = _normalize_string_list(normalized.get("findings"))
+    normalized["findings"] = findings or _build_evidence_fallback_findings(evidence)
+    normalized["actions"] = _normalize_string_list(normalized.get("actions"))
+    return normalized
+
+
 def _build_workflow_prompt(
     *,
     workflow: WorkflowDefinition,
@@ -138,6 +241,7 @@ def execute_workflow(
     try:
         parsed = _extract_json_object(chat_result.answer)
         parsed.pop("evidence", None)
+        parsed = _normalize_workflow_output(workflow.key, parsed, evidence=evidence)
         draft_model = DRAFT_MODEL_BY_WORKFLOW_KEY[workflow.key]
         draft = draft_model.model_validate(parsed)
         result_model = RESULT_MODEL_BY_WORKFLOW_KEY[workflow.key]

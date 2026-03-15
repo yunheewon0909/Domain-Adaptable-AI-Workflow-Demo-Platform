@@ -32,7 +32,7 @@ services:
       OLLAMA_FALLBACK_MODEL: qwen2.5:3b-instruct-q4_K_M
       OLLAMA_EMBED_BASE_URL: http://ollama:11434/v1
       OLLAMA_EMBED_MODEL: nomic-embed-text
-      OLLAMA_TIMEOUT_SECONDS: "60"
+      OLLAMA_TIMEOUT_SECONDS: "120"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-api
@@ -79,7 +79,7 @@ services:
       OLLAMA_FALLBACK_MODEL: qwen2.5:3b-instruct-q4_K_M
       OLLAMA_EMBED_BASE_URL: http://ollama:11434/v1
       OLLAMA_EMBED_MODEL: nomic-embed-text
-      OLLAMA_TIMEOUT_SECONDS: "60"
+      OLLAMA_TIMEOUT_SECONDS: "120"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-worker

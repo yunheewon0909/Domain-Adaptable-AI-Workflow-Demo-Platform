@@ -179,3 +179,53 @@ def test_execute_workflow_returns_typed_output_with_evidence(
     assert expected_field in result
     assert len(result["evidence"]) >= 1
     assert {"chunk_id", "source_path", "title", "text", "score"}.issubset(result["evidence"][0].keys())
+
+
+def test_execute_workflow_normalizes_report_generator_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    index_dir = tmp_path / "rag_index"
+    rag_db_path = index_dir / "rag.db"
+    source_dir = tmp_path / "sample_docs"
+    source_dir.mkdir(parents=True)
+    (source_dir / "report.md").write_text(
+        "Reviewer evidence should stay grounded in the retrieved dataset.", encoding="utf-8"
+    )
+
+    ingest_documents(
+        source_dir=source_dir,
+        db_path=rag_db_path,
+        chunk_size=120,
+        chunk_overlap=20,
+        embedding_client=FakeEmbeddingClient(),
+    )
+
+    monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
+    monkeypatch.setenv("RAG_DB_PATH", str(rag_db_path))
+    monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
+    get_settings.cache_clear()
+
+    malformed_output = (
+        '{"title":"Workflow Report","executive_summary":"Concise review",'
+        '"findings":[],"actions":[{"action":"Create a grounded reviewer report"}]}'
+    )
+
+    with Session(get_engine()) as session:
+        result = execute_workflow(
+            session=session,
+            payload={
+                "workflow_key": "report_generator",
+                "dataset_key": "industrial_demo",
+                "prompt": "Prepare a short report",
+                "k": 3,
+            },
+            llm_client=FakeWorkflowLLM(malformed_output),
+            embedding_client=FakeEmbeddingClient(),
+        )
+
+    assert result["title"] == "Workflow Report"
+    assert result["actions"] == ["Create a grounded reviewer report"]
+    assert len(result["findings"]) >= 1
+    assert all(isinstance(item, str) and item for item in result["findings"])
+    assert len(result["evidence"]) >= 1
