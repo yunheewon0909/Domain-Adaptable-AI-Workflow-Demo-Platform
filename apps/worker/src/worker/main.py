@@ -18,6 +18,7 @@ SUPPORTED_JOB_TYPES = (
     "ollama_warmup",
     "rag_verify_index",
     "workflow_run",
+    "plc_test_run",
 )
 
 RUNNER_MODULE_BY_JOB_TYPE = {
@@ -26,6 +27,7 @@ RUNNER_MODULE_BY_JOB_TYPE = {
     "ollama_warmup": "api.services.rag.warmup_job_runner",
     "rag_verify_index": "api.services.rag.verify_index_job_runner",
     "workflow_run": "api.services.workflows.job_runner",
+    "plc_test_run": "api.services.plc.job_runner",
 }
 
 
@@ -101,7 +103,10 @@ def send_heartbeat_once(engine: Engine, worker_id: str) -> None:
     while True:
         try:
             _upsert_heartbeat(engine, worker_id, now)
-            print(f"[worker] heartbeat upserted worker_id={worker_id} at={now.isoformat()}", flush=True)
+            print(
+                f"[worker] heartbeat upserted worker_id={worker_id} at={now.isoformat()}",
+                flush=True,
+            )
             return
         except Exception as exc:
             print(
@@ -113,7 +118,9 @@ def send_heartbeat_once(engine: Engine, worker_id: str) -> None:
             attempt += 1
 
 
-def _heartbeat_loop(engine: Engine, worker_id: str, interval_seconds: int, stop_event: Event) -> None:
+def _heartbeat_loop(
+    engine: Engine, worker_id: str, interval_seconds: int, stop_event: Event
+) -> None:
     while not stop_event.is_set():
         send_heartbeat_once(engine, worker_id)
         stop_event.wait(interval_seconds)
@@ -151,7 +158,9 @@ def _build_job_type_params(job_types: tuple[str, ...]) -> tuple[str, dict[str, s
     return placeholders, params
 
 
-def _claim_next_job(engine: Engine, *, job_types: tuple[str, ...]) -> dict[str, Any] | None:
+def _claim_next_job(
+    engine: Engine, *, job_types: tuple[str, ...]
+) -> dict[str, Any] | None:
     if not job_types:
         return None
 
@@ -159,21 +168,25 @@ def _claim_next_job(engine: Engine, *, job_types: tuple[str, ...]) -> dict[str, 
 
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
-            row = connection.execute(
-                text(
-                    """
+            row = (
+                connection.execute(
+                    text(
+                        """
                     SELECT id, type, payload_json, attempts, max_attempts
                     FROM jobs
                     WHERE status = 'queued' AND type IN ("""
-                    + placeholders
-                    + """)
+                        + placeholders
+                        + """)
                     ORDER BY created_at ASC, id ASC
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
                     """
-                ),
-                type_params,
-            ).mappings().first()
+                    ),
+                    type_params,
+                )
+                .mappings()
+                .first()
+            )
             if row is None:
                 return None
 
@@ -201,20 +214,24 @@ def _claim_next_job(engine: Engine, *, job_types: tuple[str, ...]) -> dict[str, 
             }
 
     with engine.begin() as connection:
-        row = connection.execute(
-            text(
-                """
+        row = (
+            connection.execute(
+                text(
+                    """
                 SELECT id, type, payload_json, attempts, max_attempts
                 FROM jobs
                 WHERE status = 'queued' AND type IN ("""
-                + placeholders
-                + """)
+                    + placeholders
+                    + """)
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
                 """
-            ),
-            type_params,
-        ).mappings().first()
+                ),
+                type_params,
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
 
@@ -264,6 +281,9 @@ def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
         "RAG_DB_PATH",
         "RAG_EXPECTED_EMBED_DIM",
         "RAG_VERIFY_SAMPLE_QUERY",
+        "PLC_EXECUTOR_MODE",
+        "PLC_CLI_PATH",
+        "PLC_CLI_TIMEOUT_SECONDS",
     ]
     for key in keys_to_propagate:
         value = os.getenv(key)
@@ -278,7 +298,9 @@ def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
     return env
 
 
-def _run_job_subprocess(job_type: str, payload_json: dict[str, Any] | None = None) -> dict[str, Any]:
+def _run_job_subprocess(
+    job_type: str, payload_json: dict[str, Any] | None = None
+) -> dict[str, Any]:
     if job_type not in RUNNER_MODULE_BY_JOB_TYPE:
         raise RuntimeError(f"unsupported job type for subprocess runner: {job_type}")
 
@@ -313,7 +335,9 @@ def _run_job_subprocess(job_type: str, payload_json: dict[str, Any] | None = Non
             ),
             flush=True,
         )
-        raise RuntimeError(f"{job_type} subprocess failed (exit={completed.returncode}): {stderr}")
+        raise RuntimeError(
+            f"{job_type} subprocess failed (exit={completed.returncode}): {stderr}"
+        )
 
     output = completed.stdout.strip().splitlines()
     if not output:
@@ -322,18 +346,24 @@ def _run_job_subprocess(job_type: str, payload_json: dict[str, Any] | None = Non
     try:
         parsed = json.loads(output[-1])
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{job_type} subprocess returned invalid JSON: {output[-1]}") from exc
+        raise RuntimeError(
+            f"{job_type} subprocess returned invalid JSON: {output[-1]}"
+        ) from exc
 
     if not isinstance(parsed, dict):
         raise RuntimeError(f"{job_type} subprocess payload must be an object")
     return parsed
 
 
-def _run_reindex_subprocess(payload_json: dict[str, Any] | None = None) -> dict[str, Any]:
+def _run_reindex_subprocess(
+    payload_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return _run_job_subprocess("rag_reindex", payload_json)
 
 
-def _mark_job_succeeded(engine: Engine, job_id: int | str, result_json: dict[str, Any]) -> None:
+def _mark_job_succeeded(
+    engine: Engine, job_id: int | str, result_json: dict[str, Any]
+) -> None:
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -447,7 +477,9 @@ def main() -> None:
         _process_claimed_job(
             engine,
             job,
-            runner=lambda payload, *, _job_type=job_type: _run_job_subprocess(_job_type, payload),
+            runner=lambda payload, *, _job_type=job_type: _run_job_subprocess(
+                _job_type, payload
+            ),
         )
 
 

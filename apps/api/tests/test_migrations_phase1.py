@@ -5,7 +5,9 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
 
-def test_alembic_upgrade_adds_datasets_and_workflow_job_fields(monkeypatch, tmp_path: Path) -> None:
+def test_alembic_upgrade_adds_datasets_workflow_and_plc_job_fields(
+    monkeypatch, tmp_path: Path
+) -> None:
     db_path = tmp_path / "migration-phase1.db"
     monkeypatch.setenv("API_DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
 
@@ -16,8 +18,9 @@ def test_alembic_upgrade_adds_datasets_and_workflow_job_fields(monkeypatch, tmp_
     inspector = inspect(engine)
 
     assert "datasets" in inspector.get_table_names()
+    assert "plc_test_suites" in inspector.get_table_names()
     job_columns = {column["name"] for column in inspector.get_columns("jobs")}
-    assert {"workflow_key", "dataset_key"}.issubset(job_columns)
+    assert {"workflow_key", "dataset_key", "plc_suite_id"}.issubset(job_columns)
 
     dataset_columns = {column["name"] for column in inspector.get_columns("datasets")}
     assert {
@@ -30,3 +33,15 @@ def test_alembic_upgrade_adds_datasets_and_workflow_job_fields(monkeypatch, tmp_
         "db_path",
         "is_active",
     }.issubset(dataset_columns)
+
+    plc_suite_columns = {
+        column["name"] for column in inspector.get_columns("plc_test_suites")
+    }
+    assert {
+        "id",
+        "title",
+        "source_filename",
+        "source_format",
+        "case_count",
+        "definition_json",
+    }.issubset(plc_suite_columns)

@@ -18,7 +18,15 @@ class JobRecord(Base):
             "status",
             "created_at",
         ),
-        Index("ix_jobs_dataset_status_created_at", "dataset_key", "status", "created_at"),
+        Index(
+            "ix_jobs_dataset_status_created_at", "dataset_key", "status", "created_at"
+        ),
+        Index(
+            "ix_jobs_plc_suite_status_created_at",
+            "plc_suite_id",
+            "status",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -29,6 +37,7 @@ class JobRecord(Base):
     )
     workflow_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     dataset_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    plc_suite_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     attempts: Mapped[int] = mapped_column(
@@ -51,8 +60,12 @@ class JobRecord(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
     )
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
@@ -76,6 +89,35 @@ class DatasetRecord(Base):
         nullable=False,
         server_default=text("false"),
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class PLCTestSuiteRecord(Base):
+    __tablename__ = "plc_test_suites"
+    __table_args__ = (
+        Index("ix_plc_test_suites_created_at", "created_at"),
+        Index("ix_plc_test_suites_source_format", "source_format"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    case_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("0"),
+    )
+    definition_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

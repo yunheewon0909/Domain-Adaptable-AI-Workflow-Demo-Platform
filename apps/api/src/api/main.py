@@ -10,6 +10,7 @@ from api.routers.datasets import router as datasets_router
 from api.routers.demo import router as demo_router
 from api.routers.health import router as health_router
 from api.routers.jobs import router as jobs_router
+from api.routers.plc import router as plc_router
 from api.routers.rag import router as rag_router
 from api.routers.workflows import router as workflows_router
 from api.services.datasets.registry import ensure_default_datasets
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     app.include_router(datasets_router)
     app.include_router(workflows_router)
     app.include_router(jobs_router)
+    app.include_router(plc_router)
     app.include_router(rag_router)
     if active_starter.demo.enabled:
         app.include_router(demo_router)

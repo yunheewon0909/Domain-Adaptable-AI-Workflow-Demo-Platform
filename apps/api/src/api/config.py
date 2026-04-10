@@ -50,6 +50,9 @@ class Settings:
     ollama_embed_base_url: str
     ollama_embed_model: str
     ollama_timeout_seconds: float
+    plc_executor_mode: str
+    plc_cli_path: str | None
+    plc_cli_timeout_seconds: int
 
 
 @lru_cache
@@ -92,4 +95,12 @@ def get_settings() -> Settings:
         ollama_embed_base_url=os.getenv("OLLAMA_EMBED_BASE_URL", ollama_base_url),
         ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
         ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+        plc_executor_mode=os.getenv("PLC_EXECUTOR_MODE", "stub").strip().lower()
+        or "stub",
+        plc_cli_path=os.getenv("PLC_CLI_PATH"),
+        plc_cli_timeout_seconds=_to_int(
+            os.getenv("PLC_CLI_TIMEOUT_SECONDS"),
+            default=30,
+            minimum=1,
+        ),
     )
