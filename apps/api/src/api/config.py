@@ -3,6 +3,8 @@ from functools import lru_cache
 import os
 from pathlib import Path
 
+from api.services import starter_definitions
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
@@ -52,7 +54,10 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
-    rag_index_dir = os.getenv("RAG_INDEX_DIR", "data/rag_index")
+    starter = starter_definitions.get_default_starter()
+    primary_dataset = starter_definitions.get_primary_dataset_definition(starter)
+
+    rag_index_dir = os.getenv("RAG_INDEX_DIR", primary_dataset.index_dir)
     rag_db_path = os.getenv("RAG_DB_PATH", str(Path(rag_index_dir) / "rag.db"))
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 
@@ -64,20 +69,26 @@ def get_settings() -> Settings:
         db_echo=_to_bool(os.getenv("API_DB_ECHO"), default=False),
         # Host-friendly defaults are relative paths.
         # Containers override these via compose env to /workspace/... paths.
-        rag_source_dir=os.getenv("RAG_SOURCE_DIR", "data/sample_docs"),
+        rag_source_dir=os.getenv("RAG_SOURCE_DIR", primary_dataset.source_dir),
         rag_index_dir=rag_index_dir,
         rag_db_path=rag_db_path,
         rag_chunk_size=_to_int(os.getenv("RAG_CHUNK_SIZE"), default=500, minimum=100),
-        rag_chunk_overlap=_to_int(os.getenv("RAG_CHUNK_OVERLAP"), default=50, minimum=0),
+        rag_chunk_overlap=_to_int(
+            os.getenv("RAG_CHUNK_OVERLAP"), default=50, minimum=0
+        ),
         rag_expected_embed_dim=_to_int(
             os.getenv("RAG_EXPECTED_EMBED_DIM"),
             default=768,
             minimum=0,
         ),
-        rag_verify_sample_query=os.getenv("RAG_VERIFY_SAMPLE_QUERY", "maintenance automation"),
+        rag_verify_sample_query=os.getenv(
+            "RAG_VERIFY_SAMPLE_QUERY", "maintenance automation"
+        ),
         ollama_base_url=ollama_base_url,
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M"),
-        ollama_fallback_model=os.getenv("OLLAMA_FALLBACK_MODEL", "qwen2.5:3b-instruct-q4_K_M"),
+        ollama_fallback_model=os.getenv(
+            "OLLAMA_FALLBACK_MODEL", "qwen2.5:3b-instruct-q4_K_M"
+        ),
         ollama_embed_base_url=os.getenv("OLLAMA_EMBED_BASE_URL", ollama_base_url),
         ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
         ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),

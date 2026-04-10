@@ -8,7 +8,11 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from api.llm import LLMClient, LLMClientError
-from api.services.datasets.resolver import DatasetNotFoundError, ResolvedDataset, resolve_dataset
+from api.services.datasets.resolver import (
+    DatasetNotFoundError,
+    ResolvedDataset,
+    resolve_dataset,
+)
 from api.services.rag.embedding_client import EmbeddingClient
 from api.services.retrieval.service import build_grounding_context, retrieve_evidence
 from api.services.workflows.catalog import WorkflowDefinition, get_workflow_definition
@@ -64,11 +68,8 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
 
 
 def _render_schema_hint(workflow_key: str) -> str:
-    if workflow_key == "briefing":
-        return '{"summary":"...","key_points":["..."]}'
-    if workflow_key == "recommendation":
-        return '{"recommendations":["..."],"rationale":"..."}'
-    return '{"title":"...","executive_summary":"...","findings":["..."],"actions":["..."]}'
+    workflow = get_workflow_definition(workflow_key)
+    return workflow.schema_hint
 
 
 def _normalize_text(value: str) -> str:
@@ -160,7 +161,9 @@ def _normalize_workflow_output(
     if workflow_key == "recommendation":
         if rationale := _extract_string_value(normalized.get("rationale")):
             normalized["rationale"] = rationale
-        normalized["recommendations"] = _normalize_string_list(normalized.get("recommendations"))
+        normalized["recommendations"] = _normalize_string_list(
+            normalized.get("recommendations")
+        )
         return normalized
 
     if title := _extract_string_value(normalized.get("title")):
@@ -208,7 +211,9 @@ def execute_workflow(
         workflow = get_workflow_definition(workflow_key)
         dataset = resolve_dataset(session, dataset_key)
     except DatasetNotFoundError as exc:
-        raise WorkflowExecutionError(f"dataset not found: {dataset_key or 'active'}") from exc
+        raise WorkflowExecutionError(
+            f"dataset not found: {dataset_key or 'active'}"
+        ) from exc
     except KeyError as exc:
         raise WorkflowExecutionError(f"workflow not found: {workflow_key}") from exc
     except ValueError as exc:
@@ -234,7 +239,9 @@ def execute_workflow(
     )
 
     try:
-        chat_result = llm_client.generate_answer(question=question, context=grounding_context)
+        chat_result = llm_client.generate_answer(
+            question=question, context=grounding_context
+        )
     except LLMClientError as exc:
         raise WorkflowExecutionError(f"LLM request failed: {exc}") from exc
 
@@ -252,6 +259,8 @@ def execute_workflow(
             }
         )
     except (json.JSONDecodeError, ValidationError) as exc:
-        raise WorkflowExecutionError(f"workflow output validation failed: {exc}") from exc
+        raise WorkflowExecutionError(
+            f"workflow output validation failed: {exc}"
+        ) from exc
 
     return final_result.model_dump(mode="json")

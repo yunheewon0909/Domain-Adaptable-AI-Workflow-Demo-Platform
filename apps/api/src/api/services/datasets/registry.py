@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from api.config import get_settings
 from api.models import DatasetRecord
+from api.services import starter_definitions
 
 
 @dataclass(frozen=True)
@@ -23,28 +24,33 @@ class DatasetDefinition:
 
 def _default_dataset_definitions() -> list[DatasetDefinition]:
     settings = get_settings()
-    return [
-        DatasetDefinition(
-            key="industrial_demo",
-            title="Industrial Operations Demo",
-            domain_type="industrial_ops",
-            profile_key="industrial_ops",
-            source_dir=settings.rag_source_dir,
-            index_dir=settings.rag_index_dir,
-            db_path=settings.rag_db_path,
-            is_active=True,
-        ),
-        DatasetDefinition(
-            key="enterprise_docs",
-            title="Enterprise Knowledge Demo",
-            domain_type="enterprise_docs",
-            profile_key="enterprise_docs",
-            source_dir="data/datasets/enterprise_docs/source",
-            index_dir="data/datasets/enterprise_docs/index",
-            db_path="data/datasets/enterprise_docs/index/rag.db",
-            is_active=False,
-        ),
-    ]
+    default_starter = starter_definitions.get_default_starter()
+    definitions: list[DatasetDefinition] = []
+    primary_dataset = starter_definitions.get_primary_dataset_definition(
+        default_starter
+    )
+
+    for item in default_starter.datasets:
+        definitions.append(
+            DatasetDefinition(
+                key=item.key,
+                title=item.title,
+                domain_type=item.domain_type,
+                profile_key=item.profile_key,
+                source_dir=settings.rag_source_dir
+                if item.key == primary_dataset.key
+                else item.source_dir,
+                index_dir=settings.rag_index_dir
+                if item.key == primary_dataset.key
+                else item.index_dir,
+                db_path=settings.rag_db_path
+                if item.key == primary_dataset.key
+                else item.db_path,
+                is_active=item.is_active,
+            )
+        )
+
+    return definitions
 
 
 def _apply_definition(record: DatasetRecord, definition: DatasetDefinition) -> None:
@@ -59,8 +65,7 @@ def _apply_definition(record: DatasetRecord, definition: DatasetDefinition) -> N
 def ensure_default_datasets(session: Session) -> list[DatasetRecord]:
     definitions = _default_dataset_definitions()
     existing = {
-        record.key: record
-        for record in session.scalars(select(DatasetRecord)).all()
+        record.key: record for record in session.scalars(select(DatasetRecord)).all()
     }
 
     now = datetime.now(timezone.utc)
@@ -92,7 +97,10 @@ def ensure_default_datasets(session: Session) -> list[DatasetRecord]:
         existing[definitions[0].key].is_active = True
         existing[definitions[0].key].updated_at = now
     elif len(active_records) > 1:
-        keep_key = next((definition.key for definition in definitions if definition.is_active), active_records[0].key)
+        keep_key = next(
+            (definition.key for definition in definitions if definition.is_active),
+            active_records[0].key,
+        )
         for record in active_records:
             record.is_active = record.key == keep_key
             record.updated_at = now
@@ -101,7 +109,9 @@ def ensure_default_datasets(session: Session) -> list[DatasetRecord]:
     return list_dataset_records(session, ensure_seeded=False)
 
 
-def list_dataset_records(session: Session, *, ensure_seeded: bool = True) -> list[DatasetRecord]:
+def list_dataset_records(
+    session: Session, *, ensure_seeded: bool = True
+) -> list[DatasetRecord]:
     if ensure_seeded:
         ensure_default_datasets(session)
     return list(
@@ -115,13 +125,17 @@ def list_dataset_records(session: Session, *, ensure_seeded: bool = True) -> lis
     )
 
 
-def get_dataset_record(session: Session, dataset_key: str, *, ensure_seeded: bool = True) -> DatasetRecord | None:
+def get_dataset_record(
+    session: Session, dataset_key: str, *, ensure_seeded: bool = True
+) -> DatasetRecord | None:
     if ensure_seeded:
         ensure_default_datasets(session)
     return session.get(DatasetRecord, dataset_key)
 
 
-def get_active_dataset_record(session: Session, *, ensure_seeded: bool = True) -> DatasetRecord | None:
+def get_active_dataset_record(
+    session: Session, *, ensure_seeded: bool = True
+) -> DatasetRecord | None:
     if ensure_seeded:
         ensure_default_datasets(session)
     return session.scalar(

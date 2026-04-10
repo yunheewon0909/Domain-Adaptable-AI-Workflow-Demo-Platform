@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.config import get_settings
-from api.db import get_engine
+from api.db import Base, get_engine
 from api.main import app, get_embedding_client, get_llm_client
 from api.llm import ChatResult
 from api.models import JobRecord
@@ -15,7 +15,13 @@ from api.services.workflows.service import execute_workflow
 
 class FakeEmbeddingClient:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return [[float(text.lower().count("workflow")), float(text.lower().count("evidence"))] for text in texts]
+        return [
+            [
+                float(text.lower().count("workflow")),
+                float(text.lower().count("evidence")),
+            ]
+            for text in texts
+        ]
 
 
 class FakeWorkflowLLM:
@@ -23,7 +29,9 @@ class FakeWorkflowLLM:
         self.response_text = response_text
 
     def generate_answer(self, *, question: str, context: str) -> ChatResult:
-        return ChatResult(answer=self.response_text, model="fake-workflow-model", used_fallback=False)
+        return ChatResult(
+            answer=self.response_text, model="fake-workflow-model", used_fallback=False
+        )
 
 
 def test_get_datasets_and_set_active_dataset(client: TestClient) -> None:
@@ -34,7 +42,9 @@ def test_get_datasets_and_set_active_dataset(client: TestClient) -> None:
     assert [item["key"] for item in payload] == ["industrial_demo", "enterprise_docs"]
     assert any(item["is_active"] for item in payload)
 
-    activate_response = client.post("/datasets/active", json={"dataset_key": "enterprise_docs"})
+    activate_response = client.post(
+        "/datasets/active", json={"dataset_key": "enterprise_docs"}
+    )
 
     assert activate_response.status_code == 200
     assert activate_response.json()["key"] == "enterprise_docs"
@@ -110,7 +120,7 @@ def test_demo_route_serves_static_ui(client: TestClient) -> None:
     response = client.get("/demo")
 
     assert response.status_code == 200
-    assert "Domain-Adaptable AI Workflow Demo Platform" in response.text
+    assert "Domain-Adaptable AI Workflow Demo API" in response.text
     assert "dataset-select" in response.text
 
 
@@ -147,7 +157,8 @@ def test_execute_workflow_returns_typed_output_with_evidence(
     source_dir = tmp_path / "sample_docs"
     source_dir.mkdir(parents=True)
     (source_dir / "brief.md").write_text(
-        "workflow evidence panel should stay grounded in the retrieved dataset", encoding="utf-8"
+        "workflow evidence panel should stay grounded in the retrieved dataset",
+        encoding="utf-8",
     )
 
     ingest_documents(
@@ -178,19 +189,23 @@ def test_execute_workflow_returns_typed_output_with_evidence(
 
     assert expected_field in result
     assert len(result["evidence"]) >= 1
-    assert {"chunk_id", "source_path", "title", "text", "score"}.issubset(result["evidence"][0].keys())
+    assert {"chunk_id", "source_path", "title", "text", "score"}.issubset(
+        result["evidence"][0].keys()
+    )
 
 
 def test_execute_workflow_normalizes_report_generator_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    sqlite_db_path = tmp_path / "workflow-tests.db"
     index_dir = tmp_path / "rag_index"
     rag_db_path = index_dir / "rag.db"
     source_dir = tmp_path / "sample_docs"
     source_dir.mkdir(parents=True)
     (source_dir / "report.md").write_text(
-        "Reviewer evidence should stay grounded in the retrieved dataset.", encoding="utf-8"
+        "Reviewer evidence should stay grounded in the retrieved dataset.",
+        encoding="utf-8",
     )
 
     ingest_documents(
@@ -204,7 +219,12 @@ def test_execute_workflow_normalizes_report_generator_output(
     monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
     monkeypatch.setenv("RAG_DB_PATH", str(rag_db_path))
     monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
+    monkeypatch.setenv("API_DATABASE_URL", f"sqlite+pysqlite:///{sqlite_db_path}")
     get_settings.cache_clear()
+    get_engine.cache_clear()
+
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
 
     malformed_output = (
         '{"title":"Workflow Report","executive_summary":"Concise review",'
@@ -229,3 +249,5 @@ def test_execute_workflow_normalizes_report_generator_output(
     assert len(result["findings"]) >= 1
     assert all(isinstance(item, str) and item for item in result["findings"])
     assert len(result["evidence"]) >= 1
+
+    engine.dispose()

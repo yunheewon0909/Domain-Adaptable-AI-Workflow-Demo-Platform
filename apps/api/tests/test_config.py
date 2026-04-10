@@ -40,3 +40,15 @@ def test_rag_verify_sample_query_default_and_override(monkeypatch) -> None:
     monkeypatch.setenv("RAG_VERIFY_SAMPLE_QUERY", "quality inspection")
     settings = get_settings()
     assert settings.rag_verify_sample_query == "quality inspection"
+
+
+def test_rag_defaults_follow_primary_starter_dataset(monkeypatch) -> None:
+    monkeypatch.delenv("RAG_SOURCE_DIR", raising=False)
+    monkeypatch.delenv("RAG_INDEX_DIR", raising=False)
+    monkeypatch.delenv("RAG_DB_PATH", raising=False)
+
+    settings = get_settings()
+
+    assert settings.rag_source_dir == "data/sample_docs"
+    assert settings.rag_index_dir == "data/rag_index"
+    assert settings.rag_db_path.endswith("data/rag_index/rag.db")

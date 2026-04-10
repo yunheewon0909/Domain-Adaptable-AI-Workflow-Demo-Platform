@@ -2,7 +2,9 @@
 
 ## Overview
 
-This repository packages a small local demo platform that combines:
+This repository packages a small local skeleton for domain-adaptable AI workflow services. The current repository still ships a demo reviewer experience, but that demo now hangs off a single starter-definition layer so cloned services can replace the defaults without editing core plumbing in many places.
+
+The skeleton combines:
 
 - a FastAPI service
 - a background worker with a Postgres-backed job queue
@@ -10,7 +12,7 @@ This repository packages a small local demo platform that combines:
 - Ollama-backed chat and embedding models
 - a co-hosted `/demo` UI for reviewer workflows
 
-The main reviewer path is a single page where you choose a dataset, run one of three fixed workflows, and inspect structured output with mandatory evidence.
+The default starter keeps the existing reviewer path: a single page where you choose a dataset, run one of three fixed workflows, and inspect structured output with mandatory evidence.
 
 ## Phase 1 Scope
 
@@ -29,6 +31,7 @@ Implemented in the current phase:
   - `/rag/verify`
   - `/rag/reindex`
 - a co-hosted `/demo` page for end-to-end review
+- a starter-definition layer that centralizes the default app title, demo metadata, dataset seeds, workflow catalog, and workflow profiles
 
 Out of scope:
 
@@ -39,6 +42,22 @@ Out of scope:
 - a separate web frontend app
 
 ## Architecture
+
+### Starter-definition layer
+
+The default demo behavior is now centralized in:
+
+- `apps/api/src/api/services/starter_definitions.py`
+
+That module is the primary customization seam for cloned services. It currently owns:
+
+- app metadata such as the default API title
+- demo enablement and demo copy
+- seeded dataset definitions and default paths
+- workflow catalog metadata and schema hints
+- workflow profile metadata
+
+The rest of the API continues to consume helper functions like `/datasets`, `/workflows`, workflow execution, and startup seeding through their existing boundaries. In other words, the current demo remains the default example pack, but the hard-coded defaults now live in one place.
 
 Runtime services:
 
@@ -191,7 +210,7 @@ uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 In another shell:
 
 ```bash
-cd /path/to/Industrial-AI-Harness-Platform
+cd /path/to/Domain-Adaptable-AI-Workflow-Demo-Platform
 export WORKER_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
 export OLLAMA_TIMEOUT_SECONDS=120
 export WORKER_ID=worker-local
@@ -225,6 +244,8 @@ The UI currently renders three result shapes:
 - `briefing`: `summary`, `key_points`, `evidence`
 - `recommendation`: `recommendations`, `rationale`, `evidence`
 - `report_generator`: `title`, `executive_summary`, `findings`, `actions`, `evidence`
+
+By default, `/demo` remains enabled. If you want a clone to ship without the co-hosted demo surface, the intended seam is the starter-definition layer rather than deleting core API code.
 
 ## API Summary
 
@@ -277,6 +298,12 @@ Run API tests:
 uv run --project apps/api pytest -q apps/api/tests
 ```
 
+Run the starter-definition focused regression tests:
+
+```bash
+uv run --project apps/api pytest -q apps/api/tests/test_config.py apps/api/tests/test_datasets_workflows.py apps/api/tests/test_starters.py
+```
+
 Run worker tests:
 
 ```bash
@@ -287,8 +314,9 @@ Each project now configures `pytest` with `pythonpath = ["src"]`, so these comma
 
 ## Project Guide
 
-- `apps/api/src/api/main.py`: app assembly and startup seeding
+- `apps/api/src/api/main.py`: app assembly, starter-aware demo enablement, and startup seeding
 - `apps/api/src/api/routers/`: route handlers for datasets, workflows, jobs, demo, rag, and health
+- `apps/api/src/api/services/starter_definitions.py`: default starter pack for app metadata, demo metadata, datasets, workflows, and profiles
 - `apps/api/src/api/services/datasets/`: dataset registry and resolver
 - `apps/api/src/api/services/workflows/`: workflow catalog, contracts, profiles, execution, and job runner
 - `apps/api/src/api/services/retrieval/service.py`: dataset-aware evidence retrieval and grounding context
