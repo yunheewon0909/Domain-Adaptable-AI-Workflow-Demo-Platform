@@ -49,7 +49,9 @@ def test_plc_import_and_query_happy_path(client) -> None:
     assert testcase_response.status_code == 200
     testcases = testcase_response.json()
     assert len(testcases) == 2
+    assert testcases[0]["testcase_key"] == testcases[0]["id"]
     assert testcases[0]["instruction_name"] == "add"
+    assert testcases[0]["is_active"] is True
 
 
 def test_plc_import_supports_xlsx(client) -> None:

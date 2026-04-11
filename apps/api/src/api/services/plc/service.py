@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from api.models import PLCTestSuiteRecord
+from api.models import PLCTestCaseRecord, PLCTestSuiteRecord
 from api.services.jobs import to_iso
 from api.services.plc.contracts import (
     PLCTestCaseModel,
@@ -274,6 +274,80 @@ def _serialize_suite(record: PLCTestSuiteRecord) -> PLCTestSuiteSummaryModel:
     )
 
 
+def _case_model_to_record(
+    suite_id: str, case: PLCTestCaseModel, *, is_active: bool = True
+) -> PLCTestCaseRecord:
+    return PLCTestCaseRecord(
+        id=case.id,
+        suite_id=suite_id,
+        testcase_key=case.id,
+        case_key=case.case_key,
+        instruction_name=case.instruction_name,
+        input_type=case.input_type,
+        output_type=case.output_type,
+        input_vector_json=case.input_vector_json,
+        expected_output_json=case.expected_output_json,
+        expected_outputs_json=case.expected_outputs_json,
+        expected_outcome=case.expected_outcome,
+        description=case.description,
+        tags_json=case.tags,
+        memory_profile_key=case.memory_profile_key,
+        timeout_ms=case.timeout_ms,
+        source_row_number=case.source_row_number,
+        source_case_index=case.source_case_index,
+        is_active=is_active,
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def _serialize_testcase_record(
+    record: PLCTestCaseRecord, *, suite_title: str | None = None
+) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "suite_id": record.suite_id,
+        "suite_title": suite_title,
+        "testcase_key": record.testcase_key,
+        "case_key": record.case_key,
+        "instruction_name": record.instruction_name,
+        "input_type": record.input_type,
+        "output_type": record.output_type,
+        "input_vector_json": record.input_vector_json,
+        "expected_output_json": record.expected_output_json,
+        "expected_outputs_json": record.expected_outputs_json,
+        "memory_profile_key": record.memory_profile_key,
+        "description": record.description,
+        "tags": record.tags_json,
+        "timeout_ms": record.timeout_ms,
+        "source_row_number": record.source_row_number,
+        "source_case_index": record.source_case_index,
+        "expected_outcome": record.expected_outcome,
+        "is_active": record.is_active,
+        "created_at": to_iso(record.created_at),
+        "updated_at": to_iso(record.updated_at),
+    }
+
+
+def _record_to_case_model(record: PLCTestCaseRecord) -> PLCTestCaseModel:
+    return PLCTestCaseModel(
+        id=record.id,
+        case_key=record.case_key,
+        instruction_name=record.instruction_name,
+        input_type=record.input_type,
+        output_type=record.output_type,
+        input_vector_json=record.input_vector_json,
+        expected_output_json=record.expected_output_json,
+        expected_outputs_json=record.expected_outputs_json,
+        memory_profile_key=record.memory_profile_key,
+        description=record.description,
+        tags=record.tags_json,
+        timeout_ms=record.timeout_ms,
+        source_row_number=record.source_row_number,
+        source_case_index=record.source_case_index,
+        expected_outcome=record.expected_outcome,
+    )
+
+
 def import_plc_suite(
     session: Session,
     *,
@@ -309,6 +383,9 @@ def import_plc_suite(
         updated_at=datetime.now(timezone.utc),
     )
     session.add(suite)
+    session.add_all(
+        [_case_model_to_record(suite.id, case) for case in suite_definition.cases]
+    )
     session.commit()
     session.refresh(suite)
     return (
@@ -354,6 +431,47 @@ def flatten_cases(
     suite_id: str | None = None,
     tag: str | None = None,
 ) -> list[dict[str, Any]]:
+    case_stmt: Select[tuple[PLCTestCaseRecord]] = select(PLCTestCaseRecord).where(
+        PLCTestCaseRecord.is_active.is_(True)
+    )
+    if suite_id is not None:
+        case_stmt = case_stmt.where(PLCTestCaseRecord.suite_id == suite_id)
+    if instruction_name is not None:
+        case_stmt = case_stmt.where(
+            PLCTestCaseRecord.instruction_name == instruction_name
+        )
+    if input_type is not None:
+        case_stmt = case_stmt.where(PLCTestCaseRecord.input_type == input_type)
+
+    cases = session.scalars(
+        case_stmt.order_by(
+            PLCTestCaseRecord.suite_id.asc(),
+            PLCTestCaseRecord.source_row_number.asc(),
+            PLCTestCaseRecord.source_case_index.asc(),
+            PLCTestCaseRecord.id.asc(),
+        )
+    ).all()
+    if cases:
+        suite_ids = sorted({case.suite_id for case in cases})
+        suite_map = {
+            suite.id: suite
+            for suite in session.scalars(
+                select(PLCTestSuiteRecord).where(PLCTestSuiteRecord.id.in_(suite_ids))
+            ).all()
+        }
+        items = []
+        for case in cases:
+            if tag and tag not in case.tags_json:
+                continue
+            suite = suite_map.get(case.suite_id)
+            items.append(
+                _serialize_testcase_record(
+                    case,
+                    suite_title=suite.title if suite is not None else None,
+                )
+            )
+        return items
+
     stmt: Select[tuple[PLCTestSuiteRecord]] = select(PLCTestSuiteRecord)
     if suite_id is not None:
         stmt = stmt.where(PLCTestSuiteRecord.id == suite_id)
@@ -394,7 +512,22 @@ def create_plc_job_payload(
     if suite is None:
         raise PLCImportError("PLC suite not found")
 
-    selected_cases = suite.definition_json.cases
+    relational_cases = session.scalars(
+        select(PLCTestCaseRecord)
+        .where(PLCTestCaseRecord.suite_id == suite.id)
+        .where(PLCTestCaseRecord.is_active.is_(True))
+        .order_by(
+            PLCTestCaseRecord.source_row_number.asc(),
+            PLCTestCaseRecord.source_case_index.asc(),
+            PLCTestCaseRecord.id.asc(),
+        )
+    ).all()
+    selected_cases: list[PLCTestCaseModel]
+    if relational_cases:
+        selected_cases = [_record_to_case_model(case) for case in relational_cases]
+    else:
+        selected_cases = suite.definition_json.cases
+
     if testcase_ids:
         selected_case_set = set(testcase_ids)
         selected_cases = [

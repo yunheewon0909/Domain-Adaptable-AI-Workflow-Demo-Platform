@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
+from api.models import PLCTestCaseRecord
 from api.services.plc.contracts import PLCTestRunResultModel
 from api.services.plc.job_runner import execute_plc_job
 from api.services.plc.service import (
@@ -39,6 +40,17 @@ def test_import_plc_suite_expands_multiple_cases_from_single_csv_row(client) -> 
     assert suite.definition_json.cases[0].memory_profile_key == "ls_add_lword_v1"
     assert suite.definition_json.cases[0].tags == ["smoke", "math"]
 
+    with Session(get_engine()) as session:
+        persisted_cases = session.query(PLCTestCaseRecord).all()
+
+    assert [case.id for case in persisted_cases] == [
+        "plc-suite-1::ADD_001",
+        "plc-suite-1::ADD_002",
+        "plc-suite-1::ADD_003",
+    ]
+    assert persisted_cases[0].suite_id == suite.id
+    assert persisted_cases[0].tags_json == ["smoke", "math"]
+
 
 def test_import_plc_suite_reads_xlsx(tmp_path: Path, client) -> None:
     workbook = Workbook()
@@ -69,6 +81,12 @@ def test_import_plc_suite_reads_xlsx(tmp_path: Path, client) -> None:
     assert suite.case_count == 1
     assert imported_count == 1
     assert rejected_count == 0
+
+    with Session(get_engine()) as session:
+        persisted_case = session.get(PLCTestCaseRecord, "plc-suite-1::ADD_001")
+
+    assert persisted_case is not None
+    assert persisted_case.expected_output_json == 2
 
 
 def test_import_plc_suite_rejects_missing_required_columns(client) -> None:
