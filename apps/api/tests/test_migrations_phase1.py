@@ -5,7 +5,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
 
-def test_alembic_upgrade_adds_datasets_workflow_and_plc_job_fields(
+def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
     monkeypatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "migration-phase1.db"
@@ -19,6 +19,11 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_job_fields(
 
     assert "datasets" in inspector.get_table_names()
     assert "plc_test_suites" in inspector.get_table_names()
+    assert "plc_testcases" in inspector.get_table_names()
+    assert "plc_test_runs" in inspector.get_table_names()
+    assert "plc_test_run_items" in inspector.get_table_names()
+    assert "plc_test_run_io_logs" in inspector.get_table_names()
+    assert "plc_targets" in inspector.get_table_names()
     job_columns = {column["name"] for column in inspector.get_columns("jobs")}
     assert {"workflow_key", "dataset_key", "plc_suite_id"}.issubset(job_columns)
 
@@ -45,3 +50,71 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_job_fields(
         "case_count",
         "definition_json",
     }.issubset(plc_suite_columns)
+
+    plc_testcase_columns = {
+        column["name"] for column in inspector.get_columns("plc_testcases")
+    }
+    assert {
+        "id",
+        "suite_id",
+        "testcase_key",
+        "case_key",
+        "instruction_name",
+        "input_vector_json",
+        "expected_output_json",
+        "expected_outputs_json",
+        "tags_json",
+        "is_active",
+    }.issubset(plc_testcase_columns)
+
+    plc_run_columns = {
+        column["name"] for column in inspector.get_columns("plc_test_runs")
+    }
+    assert {
+        "id",
+        "suite_id",
+        "target_key",
+        "backing_job_id",
+        "status",
+        "total_count",
+        "queued_count",
+        "running_count",
+        "passed_count",
+        "failed_count",
+        "error_count",
+    }.issubset(plc_run_columns)
+
+    plc_run_item_columns = {
+        column["name"] for column in inspector.get_columns("plc_test_run_items")
+    }
+    assert {
+        "id",
+        "run_id",
+        "testcase_id",
+        "case_key",
+        "status",
+        "validator_result_json",
+        "executor_log",
+    }.issubset(plc_run_item_columns)
+
+    plc_io_log_columns = {
+        column["name"] for column in inspector.get_columns("plc_test_run_io_logs")
+    }
+    assert {
+        "id",
+        "run_item_id",
+        "direction",
+        "value_json",
+        "sequence_no",
+    }.issubset(plc_io_log_columns)
+
+    plc_target_columns = {
+        column["name"] for column in inspector.get_columns("plc_targets")
+    }
+    assert {
+        "key",
+        "display_name",
+        "executor_mode",
+        "metadata_json",
+        "is_active",
+    }.issubset(plc_target_columns)

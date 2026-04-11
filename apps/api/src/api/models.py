@@ -1,7 +1,18 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.db import Base
@@ -124,6 +135,202 @@ class PLCTestSuiteRecord(Base):
         server_default=text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class PLCTestCaseRecord(Base):
+    __tablename__ = "plc_testcases"
+    __table_args__ = (
+        UniqueConstraint(
+            "suite_id", "case_key", name="uq_plc_testcases_suite_case_key"
+        ),
+        Index("ix_plc_testcases_suite_id", "suite_id"),
+        Index("ix_plc_testcases_instruction_name", "instruction_name"),
+        Index("ix_plc_testcases_input_type", "input_type"),
+        Index("ix_plc_testcases_is_active", "is_active"),
+        Index("ix_plc_testcases_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    suite_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("plc_test_suites.id"), nullable=False
+    )
+    testcase_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    case_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    instruction_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    input_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_vector_json: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    expected_output_json: Mapped[Any] = mapped_column(JSON, nullable=False)
+    expected_outputs_json: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    expected_outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pass'")
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    memory_profile_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    timeout_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3000")
+    )
+    source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_case_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class PLCTestTargetRecord(Base):
+    __tablename__ = "plc_targets"
+    __table_args__ = (
+        Index("ix_plc_targets_is_active", "is_active"),
+        Index("ix_plc_targets_created_at", "created_at"),
+    )
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executor_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class PLCTestRunRecord(Base):
+    __tablename__ = "plc_test_runs"
+    __table_args__ = (
+        UniqueConstraint("backing_job_id", name="uq_plc_test_runs_backing_job_id"),
+        Index("ix_plc_test_runs_suite_id_created_at", "suite_id", "created_at"),
+        Index("ix_plc_test_runs_status_created_at", "status", "created_at"),
+        Index("ix_plc_test_runs_target_key", "target_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    suite_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("plc_test_suites.id"), nullable=False
+    )
+    target_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    backing_job_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("jobs.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    total_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    queued_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    running_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    passed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    failed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    error_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class PLCTestRunItemRecord(Base):
+    __tablename__ = "plc_test_run_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "testcase_id", name="uq_plc_test_run_items_run_testcase"
+        ),
+        Index("ix_plc_test_run_items_run_id", "run_id"),
+        Index("ix_plc_test_run_items_testcase_id", "testcase_id"),
+        Index("ix_plc_test_run_items_status", "status"),
+        Index("ix_plc_test_run_items_case_key", "case_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("plc_test_runs.id"), nullable=False
+    )
+    testcase_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("plc_testcases.id"), nullable=False
+    )
+    case_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    instruction_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    expected_output_json: Mapped[Any] = mapped_column(JSON, nullable=False)
+    actual_output_json: Mapped[Any] = mapped_column(JSON, nullable=True)
+    validator_result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    executor_log: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class PLCTestRunIOLogRecord(Base):
+    __tablename__ = "plc_test_run_io_logs"
+    __table_args__ = (
+        Index("ix_plc_test_run_io_logs_run_item_id", "run_item_id"),
+        Index(
+            "ix_plc_test_run_io_logs_run_item_sequence",
+            "run_item_id",
+            "sequence_no",
+        ),
+        Index("ix_plc_test_run_io_logs_direction", "direction"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_item_id: Mapped[str] = mapped_column(
+        String(160), ForeignKey("plc_test_run_items.id"), nullable=False
+    )
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    memory_address: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    memory_symbol: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    value_json: Mapped[Any] = mapped_column(JSON, nullable=True)
+    raw_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
