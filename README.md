@@ -2,87 +2,95 @@
 
 ## Overview
 
-This repository packages a small local skeleton for domain-adaptable AI workflow services. The current repository still ships a demo reviewer experience, but that demo now hangs off a single starter-definition layer so cloned services can replace the defaults without editing core plumbing in many places.
+This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, but it now also includes an MVP for **DB-centered PLC test automation** that imports Excel/CSV test suites, queues deterministic runs, records pass/fail and raw I/O, and exposes results through API plus a co-hosted reviewer UI.
 
-The skeleton combines:
+The key message of the repo is now twofold:
 
-- a FastAPI service
-- a background worker with a Postgres-backed job queue
-- local retrieval over SQLite and JSON fallback artifacts
-- Ollama-backed chat and embedding models
-- a co-hosted `/demo` UI for reviewer workflows
+- **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
+- **domain service**: a concrete PLC testing slice that shows how Excel-based industrial test assets can be turned into a DB + queue + dashboard workflow without overhauling the skeleton
 
-The default starter keeps the existing reviewer path: a single page where you choose a dataset, run one of three fixed workflows, and inspect structured output with mandatory evidence.
+## What the PLC Testing MVP Adds
 
-## Phase 1 Scope
+The new PLC slice focuses on this problem: LS PLC testcases often start life in spreadsheets, while actual write/read behavior already lives in existing execution assets such as C++ scripts. This MVP turns those spreadsheet-defined cases into a database-backed suite, runs them through the existing worker queue, and stores deterministic verdicts and execution traces in a reviewable form.
 
-Implemented in the current phase:
+Included in the current MVP:
 
-- dataset registry with active dataset selection
-- workflow catalog with exactly three workflows:
-  - `briefing`
-  - `recommendation`
-  - `report_generator`
-- workflow jobs stored as `type=workflow_run`
-- retrieval-first typed outputs with mandatory `evidence[]`
-- retained `/rag/search` and `/ask` APIs
-- retained operational jobs:
-  - `/rag/warmup`
-  - `/rag/verify`
-  - `/rag/reindex`
-- a co-hosted `/demo` page for end-to-end review
-- a starter-definition layer that centralizes the default app title, demo metadata, dataset seeds, workflow catalog, and workflow profiles
+- CSV and XLSX suite import
+- normalization of spreadsheet rows into runnable testcase records
+- database-backed suite storage
+- `plc_test_run` jobs on the existing `jobs` queue
+- deterministic stub PLC executor
+- future C++ CLI adapter seam using subprocess + JSON
+- exact-match validator with explicit failure reasons
+- run/result APIs for suite-level and testcase-level review
+- dashboard summary API for recent runs, queue stats, and failure hotspots
+- expanded `/demo` reviewer surface for PLC import, run, and drill-down
 
-Out of scope:
+Out of scope for this MVP:
 
-- multi-user auth
-- dataset upload pipelines
-- generalized dataset versioning
-- Kubernetes packaging
-- a separate web frontend app
+- real PLC hardware control
+- authentication and permissions
+- cancel/retry UI for PLC runs
+- fully normalized PLC case/result tables
+- live progress streaming beyond queue polling
+- LLM-driven execution or pass/fail decisions
 
-## Architecture
+## Architecture Summary
 
-### Starter-definition layer
+### Runtime services
 
-The default demo behavior is now centralized in:
+- `postgres`: queue and application metadata
+- `api`: FastAPI app, routers, domain services, static demo UI, runner modules
+- `worker`: Postgres-backed job worker that dispatches runner modules via subprocess
+- `ollama`: local LLM/embedding runtime for the original reviewer workflows
 
-- `apps/api/src/api/services/starter_definitions.py`
+### PLC execution path
 
-That module is the primary customization seam for cloned services. It currently owns:
+1. Upload CSV/XLSX via `POST /plc-testcases/import`
+2. Normalize rows into one stored PLC suite in `plc_test_suites`
+3. Enqueue a `plc_test_run` job with `POST /plc-test-runs`
+4. Worker claims the queued job from the existing `jobs` table
+5. Worker runs `api.services.plc.job_runner` via subprocess
+6. Runner executes a deterministic stub executor or future CLI adapter
+7. Validator records pass/fail and testcase-level detail into `jobs.result_json`
+8. Reviewer UI and APIs read the same stored result payload back
 
-- app metadata such as the default API title
-- demo enablement and demo copy
-- seeded dataset definitions and default paths
-- workflow catalog metadata and schema hints
-- workflow profile metadata
+### Deterministic execution rules
 
-The rest of the API continues to consume helper functions like `/datasets`, `/workflows`, workflow execution, and startup seeding through their existing boundaries. In other words, the current demo remains the default example pack, but the hard-coded defaults now live in one place.
+- The **executor is not LLM-controlled**
+- The **validator is rule-based exact match**
+- A testcase mismatch is stored as a **failed testcase inside a succeeded run job**
+- A parsing/runtime/infrastructure problem produces a **failed job**
 
-Runtime services:
+That separation keeps the queue lifecycle stable while making business-level test failures reviewable instead of infrastructural.
 
-- `postgres`: stores jobs, worker heartbeats, and datasets
-- `api`: FastAPI service with workflow, jobs, dataset, and RAG endpoints
-- `worker`: polls jobs and runs operational or workflow subprocesses
-- `ollama`: serves chat and embedding models
+## Repo Structure
 
-Primary data paths:
+```text
+repo/
+├─ apps/
+│  ├─ api/                    # HTTP surface, static /demo UI, domain services, runner modules
+│  └─ worker/                 # queue polling, retry logic, subprocess dispatch
+├─ data/                      # sample reviewer datasets and local retrieval artifacts
+├─ docs/
+│  ├─ architecture.md
+│  ├─ skeleton-vs-service.md
+│  └─ adr/
+├─ shared/                    # shared-core seam placeholder and role documentation
+├─ CHANGELOG.md
+├─ compose.yml
+├─ pyproject.toml             # uv workspace root
+└─ README.md
+```
 
-- default industrial dataset:
-  - source: `data/sample_docs`
-  - index: `data/rag_index`
-  - sqlite db: `data/rag_index/rag.db`
-- secondary enterprise dataset:
-  - source: `data/datasets/enterprise_docs/source`
-  - index: `data/datasets/enterprise_docs/index`
-  - sqlite db: `data/datasets/enterprise_docs/index/rag.db`
+### Responsibility split
 
-## Requirements
+- **skeleton**: workspace layout, FastAPI app, worker, queue pattern, static reviewer shell
+- **demo/reviewer**: `/demo` UI used to review both workflow and PLC slices
+- **service/domain**: `apps/api/src/api/services/plc/` plus related routers/migrations/tests
+- **shared core**: `shared/` as the reserved place for framework-agnostic seams and docs, without forcing a premature package split
 
-- Docker
-- Docker Compose
-- `uv`
-- optional: `jq` for easier CLI inspection
+This repo intentionally uses **directory separation instead of long-lived branches** to show how demo and service code can coexist inside one expandable monorepo skeleton.
 
 ## Quick Start With Docker Compose
 
@@ -99,9 +107,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Expected result: `api`, `worker`, `postgres`, and `ollama` are up.
-
-3. Pull the required models on first run.
+3. Pull the required models on first run for the original workflow reviewer flow.
 
 ```bash
 docker compose exec -T ollama ollama pull qwen2.5:3b-instruct-q4_K_M
@@ -109,120 +115,119 @@ docker compose exec -T ollama ollama pull qwen2.5:7b-instruct-q4_K_M
 docker compose exec -T ollama ollama pull nomic-embed-text
 ```
 
-4. Check the core routes.
+4. Run migrations.
+
+```bash
+uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
+```
+
+5. Check the core routes.
 
 ```bash
 curl -s http://127.0.0.1:8000/health
-curl -s http://127.0.0.1:8000/datasets
 curl -s http://127.0.0.1:8000/workflows
-curl -s http://127.0.0.1:8000/demo | head
-```
-
-Expected result:
-
-- `/health` returns `{"status":"ok"}`
-- `/datasets` returns `industrial_demo` and `enterprise_docs`
-- `/workflows` returns the fixed workflow catalog
-- `/demo` serves the static reviewer UI
-
-5. Switch the active dataset.
-
-```bash
-curl -sS -X POST http://127.0.0.1:8000/datasets/active \
-  -H "Content-Type: application/json" \
-  -d '{"dataset_key":"enterprise_docs"}'
-
-curl -s http://127.0.0.1:8000/datasets
-```
-
-6. Enqueue a workflow job.
-
-```bash
-curl -sS -X POST http://127.0.0.1:8000/workflows/briefing/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"dataset_key":"enterprise_docs","prompt":"Prepare a reviewer briefing for this dataset.","k":4}'
-```
-
-Expected result: `202` with `job_id`, `status`, `workflow_key`, and `dataset_key`.
-
-7. Inspect the job result.
-
-```bash
-curl -sS http://127.0.0.1:8000/jobs/<job_id>
-curl -sS "http://127.0.0.1:8000/jobs?workflow_key=briefing&dataset_key=enterprise_docs"
-```
-
-Important note: the worker may claim jobs quickly, so `status=queued` filters can legitimately return an empty array. For verification, prefer `GET /jobs/<job_id>` or a workflow-plus-dataset filter without `status`.
-
-8. Check the retrieval endpoints.
-
-```bash
-curl -sG "http://127.0.0.1:8000/rag/search" \
-  --data-urlencode "q=workflow evidence" \
-  --data-urlencode "k=2" \
-  --data-urlencode "dataset_key=enterprise_docs"
-
-curl -s -X POST "http://127.0.0.1:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What should a reviewer focus on?","k":2,"dataset_key":"enterprise_docs"}'
-```
-
-Expected result:
-
-- `/rag/search` returns `chunk_id`, `source_path`, `title`, `score`, and `text`
-- `/ask` returns `answer`, `sources`, and `meta`
-
-9. Check the operational jobs.
-
-```bash
-curl -sS -X POST http://127.0.0.1:8000/rag/warmup
-curl -sS -X POST http://127.0.0.1:8000/rag/verify
-curl -sS -X POST "http://127.0.0.1:8000/rag/reindex?mode=incremental"
-curl -sS -X POST "http://127.0.0.1:8000/rag/reindex?mode=full"
-```
-
-Each request should return a queued job. Inspect them with `GET /jobs/<job_id>`.
-
-10. Tail worker logs when you want live execution evidence.
-
-```bash
-docker compose logs -f --tail=200 worker
-```
-
-11. Stop the stack when you are done.
-
-```bash
-docker compose down
+curl -s http://127.0.0.1:8000/plc-dashboard/summary
+curl -s http://127.0.0.1:8000/demo
 ```
 
 ## Host-Only Run
 
-If you want to run without Docker Compose, start Postgres and Ollama separately, then use:
+API:
 
 ```bash
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
 export OLLAMA_TIMEOUT_SECONDS=120
+export PLC_EXECUTOR_MODE=stub
 
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-In another shell:
+Worker:
 
 ```bash
-cd /path/to/Domain-Adaptable-AI-Workflow-Demo-Platform
 export WORKER_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
-export OLLAMA_TIMEOUT_SECONDS=120
 export WORKER_ID=worker-local
 export WORKER_HEARTBEAT_SECONDS=30
 export WORKER_POLL_SECONDS=5
 export JOB_MAX_ATTEMPTS=3
 export WORKER_API_PROJECT_DIR="$(pwd)/apps/api"
+export PLC_EXECUTOR_MODE=stub
 
 uv run --project apps/worker python -m worker.main
 ```
 
-## Demo UI
+## PLC Import Example
+
+Example CSV columns:
+
+- `instruction_name`
+- `input_values`
+- `expected_outputs`
+- `input_type`
+- `output_type`
+- optional: `description`, `tags`, `memory_profile_key`, `timeout_ms`, `expected_outcome`, `case_key`
+
+Example row that expands into multiple testcases:
+
+```csv
+instruction_name,input_values,expected_outputs,input_type,output_type,description,tags,memory_profile_key
+add,"[[1,1],[2,2],[4,4]]","[2,4,8]",LWORD,LWORD,adder,"smoke,math",ls_add_lword_v1
+```
+
+Import it:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/plc-testcases/import \
+  -F "title=LS Add Demo" \
+  -F "file=@./examples/ls-add-demo.csv;type=text/csv"
+```
+
+Expected shape:
+
+```json
+{
+  "suite_id": "plc-suite-1",
+  "title": "LS Add Demo",
+  "imported_count": 3,
+  "rejected_count": 0
+}
+```
+
+## PLC Run Example
+
+Queue a suite run:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/plc-test-runs \
+  -H "Content-Type: application/json" \
+  -d '{"suite_id":"plc-suite-1","target_key":"stub-local"}'
+```
+
+Queue only one testcase:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/plc-test-runs \
+  -H "Content-Type: application/json" \
+  -d '{"testcase_ids":["plc-suite-1::ADD_001"],"target_key":"stub-local"}'
+```
+
+Inspect run status:
+
+```bash
+curl -sS http://127.0.0.1:8000/plc-test-runs
+curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>
+curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>/items
+curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>/items/<item_id>
+```
+
+Dashboard summary:
+
+```bash
+curl -sS http://127.0.0.1:8000/plc-dashboard/summary
+```
+
+## Reviewer UI
 
 Open:
 
@@ -230,53 +235,56 @@ Open:
 http://127.0.0.1:8000/demo
 ```
 
-The page supports:
+The page now has two reviewer modes:
 
-- dataset selection
-- workflow selection
-- prompt entry
-- automatic polling of job status
-- typed result rendering
-- evidence card rendering
+- **Workflow reviewer**: the original dataset/workflow/evidence experience
+- **PLC testing MVP**: suite import, testcase preview, run queueing, run detail, raw I/O/result drill-down
 
-The UI currently renders three result shapes:
+## Stub Executor vs Future C++ Adapter
 
-- `briefing`: `summary`, `key_points`, `evidence`
-- `recommendation`: `recommendations`, `rationale`, `evidence`
-- `report_generator`: `title`, `executive_summary`, `findings`, `actions`, `evidence`
+### Stub executor today
 
-By default, `/demo` remains enabled. If you want a clone to ship without the co-hosted demo surface, the intended seam is the starter-definition layer rather than deleting core API code.
+- deterministic
+- pure JSON contract
+- no live PLC I/O
+- suitable for end-to-end validation of the queue, worker, API, and UI flow
 
-## API Summary
+### Future C++ adapter seam
 
-Core routes:
+- enabled through `PLC_EXECUTOR_MODE=cli`
+- shells out through `api.services.plc.cli_adapter`
+- expects one JSON object on stdout
+- keeps the same request/response envelope as the stub executor
 
-- `GET /health`
-- `GET /datasets`
-- `POST /datasets/active`
-- `GET /workflows`
-- `POST /workflows/{workflow_key}/jobs`
-- `GET /jobs`
-- `GET /jobs/{job_id}`
-- `GET /rag/search`
-- `POST /ask`
-- `POST /rag/warmup`
-- `POST /rag/verify`
-- `POST /rag/reindex`
-- `GET /demo`
+This is the compatibility point for reusing existing C++ PLC execution assets without rewriting the surrounding platform.
 
-Job transitions:
+## LLM Assist Boundary
 
-- `queued -> running -> succeeded`
-- `queued -> running -> failed`
+The current PLC platform does **not** let an LLM decide write/read sequences or final pass/fail. The LLM-related extension point is intentionally narrow:
 
-Useful filters:
+- normalization suggestions
+- row cleanup assistance
+- description generation
+- log summarization
+- future natural-language search over test assets
+
+The repo currently exposes a reviewable normalization preview endpoint:
 
 ```bash
-curl -sS "http://127.0.0.1:8000/jobs?workflow_key=report_generator&dataset_key=enterprise_docs"
-curl -sS "http://127.0.0.1:8000/jobs?type=rag_reindex_incremental"
-curl -sS "http://127.0.0.1:8000/jobs?status=succeeded"
+curl -sS -X POST http://127.0.0.1:8000/plc-llm/suggest-testcase-normalization \
+  -H "Content-Type: application/json" \
+  -d '{
+    "raw_row": {
+      "instruction_name": "add",
+      "input_values": "[[1,1]]",
+      "expected_outputs": "[2]",
+      "input_type": "LWORD",
+      "output_type": "LWORD"
+    }
+  }'
 ```
+
+In this MVP that path is still a deterministic preview seam, not a production LLM decision-maker.
 
 ## Testing
 
@@ -286,7 +294,7 @@ Install workspace dependencies:
 uv sync --dev
 ```
 
-Run static checks:
+Typecheck:
 
 ```bash
 uv run pyright -p pyrightconfig.json
@@ -298,55 +306,40 @@ Run API tests:
 uv run --project apps/api pytest -q apps/api/tests
 ```
 
-Run the starter-definition focused regression tests:
-
-```bash
-uv run --project apps/api pytest -q apps/api/tests/test_config.py apps/api/tests/test_datasets_workflows.py apps/api/tests/test_starters.py
-```
-
 Run worker tests:
 
 ```bash
 uv run --project apps/worker pytest -q apps/worker/tests
 ```
 
-Each project now configures `pytest` with `pythonpath = ["src"]`, so these commands work directly from the repository root.
+Targeted PLC verification:
 
-## Project Guide
+```bash
+uv run --project apps/api pytest -q \
+  apps/api/tests/test_plc_api.py \
+  apps/api/tests/test_plc_service.py \
+  apps/api/tests/test_plc_runner.py
 
-- `apps/api/src/api/main.py`: app assembly, starter-aware demo enablement, and startup seeding
-- `apps/api/src/api/routers/`: route handlers for datasets, workflows, jobs, demo, rag, and health
-- `apps/api/src/api/services/starter_definitions.py`: default starter pack for app metadata, demo metadata, datasets, workflows, and profiles
-- `apps/api/src/api/services/datasets/`: dataset registry and resolver
-- `apps/api/src/api/services/workflows/`: workflow catalog, contracts, profiles, execution, and job runner
-- `apps/api/src/api/services/retrieval/service.py`: dataset-aware evidence retrieval and grounding context
-- `apps/api/src/api/static/demo/`: co-hosted demo UI assets
-- `apps/worker/src/worker/main.py`: worker loop and subprocess dispatch
-- `data/sample_docs`: default industrial dataset source
-- `data/rag_index`: default industrial dataset runtime index
-- `data/datasets/enterprise_docs`: secondary demo dataset source and index artifacts
+uv run --project apps/worker pytest -q \
+  apps/worker/tests/test_job_processing.py \
+  apps/worker/tests/test_plc_job_processing.py
+```
 
-## Current Validation Status
+## Current Limitations
 
-The current repository state has been verified for:
+- PLC suite storage is currently one table with normalized JSON, not a fully normalized relational case/result model
+- no persistent PLC target registry yet
+- no auth or multi-user review flow
+- no browser-side spreadsheet mapping wizard
+- no real C++ or live PLC binding in this repo yet
+- `/demo` remains a static page, so richer charts/filters are intentionally modest
 
-- `pyright`
-- API tests
-- worker tests
-- Compose startup
-- dataset switching
-- all three workflow types
-- `/demo` UI workflow execution
-- `/rag/search`
-- `/ask`
-- `/rag/warmup`
-- `/rag/verify`
-- `/rag/reindex?mode=incremental`
-- `/rag/reindex?mode=full`
+## Versioning and Milestones
 
-Non-blocking warnings remain from:
+The repo now explicitly starts milestone-based versioning:
 
-- FastAPI `on_event` deprecation
-- Alembic `path_separator` deprecation warning
+- `v0.1.0`: original workflow reviewer skeleton
+- `v0.2.0`: PLC suite import + queue-backed deterministic run MVP
+- next likely milestone: `v0.3.0` for real C++ adapter integration, richer validators, and stronger reviewer drill-down
 
-These warnings do not currently block local execution or test success.
+See `CHANGELOG.md` for the current milestone notes.

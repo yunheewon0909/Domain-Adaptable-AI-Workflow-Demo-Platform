@@ -1,0 +1,2 @@
+instruction_name,input_values,expected_outputs,input_type,output_type,description,tags,memory_profile_key
+add,"[[1,1],[2,2],[4,4]]","[2,4,8]",LWORD,LWORD,adder smoke checks,"smoke,math",ls_add_lword_v1

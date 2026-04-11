@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 
 import pytest
 
@@ -7,7 +8,9 @@ from api.services.plc.contracts import PLCExecutionRequestModel
 from api.services.plc.stub_executor import DeterministicStubPLCExecutor
 
 
-def _build_request(*, expected_outcome: str = "pass") -> PLCExecutionRequestModel:
+def _build_request(
+    *, expected_outcome: Literal["pass", "fail"] = "pass"
+) -> PLCExecutionRequestModel:
     return PLCExecutionRequestModel(
         testcase_id="plc-suite-1::ADD_001",
         instruction="add",

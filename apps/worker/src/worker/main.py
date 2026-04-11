@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+from pathlib import Path
 from random import random
 import subprocess
 from threading import Event, Thread
@@ -305,6 +306,7 @@ def _run_job_subprocess(
         raise RuntimeError(f"unsupported job type for subprocess runner: {job_type}")
 
     api_project_dir = os.getenv("WORKER_API_PROJECT_DIR", "/workspace/apps/api")
+    workspace_root = str(Path(api_project_dir).resolve().parents[1])
     command = [
         "uv",
         "run",
@@ -322,7 +324,7 @@ def _run_job_subprocess(
         capture_output=True,
         text=True,
         check=False,
-        cwd="/workspace",
+        cwd=workspace_root,
         env=_build_subprocess_env(api_project_dir),
     )
     if completed.returncode != 0:

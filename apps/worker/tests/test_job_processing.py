@@ -1,4 +1,6 @@
 from sqlalchemy import create_engine, text
+import os
+from typing import cast
 
 from worker.main import (
     RUNNER_MODULE_BY_JOB_TYPE,
@@ -60,7 +62,9 @@ def test_worker_claim_and_execute_success(tmp_path) -> None:
     assert job is not None
     assert job["id"] == 1
 
-    _process_claimed_job(engine, job, runner=lambda _: {"chunks": 12, "duration_ms": 30})
+    _process_claimed_job(
+        engine, job, runner=lambda _: {"chunks": 12, "duration_ms": 30}
+    )
 
     with engine.connect() as connection:
         row = connection.execute(
@@ -90,7 +94,9 @@ def test_worker_retries_then_fails_after_max_attempts(tmp_path) -> None:
 
     job = _claim_next_rag_reindex_job(engine)
     assert job is not None
-    _process_claimed_job(engine, job, runner=lambda _: (_ for _ in ()).throw(RuntimeError("boom-1")))
+    _process_claimed_job(
+        engine, job, runner=lambda _: (_ for _ in ()).throw(RuntimeError("boom-1"))
+    )
 
     with engine.connect() as connection:
         row = connection.execute(
@@ -104,7 +110,9 @@ def test_worker_retries_then_fails_after_max_attempts(tmp_path) -> None:
 
     job = _claim_next_rag_reindex_job(engine)
     assert job is not None
-    _process_claimed_job(engine, job, runner=lambda _: (_ for _ in ()).throw(RuntimeError("boom-2")))
+    _process_claimed_job(
+        engine, job, runner=lambda _: (_ for _ in ()).throw(RuntimeError("boom-2"))
+    )
 
     with engine.connect() as connection:
         row = connection.execute(
@@ -174,7 +182,11 @@ def test_worker_retries_verify_job_and_marks_failed(tmp_path) -> None:
     job = _claim_next_job(engine, job_types=("rag_verify_index",))
     assert job is not None
     assert job["type"] == "rag_verify_index"
-    _process_claimed_job(engine, job, runner=lambda _: (_ for _ in ()).throw(RuntimeError("verify-failed")))
+    _process_claimed_job(
+        engine,
+        job,
+        runner=lambda _: (_ for _ in ()).throw(RuntimeError("verify-failed")),
+    )
 
     with engine.connect() as connection:
         row = connection.execute(
@@ -204,7 +216,9 @@ def test_worker_claims_and_processes_incremental_job(tmp_path) -> None:
     job = _claim_next_job(engine, job_types=("rag_reindex_incremental",))
     assert job is not None
     assert job["type"] == "rag_reindex_incremental"
-    _process_claimed_job(engine, job, runner=lambda _: {"mode": "incremental", "updated": 1})
+    _process_claimed_job(
+        engine, job, runner=lambda _: {"mode": "incremental", "updated": 1}
+    )
 
     with engine.connect() as connection:
         row = connection.execute(
@@ -216,6 +230,38 @@ def test_worker_claims_and_processes_incremental_job(tmp_path) -> None:
     assert row[1] == 0
     assert '"mode": "incremental"' in str(row[2])
     assert row[3] is None
+
+
+def test_run_job_subprocess_uses_workspace_root_from_api_project_dir(
+    monkeypatch, tmp_path
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true}\n'
+        stderr = ""
+
+    def _fake_run(command, *, capture_output, text, check, cwd, env):
+        captured["command"] = command
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _Completed()
+
+    api_project_dir = tmp_path / "apps" / "api"
+    api_project_dir.mkdir(parents=True)
+    monkeypatch.setenv("WORKER_API_PROJECT_DIR", str(api_project_dir))
+    monkeypatch.setattr("worker.main.subprocess.run", _fake_run)
+
+    result = _run_job_subprocess("workflow_run", {"prompt": "hello"})
+    command = cast(list[str], captured["command"])
+    env = cast(dict[str, str], captured["env"])
+
+    assert result == {"ok": True}
+    assert captured["cwd"] == str(tmp_path)
+    assert command[2] == "--project"
+    assert command[3] == str(api_project_dir)
+    assert env["WORKER_API_PROJECT_DIR"] == str(api_project_dir)
 
 
 def test_worker_claims_and_processes_workflow_run_job_with_evidence(tmp_path) -> None:
@@ -243,7 +289,9 @@ def test_worker_claims_and_processes_workflow_run_job_with_evidence(tmp_path) ->
         )
 
     assert "workflow_run" in SUPPORTED_JOB_TYPES
-    assert RUNNER_MODULE_BY_JOB_TYPE["workflow_run"] == "api.services.workflows.job_runner"
+    assert (
+        RUNNER_MODULE_BY_JOB_TYPE["workflow_run"] == "api.services.workflows.job_runner"
+    )
 
     job = _claim_next_job(engine, job_types=("workflow_run",))
     assert job is not None

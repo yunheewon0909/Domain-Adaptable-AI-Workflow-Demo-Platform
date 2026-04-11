@@ -10,7 +10,7 @@ WorkflowKey: TypeAlias = Literal["briefing", "recommendation", "report_generator
 @dataclass(frozen=True)
 class AppDefinition:
     title: str
-    version: str = "0.1.0"
+    version: str = "0.2.0"
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ DEFAULT_STARTER = StarterDefinition(
         enabled=True,
         eyebrow="Demo-first reviewer experience",
         subtitle=(
-            "Select a dataset, run one of three workflow templates, and inspect typed results with mandatory evidence."
+            "Switch between retrieval-first reviewer workflows and a PLC testing MVP that imports suites, queues deterministic runs, and exposes testcase-level results."
         ),
     ),
     datasets=(

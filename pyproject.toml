@@ -1,7 +1,7 @@
 [project]
 name = "industrial-ai-harness-platform"
-version = "0.1.0"
-description = "Week-1 MVP skeleton for Industrial AI Harness Platform"
+version = "0.2.0"
+description = "Monorepo-ready industrial AI skeleton with PLC test automation MVP"
 requires-python = "==3.11.*"
 dependencies = [
   "industrial-ai-api",

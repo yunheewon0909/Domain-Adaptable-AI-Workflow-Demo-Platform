@@ -13,6 +13,7 @@ def _csv_upload_bytes() -> bytes:
 def _xlsx_upload_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
+    assert sheet is not None
     sheet.append(
         [
             "instruction_name",

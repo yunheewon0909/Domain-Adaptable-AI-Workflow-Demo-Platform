@@ -14,41 +14,176 @@
         <p class="subtitle">{{DEMO_SUBTITLE}}</p>
       </header>
 
-      <section class="panel controls">
+      <section class="panel mode-panel">
         <div class="field">
-          <label for="dataset-select">Dataset</label>
-          <select id="dataset-select"></select>
+          <span class="label">Reviewer mode</span>
+          <div class="mode-switch" role="tablist" aria-label="Reviewer demo modes">
+            <button id="mode-workflow" type="button" class="mode-button active" data-mode="workflow" aria-selected="true">Workflow reviewer</button>
+            <button id="mode-plc" type="button" class="mode-button" data-mode="plc" aria-selected="false">PLC testing MVP</button>
+          </div>
         </div>
-
-        <div class="field">
-          <span class="label">Workflow</span>
-          <div id="workflow-list" class="workflow-list"></div>
-        </div>
-
-        <div class="field">
-          <label for="prompt-input">Prompt</label>
-          <textarea id="prompt-input" rows="5" placeholder="Describe the question, decision, or report you want to run."></textarea>
-        </div>
-
-        <button id="run-button" class="run-button">Run workflow</button>
-        <p id="run-hint" class="hint"></p>
+        <p class="hint">Keep the existing workflow review path, or switch into the PLC tester surface to import suites, queue runs, and inspect testcase-level execution detail.</p>
       </section>
 
-      <section class="grid">
-        <article class="panel">
-          <h2>Job status</h2>
-          <pre id="job-status" class="mono empty">No workflow run yet.</pre>
-        </article>
+      <section id="workflow-mode" class="demo-mode">
+        <section class="panel controls">
+          <div class="field">
+            <label for="dataset-select">Dataset</label>
+            <select id="dataset-select"></select>
+          </div>
 
-        <article class="panel">
-          <h2>Result</h2>
-          <div id="result-panel" class="result-panel empty">Run a workflow to see structured output.</div>
-        </article>
+          <div class="field">
+            <span class="label">Workflow</span>
+            <div id="workflow-list" class="workflow-list"></div>
+          </div>
+
+          <div class="field">
+            <label for="prompt-input">Prompt</label>
+            <textarea id="prompt-input" rows="5" placeholder="Describe the question, decision, or report you want to run."></textarea>
+          </div>
+
+          <button id="run-button" class="run-button">Run workflow</button>
+          <p id="run-hint" class="hint"></p>
+        </section>
+
+        <section class="grid">
+          <article class="panel">
+            <h2>Job status</h2>
+            <pre id="job-status" class="mono empty">No workflow run yet.</pre>
+          </article>
+
+          <article class="panel">
+            <h2>Result</h2>
+            <div id="result-panel" class="result-panel empty">Run a workflow to see structured output.</div>
+          </article>
+        </section>
+
+        <section class="panel evidence-panel">
+          <h2>Evidence</h2>
+          <div id="evidence-panel" class="evidence-list empty">Evidence will appear here after a successful run.</div>
+        </section>
       </section>
 
-      <section class="panel evidence-panel">
-        <h2>Evidence</h2>
-        <div id="evidence-panel" class="evidence-list empty">Evidence will appear here after a successful run.</div>
+      <section id="plc-mode" class="demo-mode" hidden>
+        <section class="grid plc-overview-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>PLC dashboard</h2>
+                <p class="section-copy">Imported suite count, queue depth, recent runs, and recurring failure hotspots.</p>
+              </div>
+              <button id="plc-summary-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div id="plc-summary-cards" class="stat-grid empty">PLC dashboard metrics will appear here.</div>
+            <div class="grid nested-grid">
+              <div class="detail-stack">
+                <h3 class="subsection-title">Recent runs</h3>
+                <div id="plc-recent-runs" class="stack-list empty">No PLC runs yet.</div>
+              </div>
+              <div class="detail-stack">
+                <h3 class="subsection-title">Failure hotspots</h3>
+                <div id="plc-failure-hotspots" class="stack-list empty">No failures captured yet.</div>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Import PLC suite</h2>
+                <p class="section-copy">Upload a CSV or XLSX suite file without client-side spreadsheet parsing.</p>
+              </div>
+            </div>
+            <div class="controls compact-controls">
+              <div class="field">
+                <label for="plc-suite-title">Suite title</label>
+                <input id="plc-suite-title" type="text" placeholder="Optional override for the imported suite title." />
+              </div>
+              <div class="field">
+                <label for="plc-suite-file">Suite file</label>
+                <input id="plc-suite-file" type="file" accept=".csv,.xlsx" />
+              </div>
+              <button id="plc-import-button" type="button" class="run-button">Import suite</button>
+              <p id="plc-import-hint" class="hint">Choose a CSV or XLSX file to import PLC testcases.</p>
+            </div>
+          </article>
+        </section>
+
+        <section class="grid plc-browser-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Imported suites</h2>
+                <p class="section-copy">Browse all available PLC suites before drilling into testcase summaries.</p>
+              </div>
+              <button id="plc-suites-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div id="plc-suite-list" class="stack-list empty">No PLC suites imported yet.</div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Testcase preview</h2>
+                <p class="section-copy">Inspect suite metadata, testcase-level inputs and expectations, and normalization previews.</p>
+              </div>
+              <button id="plc-normalization-refresh" type="button" class="secondary-button">Refresh preview</button>
+            </div>
+            <div id="plc-suite-detail" class="detail-stack empty">Select a suite to inspect testcase summaries.</div>
+            <div id="plc-testcase-list" class="stack-list empty">Suite testcases will appear here.</div>
+            <div id="plc-testcase-detail" class="detail-stack empty">Select a testcase to inspect normalized inputs and expected outputs.</div>
+            <div id="plc-normalization-panel" class="detail-stack empty">Normalization suggestions will appear here.</div>
+          </article>
+        </section>
+
+        <section class="grid plc-run-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Run controls</h2>
+                <p class="section-copy">Queue a suite-level run or scope execution to the currently selected testcase.</p>
+              </div>
+            </div>
+            <div class="controls compact-controls">
+              <div class="field">
+                <label for="plc-target-key">Target key</label>
+                <input id="plc-target-key" type="text" value="stub-local" />
+              </div>
+              <label for="plc-run-selected-only" class="field-toggle">
+                <input id="plc-run-selected-only" type="checkbox" />
+                <span>Run only the selected testcase</span>
+              </label>
+              <button id="plc-run-button" type="button" class="run-button">Enqueue PLC run</button>
+              <p id="plc-run-hint" class="hint">Select a suite, optionally narrow the scope to one testcase, then enqueue the run.</p>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>PLC runs</h2>
+                <p class="section-copy">Queued, running, and completed PLC jobs for the selected suite.</p>
+              </div>
+              <button id="plc-runs-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div id="plc-run-list" class="stack-list empty">Queued and completed PLC runs will appear here.</div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Run detail</h2>
+              <p class="section-copy">Inspect run-level pass/fail counts plus testcase-level expected vs actual behavior.</p>
+            </div>
+            <button id="plc-run-detail-refresh" type="button" class="secondary-button">Refresh selected run</button>
+          </div>
+          <div id="plc-run-summary" class="detail-stack empty">Select a PLC run to inspect pass/fail counts and testcase-level detail.</div>
+          <div class="grid plc-item-grid">
+            <div id="plc-run-item-list" class="stack-list empty">Run items will appear here after a PLC run starts.</div>
+            <div id="plc-run-item-detail" class="detail-stack empty">Select a testcase result to inspect expected vs actual output, failure reason, raw I/O snippets, and executor logs.</div>
+          </div>
+        </section>
       </section>
     </main>
 

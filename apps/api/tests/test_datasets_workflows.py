@@ -111,6 +111,7 @@ def test_enqueue_workflow_job_and_filter_jobs(client: TestClient) -> None:
             "type": "workflow_run",
             "workflow_key": "briefing",
             "dataset_key": "enterprise_docs",
+            "plc_suite_id": None,
             "status": "queued",
         }
     ]

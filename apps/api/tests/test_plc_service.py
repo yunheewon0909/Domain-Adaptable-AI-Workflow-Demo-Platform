@@ -43,6 +43,7 @@ def test_import_plc_suite_expands_multiple_cases_from_single_csv_row(client) -> 
 def test_import_plc_suite_reads_xlsx(tmp_path: Path, client) -> None:
     workbook = Workbook()
     sheet = workbook.active
+    assert sheet is not None
     sheet.append(
         [
             "instruction_name",
