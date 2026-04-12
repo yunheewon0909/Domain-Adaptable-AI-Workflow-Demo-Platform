@@ -412,7 +412,7 @@ uv run --project apps/worker pytest -q \
 
 ## Current Limitations
 
-- suite provenance still remains duplicated in `plc_test_suites.definition_json`, but relational testcase rows now drive normal list and run selection flows
+- suite provenance still remains duplicated in `plc_test_suites.definition_json`, but relational testcase rows now drive normal list and run selection flows; partial relational drift is treated as an error during run enqueue instead of silently falling back
 - target registry is still intentionally lightweight, even though queue-time validation now enforces active and executor-compatible targets
 - no auth or multi-user review flow
 - no browser-side spreadsheet mapping wizard

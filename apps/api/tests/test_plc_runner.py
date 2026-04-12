@@ -128,7 +128,9 @@ def test_cli_executor_raises_for_timeout(monkeypatch) -> None:
 def test_cli_executor_raises_for_schema_validation_failure(monkeypatch) -> None:
     class _Completed:
         returncode = 0
-        stdout = json.dumps({"status": "unexpected-status"})
+        stdout = json.dumps(
+            {"schema_version": "plc-execution-result.v0", "status": "completed"}
+        )
         stderr = "warning: missing fields"
 
     monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: _Completed())

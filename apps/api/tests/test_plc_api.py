@@ -209,6 +209,28 @@ def test_plc_run_enqueue_recreates_missing_relational_testcases(client) -> None:
     assert len(recreated_cases) == 2
 
 
+def test_plc_run_enqueue_rejects_partial_relational_drift(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    with Session(get_engine()) as session:
+        session.query(PLCTestCaseRecord).filter(
+            PLCTestCaseRecord.id == f"{suite_id}::ADD_002"
+        ).delete()
+        session.commit()
+
+    response = client.post(
+        "/plc-test-runs",
+        json={"suite_id": suite_id, "target_key": "stub-local"},
+    )
+
+    assert response.status_code == 400
+    assert "testcase masters are incomplete" in response.json()["detail"]
+
+
 def test_plc_run_enqueue_rolls_back_if_run_materialization_fails(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:

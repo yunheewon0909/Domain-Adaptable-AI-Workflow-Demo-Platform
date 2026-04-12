@@ -45,7 +45,7 @@ The PLC slice now adds:
 - deterministic executor seam under `api.services.plc`, with a versioned future CLI contract
 - exact-match validator logic inside the PLC runner path
 
-The current architecture is intentionally hybrid: relational tables now hold the primary PLC review data, while `plc_test_suites.definition_json` and `jobs.result_json` remain as compatibility/provenance snapshots during the migration away from the compact JSON-only MVP. `definition_json` is now explicitly narrower: it remains suite provenance plus a compatibility fallback only when relational testcase rows are missing.
+The current architecture is intentionally hybrid: relational tables now hold the primary PLC review data, while `plc_test_suites.definition_json` and `jobs.result_json` remain as compatibility/provenance snapshots during the migration away from the compact JSON-only MVP. `definition_json` is now explicitly narrower: it remains suite provenance plus a compatibility fallback only when relational testcase rows are missing. Partial relational drift is treated as an operational error during run creation rather than a silent fallback case.
 
 ## PLC Flow
 

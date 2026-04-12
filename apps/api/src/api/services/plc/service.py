@@ -589,6 +589,10 @@ def create_plc_job_payload(
     selected_cases: list[PLCTestCaseModel]
     relational_cases = get_testcase_models_for_suite(session, suite_id=suite.id)
     if relational_cases:
+        if len(relational_cases) != suite.case_count:
+            raise PLCImportError(
+                "PLC suite testcase masters are incomplete; reconcile relational rows before queueing a run"
+            )
         selected_cases = relational_cases
     else:
         selected_cases = suite.definition_json.cases

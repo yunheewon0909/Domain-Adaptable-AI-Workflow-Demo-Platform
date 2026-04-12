@@ -28,7 +28,7 @@ class PLCTestCaseModel(BaseModel):
 class PLCTestSuiteDefinitionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "plc-suite.v1"
+    schema_version: Literal["plc-suite.v1"] = "plc-suite.v1"
     cases: list[PLCTestCaseModel]
     warnings: list[str] = Field(default_factory=list)
 
@@ -52,7 +52,7 @@ class PLCTestSuiteDetailModel(PLCTestSuiteSummaryModel):
 class PLCExecutionRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "plc-execution-request.v1"
+    schema_version: Literal["plc-execution-request.v1"] = "plc-execution-request.v1"
     testcase_id: str
     instruction: str
     input_type: str
@@ -79,7 +79,7 @@ class PLCIOMemoryValueModel(BaseModel):
 class PLCExecutionResultModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "plc-execution-result.v1"
+    schema_version: Literal["plc-execution-result.v1"] = "plc-execution-result.v1"
     status: Literal["completed", "failed"]
     write_values: list[PLCIOMemoryValueModel] = Field(default_factory=list)
     read_values: list[PLCIOMemoryValueModel] = Field(default_factory=list)
