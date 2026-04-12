@@ -330,3 +330,62 @@ def test_plc_targets_includes_stub_local_even_when_other_targets_exist(client) -
     keys = [item["key"] for item in response.json()]
     assert keys[0] == "stub-local"
     assert "bench-a" in keys
+
+
+def test_plc_llm_suggestion_persistence_and_review_flow(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+    testcase_id = client.get("/plc-testcases", params={"suite_id": suite_id}).json()[0][
+        "id"
+    ]
+
+    create_response = client.post(
+        "/plc-llm/suggest-testcase-normalization",
+        json={
+            "suite_id": suite_id,
+            "testcase_id": testcase_id,
+            "persist": True,
+            "raw_row": {
+                "instruction_name": "add",
+                "input_values": "[[1,1]]",
+                "expected_outputs": "[2]",
+                "input_type": "LWORD",
+                "output_type": "LWORD",
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    persisted = create_response.json()["persisted_suggestion"]
+    assert persisted["status"] == "pending"
+    assert persisted["suite_id"] == suite_id
+    assert persisted["testcase_id"] == testcase_id
+
+    list_response = client.get(
+        "/plc-llm/suggestions",
+        params={"suite_id": suite_id, "testcase_id": testcase_id, "status": "pending"},
+    )
+    assert list_response.status_code == 200
+    assert len(list_response.json()) == 1
+
+    detail_response = client.get(f"/plc-llm/suggestions/{persisted['id']}")
+    assert detail_response.status_code == 200
+    assert (
+        detail_response.json()["source_payload_json"]["raw_row"]["instruction_name"]
+        == "add"
+    )
+
+    review_response = client.post(
+        f"/plc-llm/suggestions/{persisted['id']}/review",
+        json={"status": "accepted"},
+    )
+    assert review_response.status_code == 200
+    assert review_response.json()["status"] == "accepted"
+    assert review_response.json()["reviewed_at"] is not None
+
+    testcase_response = client.get(f"/plc-testcases/{testcase_id}")
+    assert testcase_response.status_code == 200
+    assert testcase_response.json()["expected_output_json"] == 2

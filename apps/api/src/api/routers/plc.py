@@ -24,10 +24,14 @@ from api.services.plc import (
     list_plc_suites,
 )
 from api.services.plc.persistence import (
+    create_plc_llm_suggestion,
+    get_plc_llm_suggestion,
     create_plc_run,
+    list_plc_llm_suggestions,
     list_plc_run_io_logs,
     list_plc_run_items,
     list_plc_targets,
+    review_plc_llm_suggestion,
 )
 from api.services.plc.service import (
     PLCImportError,
@@ -50,6 +54,15 @@ class PLLMSuggestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     raw_row: dict[str, Any]
+    suite_id: str | None = None
+    testcase_id: str | None = None
+    persist: bool = False
+
+
+class PLLMSuggestionReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(pattern="^(accepted|rejected)$")
 
 
 @router.post("/plc-testcases/import", status_code=201)
@@ -338,4 +351,57 @@ def get_plc_dashboard_summary() -> dict[str, Any]:
 def suggest_plc_testcase_normalization(
     request: PLLMSuggestionRequest,
 ) -> dict[str, Any]:
-    return build_normalization_suggestion(request.raw_row)
+    suggestion = build_normalization_suggestion(request.raw_row)
+    if not request.persist:
+        return suggestion
+
+    with Session(get_engine()) as session:
+        persisted = create_plc_llm_suggestion(
+            session,
+            suite_id=request.suite_id,
+            testcase_id=request.testcase_id,
+            suggestion_type=str(suggestion["suggestion_type"]),
+            source_payload_json={"raw_row": request.raw_row},
+            suggestion_payload_json=suggestion,
+        )
+    return {**suggestion, "persisted_suggestion": persisted}
+
+
+@router.get("/plc-llm/suggestions")
+def get_plc_llm_suggestions(
+    suite_id: str | None = Query(default=None),
+    testcase_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+) -> list[dict[str, Any]]:
+    with Session(get_engine()) as session:
+        return list_plc_llm_suggestions(
+            session,
+            suite_id=suite_id,
+            testcase_id=testcase_id,
+            status=status,
+        )
+
+
+@router.get("/plc-llm/suggestions/{suggestion_id}")
+def get_plc_llm_suggestion_detail(suggestion_id: int) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        suggestion = get_plc_llm_suggestion(session, suggestion_id=suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="PLC LLM suggestion not found")
+    return suggestion
+
+
+@router.post("/plc-llm/suggestions/{suggestion_id}/review")
+def review_plc_llm_suggestion_detail(
+    suggestion_id: int,
+    request: PLLMSuggestionReviewRequest,
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        suggestion = review_plc_llm_suggestion(
+            session,
+            suggestion_id=suggestion_id,
+            status=request.status,
+        )
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="PLC LLM suggestion not found")
+    return suggestion

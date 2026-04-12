@@ -219,6 +219,39 @@ class PLCTestTargetRecord(Base):
     )
 
 
+class PLCLLMSuggestionRecord(Base):
+    __tablename__ = "plc_llm_suggestions"
+    __table_args__ = (
+        Index("ix_plc_llm_suggestions_status_created_at", "status", "created_at"),
+        Index("ix_plc_llm_suggestions_suite_id", "suite_id"),
+        Index("ix_plc_llm_suggestions_testcase_id", "testcase_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    suite_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("plc_test_suites.id"), nullable=True
+    )
+    testcase_id: Mapped[str | None] = mapped_column(
+        String(128), ForeignKey("plc_testcases.id"), nullable=True
+    )
+    suggestion_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    suggestion_payload_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class PLCTestRunRecord(Base):
     __tablename__ = "plc_test_runs"
     __table_args__ = (

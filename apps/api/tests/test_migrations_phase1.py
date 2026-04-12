@@ -26,6 +26,7 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
     assert "plc_test_run_items" in inspector.get_table_names()
     assert "plc_test_run_io_logs" in inspector.get_table_names()
     assert "plc_targets" in inspector.get_table_names()
+    assert "plc_llm_suggestions" in inspector.get_table_names()
     job_columns = {column["name"] for column in inspector.get_columns("jobs")}
     assert {"workflow_key", "dataset_key", "plc_suite_id"}.issubset(job_columns)
 
@@ -120,6 +121,20 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "metadata_json",
         "is_active",
     }.issubset(plc_target_columns)
+
+    plc_llm_suggestion_columns = {
+        column["name"] for column in inspector.get_columns("plc_llm_suggestions")
+    }
+    assert {
+        "id",
+        "suite_id",
+        "testcase_id",
+        "suggestion_type",
+        "source_payload_json",
+        "suggestion_payload_json",
+        "status",
+        "reviewed_at",
+    }.issubset(plc_llm_suggestion_columns)
 
 
 def test_alembic_upgrade_backfills_plc_testcases_from_legacy_suite_json(

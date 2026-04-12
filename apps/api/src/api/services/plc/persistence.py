@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from api.models import (
+    PLCLLMSuggestionRecord,
     PLCTestCaseRecord,
     PLCTestRunIOLogRecord,
     PLCTestRunItemRecord,
@@ -333,6 +334,88 @@ def resolve_plc_target(session: Session, *, target_key: str) -> dict[str, Any] |
     if target is None:
         return None
     return _serialize_target_record(target)
+
+
+def create_plc_llm_suggestion(
+    session: Session,
+    *,
+    suite_id: str | None,
+    testcase_id: str | None,
+    suggestion_type: str,
+    source_payload_json: dict[str, Any],
+    suggestion_payload_json: dict[str, Any],
+) -> dict[str, Any]:
+    record = PLCLLMSuggestionRecord(
+        suite_id=suite_id,
+        testcase_id=testcase_id,
+        suggestion_type=suggestion_type,
+        source_payload_json=source_payload_json,
+        suggestion_payload_json=suggestion_payload_json,
+        status="pending",
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return serialize_plc_llm_suggestion(record)
+
+
+def serialize_plc_llm_suggestion(record: PLCLLMSuggestionRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "suite_id": record.suite_id,
+        "testcase_id": record.testcase_id,
+        "suggestion_type": record.suggestion_type,
+        "source_payload_json": record.source_payload_json,
+        "suggestion_payload_json": record.suggestion_payload_json,
+        "status": record.status,
+        "created_at": to_iso(record.created_at),
+        "reviewed_at": to_iso(record.reviewed_at),
+    }
+
+
+def list_plc_llm_suggestions(
+    session: Session,
+    *,
+    suite_id: str | None = None,
+    testcase_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    stmt = select(PLCLLMSuggestionRecord)
+    if suite_id is not None:
+        stmt = stmt.where(PLCLLMSuggestionRecord.suite_id == suite_id)
+    if testcase_id is not None:
+        stmt = stmt.where(PLCLLMSuggestionRecord.testcase_id == testcase_id)
+    if status is not None:
+        stmt = stmt.where(PLCLLMSuggestionRecord.status == status)
+    records = session.scalars(
+        stmt.order_by(
+            PLCLLMSuggestionRecord.created_at.desc(),
+            PLCLLMSuggestionRecord.id.desc(),
+        )
+    ).all()
+    return [serialize_plc_llm_suggestion(record) for record in records]
+
+
+def get_plc_llm_suggestion(
+    session: Session, *, suggestion_id: int
+) -> dict[str, Any] | None:
+    record = session.get(PLCLLMSuggestionRecord, suggestion_id)
+    if record is None:
+        return None
+    return serialize_plc_llm_suggestion(record)
+
+
+def review_plc_llm_suggestion(
+    session: Session, *, suggestion_id: int, status: str
+) -> dict[str, Any] | None:
+    record = session.get(PLCLLMSuggestionRecord, suggestion_id)
+    if record is None:
+        return None
+    record.status = status
+    record.reviewed_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(record)
+    return serialize_plc_llm_suggestion(record)
 
 
 def build_plc_job_summary(result: PLCTestRunResultModel) -> dict[str, Any]:
