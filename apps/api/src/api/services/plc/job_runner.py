@@ -18,6 +18,8 @@ from api.services.plc.contracts import (
     PLCValidationResultModel,
 )
 from api.services.plc.executor import get_plc_executor
+from api.services.plc.persistence import build_plc_job_summary, persist_plc_run_result
+from api.services.plc.validator import validate_execution_result
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -36,37 +38,6 @@ def _resolve_payload(payload_json_raw: str | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("payload_json must be a JSON object")
     return parsed
-
-
-def _validate_result(
-    *,
-    request: PLCExecutionRequestModel,
-    result: PLCExecutionResultModel,
-) -> PLCValidationResultModel:
-    type_mismatch = False
-    actual = result.actual_output
-    expected = request.expected
-    if (
-        actual is not None
-        and expected is not None
-        and type(actual) is not type(expected)
-    ):
-        type_mismatch = True
-    passed = actual == expected and not type_mismatch
-    return PLCValidationResultModel(
-        status="passed" if passed else "failed",
-        validator="exact-match.v1",
-        reason=None
-        if passed
-        else (
-            "type mismatch"
-            if type_mismatch
-            else "actual output did not match expected output"
-        ),
-        expected_output_json=expected,
-        actual_output_json=actual,
-        type_mismatch=type_mismatch,
-    )
 
 
 def _io_logs_from_result(result: PLCExecutionResultModel) -> list[dict[str, Any]]:
@@ -99,10 +70,13 @@ def _io_logs_from_result(result: PLCExecutionResultModel) -> list[dict[str, Any]
     return logs
 
 
-def execute_plc_job(payload: dict[str, Any]) -> dict[str, Any]:
+def execute_plc_job(
+    payload: dict[str, Any], *, session: Session | None = None
+) -> dict[str, Any]:
     suite_id = str(payload.get("suite_id", "")).strip()
     suite_title = str(payload.get("suite_title", suite_id)).strip() or suite_id
     target_key = str(payload.get("target_key", "stub-local")).strip() or "stub-local"
+    run_id = str(payload.get("run_id") or payload.get("backing_job_id") or "").strip()
     raw_cases = payload.get("testcases")
     if not isinstance(raw_cases, list) or not raw_cases:
         raise RuntimeError("PLC job payload must contain testcases")
@@ -126,7 +100,7 @@ def execute_plc_job(payload: dict[str, Any]) -> dict[str, Any]:
         )
         try:
             execution = executor.run_case(request)
-            validation = _validate_result(request=request, result=execution)
+            validation = validate_execution_result(request=request, result=execution)
             item_status = "passed" if validation.status == "passed" else "failed"
             failure_reason = validation.reason
         except Exception as exc:
@@ -152,7 +126,7 @@ def execute_plc_job(payload: dict[str, Any]) -> dict[str, Any]:
 
         items.append(
             PLCTestRunItemModel(
-                id=f"{suite_id}::{case.case_key}::result",
+                id=f"{run_id or suite_id}::{case.case_key}::result",
                 testcase_id=case.id,
                 case_key=case.case_key,
                 instruction_name=case.instruction_name,
@@ -180,6 +154,10 @@ def execute_plc_job(payload: dict[str, Any]) -> dict[str, Any]:
         items=items,
         warnings=warnings,
     )
+    if session is not None and run_id:
+        persist_plc_run_result(session, run_id=run_id, result=result)
+        session.commit()
+        return build_plc_job_summary(result)
     return result.model_dump(mode="json")
 
 
@@ -188,8 +166,8 @@ def main() -> None:
     args = parser.parse_args()
     try:
         payload = _resolve_payload(args.payload_json)
-        with Session(get_engine()):
-            result = execute_plc_job(payload)
+        with Session(get_engine()) as session:
+            result = execute_plc_job(payload, session=session)
     except Exception as exc:
         print(f"[plc-job-runner] failed: {exc}", file=sys.stderr, flush=True)
         raise SystemExit(1) from exc

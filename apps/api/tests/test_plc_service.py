@@ -5,9 +5,15 @@ import pytest
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
-from api.models import PLCTestCaseRecord
+from api.models import (
+    PLCTestCaseRecord,
+    PLCTestRunIOLogRecord,
+    PLCTestRunItemRecord,
+    PLCTestRunRecord,
+)
 from api.services.plc.contracts import PLCTestRunResultModel
 from api.services.plc.job_runner import execute_plc_job
+from api.services.plc.persistence import create_plc_run
 from api.services.plc.service import (
     PLCImportError,
     build_normalization_suggestion,
@@ -167,3 +173,63 @@ def test_execute_plc_job_aggregates_results() -> None:
     assert result.passed_count == 1
     assert result.failed_count == 1
     assert result.error_count == 0
+
+
+def test_execute_plc_job_persists_relational_run_results(client) -> None:
+    csv_bytes = (
+        "instruction_name,input_values,expected_outputs,input_type,output_type,description,tags,memory_profile_key\n"
+        'add,"[[1,1],[2,2]]","[2,5]",LWORD,LWORD,adder,"smoke,math",ls_add_lword_v1\n'
+    ).encode("utf-8")
+
+    with Session(get_engine()) as session:
+        suite, _, _ = import_plc_suite(
+            session,
+            filename="ls-add.csv",
+            file_bytes=csv_bytes,
+            title="LS Add",
+        )
+        create_plc_run(
+            session,
+            run_id="7",
+            suite_id=suite.id,
+            target_key="stub-local",
+            backing_job_id="7",
+            cases=suite.definition_json.cases,
+        )
+        session.commit()
+        run_cases = [
+            case.model_dump(mode="json") for case in suite.definition_json.cases
+        ]
+        run_cases[1]["expected_outcome"] = "fail"
+
+        result_summary = execute_plc_job(
+            {
+                "suite_id": suite.id,
+                "suite_title": suite.title,
+                "target_key": "stub-local",
+                "run_id": "7",
+                "backing_job_id": "7",
+                "testcases": run_cases,
+            },
+            session=session,
+        )
+        session.expire_all()
+
+        run = session.get(PLCTestRunRecord, "7")
+        run_items = (
+            session.query(PLCTestRunItemRecord)
+            .filter(PLCTestRunItemRecord.run_id == "7")
+            .all()
+        )
+        io_logs = session.query(PLCTestRunIOLogRecord).all()
+
+    assert "items" not in result_summary
+    assert result_summary["passed_count"] == 1
+    assert result_summary["failed_count"] == 1
+    assert run is not None
+    assert run.total_count == 2
+    assert run.passed_count == 1
+    assert run.failed_count == 1
+    assert len(run_items) == 2
+    assert {item.status for item in run_items} == {"passed", "failed"}
+    assert io_logs

@@ -206,6 +206,9 @@ def _claim_next_job(
                 {"job_id": _coerce_job_id(row["id"])},
             )
 
+            if str(row["type"]) == "plc_test_run":
+                _sync_plc_run_claimed(connection, _coerce_job_id(row["id"]))
+
             return {
                 "id": _coerce_job_id(row["id"]),
                 "type": str(row["type"]),
@@ -253,6 +256,9 @@ def _claim_next_job(
         if claimed.rowcount != 1:
             return None
 
+        if str(row["type"]) == "plc_test_run":
+            _sync_plc_run_claimed(connection, _coerce_job_id(row["id"]))
+
         return {
             "id": _coerce_job_id(row["id"]),
             "type": str(row["type"]),
@@ -260,6 +266,102 @@ def _claim_next_job(
             "attempts": int(row["attempts"] or 0),
             "max_attempts": int(row["max_attempts"] or _get_default_max_attempts()),
         }
+
+
+def _sync_plc_run_claimed(connection, job_id: int | str) -> None:
+    connection.execute(
+        text(
+            """
+            UPDATE plc_test_runs
+            SET status = 'running',
+                started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                queued_count = 0,
+                running_count = total_count
+            WHERE CAST(id AS TEXT) = CAST(:job_id AS TEXT)
+            """
+        ),
+        {"job_id": job_id},
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE plc_test_run_items
+            SET status = 'running',
+                started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+            WHERE CAST(run_id AS TEXT) = CAST(:job_id AS TEXT)
+              AND status = 'queued'
+            """
+        ),
+        {"job_id": job_id},
+    )
+
+
+def _sync_plc_run_status(
+    connection,
+    *,
+    job_id: int | str,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    if status == "queued":
+        connection.execute(
+            text(
+                """
+                UPDATE plc_test_runs
+                SET status = 'queued',
+                    started_at = NULL,
+                    finished_at = NULL,
+                    queued_count = total_count,
+                    running_count = 0
+                WHERE CAST(id AS TEXT) = CAST(:job_id AS TEXT)
+                """
+            ),
+            {"job_id": job_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE plc_test_run_items
+                SET status = 'queued',
+                    started_at = NULL,
+                    finished_at = NULL,
+                    failure_reason = NULL
+                WHERE CAST(run_id AS TEXT) = CAST(:job_id AS TEXT)
+                  AND status IN ('queued', 'running', 'error')
+                """
+            ),
+            {"job_id": job_id},
+        )
+        return
+
+    connection.execute(
+        text(
+            """
+            UPDATE plc_test_runs
+            SET status = CAST(:status AS VARCHAR),
+                finished_at = CURRENT_TIMESTAMP,
+                queued_count = 0,
+                running_count = 0
+            WHERE CAST(id AS TEXT) = CAST(:job_id AS TEXT)
+            """
+        ),
+        {"job_id": job_id, "status": status},
+    )
+
+    if status == "failed":
+        connection.execute(
+            text(
+                """
+                UPDATE plc_test_run_items
+                SET status = 'error',
+                    failure_reason = COALESCE(failure_reason, :error_message),
+                    finished_at = CURRENT_TIMESTAMP
+                WHERE CAST(run_id AS TEXT) = CAST(:job_id AS TEXT)
+                  AND status IN ('queued', 'running')
+                """
+            ),
+            {"job_id": job_id, "error_message": error_message or "PLC run failed"},
+        )
 
 
 def _claim_next_rag_reindex_job(engine: Engine) -> dict[str, Any] | None:
@@ -367,6 +469,7 @@ def _mark_job_succeeded(
     engine: Engine, job_id: int | str, result_json: dict[str, Any]
 ) -> None:
     with engine.begin() as connection:
+        _sync_plc_run_status(connection, job_id=job_id, status="succeeded")
         connection.execute(
             text(
                 """
@@ -395,6 +498,12 @@ def _mark_job_failure(
     requeue = next_attempts < max_attempts
 
     with engine.begin() as connection:
+        _sync_plc_run_status(
+            connection,
+            job_id=job_id,
+            status="queued" if requeue else "failed",
+            error_message=error_message,
+        )
         connection.execute(
             text(
                 """

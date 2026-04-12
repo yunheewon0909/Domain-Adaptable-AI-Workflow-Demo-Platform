@@ -9,12 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
-from api.models import JobRecord
+from api.models import JobRecord, PLCTestRunRecord
 from api.services.jobs import (
     apply_job_filters,
     create_job,
     serialize_job_detail,
-    serialize_job_summary,
 )
 from api.services.plc import (
     build_normalization_suggestion,
@@ -24,6 +23,7 @@ from api.services.plc import (
     import_plc_suite,
     list_plc_suites,
 )
+from api.services.plc.persistence import create_plc_run, list_plc_run_items
 from api.services.plc.service import PLCImportError
 
 router = APIRouter(tags=["plc"])
@@ -114,7 +114,7 @@ def get_plc_testcase(testcase_id: str) -> dict[str, Any]:
 def enqueue_plc_test_run(request: PLCTestRunRequest) -> dict[str, Any]:
     with Session(get_engine()) as session:
         try:
-            suite, payload = create_plc_job_payload(
+            suite, payload, selected_cases = create_plc_job_payload(
                 session,
                 suite_id=request.suite_id,
                 testcase_ids=request.testcase_ids,
@@ -128,26 +128,59 @@ def enqueue_plc_test_run(request: PLCTestRunRequest) -> dict[str, Any]:
             payload_json=payload,
             plc_suite_id=suite.id,
         )
+        payload["backing_job_id"] = job.id
+        payload["run_id"] = job.id
+        job.payload_json = payload
+        create_plc_run(
+            session,
+            run_id=job.id,
+            suite_id=suite.id,
+            target_key=request.target_key,
+            backing_job_id=job.id,
+            cases=selected_cases,
+        )
+        session.commit()
+        job_id = job.id
+        job_status = job.status
+        job_type = job.type
     return {
-        "job_id": job.id,
-        "status": job.status,
-        "type": job.type,
+        "job_id": job_id,
+        "status": job_status,
+        "type": job_type,
         "plc_suite_id": suite.id,
         "suite_title": suite.title,
         "target_key": request.target_key,
     }
 
 
-def _serialize_plc_run(job: JobRecord) -> dict[str, Any]:
+def _serialize_plc_run(
+    job: JobRecord, run: PLCTestRunRecord | None = None
+) -> dict[str, Any]:
     detail = serialize_job_detail(job)
-    result_json = detail.get("result_json") or {}
-    if isinstance(result_json, dict):
+    if run is not None:
         detail["summary"] = {
-            "total_count": result_json.get("total_count", 0),
-            "passed_count": result_json.get("passed_count", 0),
-            "failed_count": result_json.get("failed_count", 0),
-            "error_count": result_json.get("error_count", 0),
+            "total_count": run.total_count,
+            "passed_count": run.passed_count,
+            "failed_count": run.failed_count,
+            "error_count": run.error_count,
+            "queued_count": run.queued_count,
+            "running_count": run.running_count,
         }
+        detail["run_id"] = run.id
+        detail["target_key"] = run.target_key
+        if detail.get("started_at") is None and run.started_at is not None:
+            detail["started_at"] = run.started_at.isoformat()
+        if detail.get("finished_at") is None and run.finished_at is not None:
+            detail["finished_at"] = run.finished_at.isoformat()
+    else:
+        result_json = detail.get("result_json") or {}
+        if isinstance(result_json, dict):
+            detail["summary"] = {
+                "total_count": result_json.get("total_count", 0),
+                "passed_count": result_json.get("passed_count", 0),
+                "failed_count": result_json.get("failed_count", 0),
+                "error_count": result_json.get("error_count", 0),
+            }
     return detail
 
 
@@ -164,24 +197,36 @@ def list_plc_test_runs(
         jobs = session.scalars(
             stmt.order_by(JobRecord.created_at.desc(), JobRecord.id.desc())
         ).all()
-    return [_serialize_plc_run(job) for job in jobs]
+        runs = {
+            run.backing_job_id: run
+            for run in session.scalars(
+                select(PLCTestRunRecord).where(
+                    PLCTestRunRecord.backing_job_id.in_([job.id for job in jobs])
+                )
+            ).all()
+        }
+        return [_serialize_plc_run(job, runs.get(job.id)) for job in jobs]
 
 
 @router.get("/plc-test-runs/{run_id}")
 def get_plc_test_run(run_id: str) -> dict[str, Any]:
     with Session(get_engine()) as session:
         job = session.get(JobRecord, run_id)
+        run = session.get(PLCTestRunRecord, run_id)
     if job is None or job.type != "plc_test_run":
         raise HTTPException(status_code=404, detail="PLC test run not found")
-    return _serialize_plc_run(job)
+    return _serialize_plc_run(job, run)
 
 
 @router.get("/plc-test-runs/{run_id}/items")
 def list_plc_test_run_items(run_id: str) -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
         job = session.get(JobRecord, run_id)
+        relational_items = list_plc_run_items(session, run_id=run_id)
     if job is None or job.type != "plc_test_run":
         raise HTTPException(status_code=404, detail="PLC test run not found")
+    if relational_items:
+        return relational_items
     result_json = serialize_job_detail(job).get("result_json") or {}
     if not isinstance(result_json, dict):
         return []
@@ -207,11 +252,19 @@ def get_plc_dashboard_summary() -> dict[str, Any]:
             )
         ).all()
         suites = list_plc_suites(session)
+        runs = {
+            run.backing_job_id: run
+            for run in session.scalars(
+                select(PLCTestRunRecord).where(
+                    PLCTestRunRecord.backing_job_id.in_([job.id for job in jobs])
+                )
+            ).all()
+        }
     status_counts = Counter(job.status for job in jobs)
     failure_hotspots: Counter[str] = Counter()
     recent_runs: list[dict[str, Any]] = []
     for job in jobs[:5]:
-        detail = _serialize_plc_run(job)
+        detail = _serialize_plc_run(job, runs.get(job.id))
         recent_runs.append(
             {
                 "id": detail["id"],
@@ -221,11 +274,17 @@ def get_plc_dashboard_summary() -> dict[str, Any]:
                 "created_at": detail.get("created_at"),
             }
         )
-        result_json = detail.get("result_json") or {}
-        if isinstance(result_json, dict):
-            for item in result_json.get("items", []):
+        items = list_plc_run_items(session, run_id=job.id)
+        if items:
+            for item in items:
                 if item.get("status") in {"failed", "error"}:
                     failure_hotspots[str(item.get("case_key"))] += 1
+        else:
+            result_json = detail.get("result_json") or {}
+            if isinstance(result_json, dict):
+                for item in result_json.get("items", []):
+                    if item.get("status") in {"failed", "error"}:
+                        failure_hotspots[str(item.get("case_key"))] += 1
     return {
         "suite_count": len(suites),
         "run_count": len(jobs),

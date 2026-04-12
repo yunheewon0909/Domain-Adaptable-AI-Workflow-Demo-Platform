@@ -1,6 +1,10 @@
 from io import BytesIO
 
 from openpyxl import Workbook
+from sqlalchemy.orm import Session
+
+from api.db import get_engine
+from api.models import PLCTestRunItemRecord, PLCTestRunRecord
 
 
 def _csv_upload_bytes() -> bytes:
@@ -97,9 +101,28 @@ def test_plc_run_and_detail_endpoints(client) -> None:
     assert detail_response.status_code == 200
     assert detail_response.json()["status"] == "queued"
 
+    with Session(get_engine()) as session:
+        run = session.get(PLCTestRunRecord, run_id)
+        run_items = (
+            session.query(PLCTestRunItemRecord)
+            .filter(PLCTestRunItemRecord.run_id == run_id)
+            .all()
+        )
+
+    assert run is not None
+    assert run.target_key == "stub-local"
+    assert run.queued_count == 2
+    assert len(run_items) == 2
+    assert {item.status for item in run_items} == {"queued"}
+
     jobs_response = client.get("/plc-test-runs")
     assert jobs_response.status_code == 200
     assert jobs_response.json()[0]["plc_suite_id"] == suite_id
+
+    run_items_response = client.get(f"/plc-test-runs/{run_id}/items")
+    assert run_items_response.status_code == 200
+    assert len(run_items_response.json()) == 2
+    assert run_items_response.json()[0]["status"] == "queued"
 
     suggestion_response = client.post(
         "/plc-llm/suggest-testcase-normalization",

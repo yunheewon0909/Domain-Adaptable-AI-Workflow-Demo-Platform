@@ -19,6 +19,7 @@ from api.services.plc.contracts import (
     PLCTestSuiteDetailModel,
     PLCTestSuiteSummaryModel,
 )
+from api.services.plc.persistence import get_testcase_models_for_suite
 
 
 class PLCImportError(RuntimeError):
@@ -503,7 +504,7 @@ def create_plc_job_payload(
     suite_id: str | None,
     testcase_ids: list[str] | None,
     target_key: str,
-) -> tuple[PLCTestSuiteDetailModel, dict[str, Any]]:
+) -> tuple[PLCTestSuiteDetailModel, dict[str, Any], list[PLCTestCaseModel]]:
     if suite_id is None and not testcase_ids:
         raise PLCImportError("suite_id or testcase_ids is required")
     if suite_id is None and testcase_ids:
@@ -512,19 +513,10 @@ def create_plc_job_payload(
     if suite is None:
         raise PLCImportError("PLC suite not found")
 
-    relational_cases = session.scalars(
-        select(PLCTestCaseRecord)
-        .where(PLCTestCaseRecord.suite_id == suite.id)
-        .where(PLCTestCaseRecord.is_active.is_(True))
-        .order_by(
-            PLCTestCaseRecord.source_row_number.asc(),
-            PLCTestCaseRecord.source_case_index.asc(),
-            PLCTestCaseRecord.id.asc(),
-        )
-    ).all()
     selected_cases: list[PLCTestCaseModel]
+    relational_cases = get_testcase_models_for_suite(session, suite_id=suite.id)
     if relational_cases:
-        selected_cases = [_record_to_case_model(case) for case in relational_cases]
+        selected_cases = relational_cases
     else:
         selected_cases = suite.definition_json.cases
 
@@ -541,7 +533,7 @@ def create_plc_job_payload(
         "target_key": target_key,
         "testcases": [case.model_dump(mode="json") for case in selected_cases],
     }
-    return suite, payload
+    return suite, payload, selected_cases
 
 
 def build_normalization_suggestion(raw_row: dict[str, Any]) -> dict[str, Any]:
