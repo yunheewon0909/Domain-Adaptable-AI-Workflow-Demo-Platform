@@ -129,10 +129,37 @@
               </div>
               <button id="plc-normalization-refresh" type="button" class="secondary-button">Refresh preview</button>
             </div>
+            <div class="filter-toolbar plc-toolbar">
+              <div class="field">
+                <label for="plc-testcase-filter">Filter testcases</label>
+                <input id="plc-testcase-filter" type="search" placeholder="Search case key, instruction, tag, or description." />
+              </div>
+              <div class="field">
+                <label for="plc-testcase-outcome-filter">Expected outcome</label>
+                <select id="plc-testcase-outcome-filter">
+                  <option value="">All expected outcomes</option>
+                  <option value="pass">Expected pass</option>
+                  <option value="fail">Expected fail</option>
+                </select>
+              </div>
+            </div>
+            <p id="plc-testcase-filter-summary" class="muted-line">Suite testcases will appear here.</p>
             <div id="plc-suite-detail" class="detail-stack empty">Select a suite to inspect testcase summaries.</div>
             <div id="plc-testcase-list" class="stack-list empty">Suite testcases will appear here.</div>
             <div id="plc-testcase-detail" class="detail-stack empty">Select a testcase to inspect normalized inputs and expected outputs.</div>
+            <div class="section-heading minor-section-heading">
+              <div>
+                <h3 class="subsection-title">Suggestion review</h3>
+                <p class="section-copy">Persist normalization previews and review saved suggestions without leaving the shared demo shell.</p>
+              </div>
+              <div class="button-row">
+                <button id="plc-normalization-persist" type="button" class="secondary-button">Persist suggestion</button>
+                <button id="plc-suggestions-refresh" type="button" class="secondary-button">Refresh saved suggestions</button>
+              </div>
+            </div>
             <div id="plc-normalization-panel" class="detail-stack empty">Normalization suggestions will appear here.</div>
+            <div id="plc-suggestion-list" class="stack-list empty">Persisted suggestions will appear here after you select a testcase.</div>
+            <div id="plc-suggestion-detail" class="detail-stack empty">Select a saved suggestion to inspect review state and payload detail.</div>
           </article>
         </section>
 
@@ -146,9 +173,10 @@
             </div>
             <div class="controls compact-controls">
               <div class="field">
-                <label for="plc-target-key">Target key</label>
-                <input id="plc-target-key" type="text" value="stub-local" />
+                <label for="plc-target-select">Target</label>
+                <select id="plc-target-select"></select>
               </div>
+              <div id="plc-target-summary" class="callout empty">Available PLC targets will appear here.</div>
               <label for="plc-run-selected-only" class="field-toggle">
                 <input id="plc-run-selected-only" type="checkbox" />
                 <span>Run only the selected testcase</span>
@@ -166,6 +194,27 @@
               </div>
               <button id="plc-runs-refresh" type="button" class="secondary-button">Refresh</button>
             </div>
+            <div class="filter-toolbar plc-toolbar">
+              <div class="field">
+                <label for="plc-run-filter">Filter runs</label>
+                <input id="plc-run-filter" type="search" placeholder="Search run id, suite, or target." />
+              </div>
+              <div class="field">
+                <label for="plc-run-status-filter">Run status</label>
+                <select id="plc-run-status-filter">
+                  <option value="">All run statuses</option>
+                  <option value="queued">Queued</option>
+                  <option value="running">Running</option>
+                  <option value="succeeded">Succeeded</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+              <label for="plc-run-problems-only" class="field-toggle">
+                <input id="plc-run-problems-only" type="checkbox" />
+                <span>Problem runs only</span>
+              </label>
+            </div>
+            <p id="plc-run-filter-summary" class="muted-line">Queued and completed PLC runs will appear here.</p>
             <div id="plc-run-list" class="stack-list empty">Queued and completed PLC runs will appear here.</div>
           </article>
         </section>
@@ -178,7 +227,30 @@
             </div>
             <button id="plc-run-detail-refresh" type="button" class="secondary-button">Refresh selected run</button>
           </div>
+          <div id="plc-run-lifecycle" class="run-lifecycle empty">Select a PLC run to inspect queued, running, succeeded, and failed lifecycle state.</div>
           <div id="plc-run-summary" class="detail-stack empty">Select a PLC run to inspect pass/fail counts and testcase-level detail.</div>
+          <div class="filter-toolbar plc-toolbar">
+            <div class="field">
+              <label for="plc-run-item-filter">Filter run items</label>
+              <input id="plc-run-item-filter" type="search" placeholder="Search testcase id, case key, instruction, or failure reason." />
+            </div>
+            <div class="field">
+              <label for="plc-run-item-status-filter">Item status</label>
+              <select id="plc-run-item-status-filter">
+                <option value="">All item statuses</option>
+                <option value="queued">Queued</option>
+                <option value="running">Running</option>
+                <option value="passed">Passed</option>
+                <option value="failed">Failed</option>
+                <option value="error">Error</option>
+              </select>
+            </div>
+            <label for="plc-run-item-problems-only" class="field-toggle">
+              <input id="plc-run-item-problems-only" type="checkbox" />
+              <span>Failed or error only</span>
+            </label>
+          </div>
+          <p id="plc-run-item-filter-summary" class="muted-line">Run items will appear here after a PLC run starts.</p>
           <div class="grid plc-item-grid">
             <div id="plc-run-item-list" class="stack-list empty">Run items will appear here after a PLC run starts.</div>
             <div id="plc-run-item-detail" class="detail-stack empty">Select a testcase result to inspect expected vs actual output, failure reason, raw I/O snippets, and executor logs.</div>

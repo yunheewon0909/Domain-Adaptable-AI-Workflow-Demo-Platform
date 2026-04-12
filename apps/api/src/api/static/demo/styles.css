@@ -281,6 +281,27 @@ textarea {
   gap: var(--space-2);
 }
 
+.filter-toolbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+  margin-bottom: var(--space-4);
+}
+
+.plc-toolbar {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .inline-meta {
   display: flex;
   flex-wrap: wrap;
@@ -405,6 +426,10 @@ textarea {
   margin: 0;
 }
 
+.minor-section-heading {
+  margin-top: var(--space-5);
+}
+
 .run-button {
   justify-self: start;
   border: 0;
@@ -511,6 +536,80 @@ textarea {
   color: var(--color-success);
 }
 
+.run-lifecycle {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.flow-step,
+.comparison-card,
+.io-log-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  padding: var(--space-3);
+}
+
+.flow-step {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.flow-step.is-complete {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.flow-step.is-active.is-success {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+}
+
+.flow-step.is-active.is-failed,
+.plc-run-card.has-problem,
+.plc-run-item-card.has-problem {
+  border-color: var(--color-failed-border);
+  background: linear-gradient(180deg, var(--color-failed-soft), var(--color-surface-soft));
+}
+
+.flow-step.is-active.is-running,
+.flow-step.is-active.is-queued {
+  border-color: var(--color-border-strong);
+  background: linear-gradient(180deg, var(--color-accent-soft), var(--color-surface-soft));
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.comparison-card {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.comparison-card .json-block,
+.io-value-block {
+  min-height: 120px;
+}
+
+.io-log-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.io-log-card {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.compact-stack {
+  gap: var(--space-2);
+}
+
 @media (max-width: 860px) {
   .page {
     padding: var(--space-6) var(--space-4) var(--space-7);
@@ -526,6 +625,10 @@ textarea {
   .section-heading {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .button-row {
+    width: 100%;
   }
 
   .mode-switch {
