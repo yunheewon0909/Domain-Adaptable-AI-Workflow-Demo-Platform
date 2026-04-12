@@ -2,6 +2,30 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.4.0] - 2026-04-12
+
+### Added
+
+- versioned PLC execution request/result envelopes shared by the deterministic stub executor and the future CLI adapter seam
+- stricter CLI adapter error handling for timeout, empty stdout, invalid JSON, schema-invalid payloads, and non-zero process exits
+- persisted `plc_llm_suggestions` storage plus list/detail/review endpoints for normalization review artifacts
+- richer PLC reviewer UI controls for target selection, testcase/run/item filtering, run lifecycle visibility, item comparison views, suggestion review, and structured I/O log drill-down
+
+### Changed
+
+- PLC run enqueueing now validates that the selected target exists, is active, and matches the configured executor mode before queue rows are written
+- `stub-local` remains visible as a built-in compatibility target even when database-backed targets exist
+- relational testcase rows now drive normal PLC list and run selection flows, with `plc_test_suites.definition_json` narrowed to provenance plus explicit compatibility fallback
+- executor-reported failed case results now surface as item-level errors instead of silently falling through deterministic validation
+- README, architecture docs, skeleton/service notes, and ADR 0002 now describe the current CLI contract, target rules, suggestion review flow, and reviewer surface
+- workspace and app versions bumped from `0.3.0` to `0.4.0`
+
+### Notes
+
+- deterministic validation remains the only final pass/fail authority
+- persisted LLM suggestions are review artifacts only and are not auto-applied to testcase masters
+- native PLC execution is still not implemented in-repo; this milestone hardens the integration contract and reviewer workflows around that future seam
+
 ## [0.3.0] - 2026-04-12
 
 ### Added
