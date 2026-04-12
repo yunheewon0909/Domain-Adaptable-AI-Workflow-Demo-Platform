@@ -39,9 +39,16 @@ The domain service is the new PLC testing slice under `apps/api/src/api/services
 
 This is intentionally not split into a separate repository or long-lived branch. It lives beside the reviewer skeleton so the repo can show both the reusable platform and one real domain implementation.
 
+The PLC service is no longer just an import-and-JSON demo. It now demonstrates a more operational shape:
+
+- spreadsheet import into suite headers plus testcase master rows
+- queue-backed run orchestration
+- relational run item and raw I/O persistence
+- review-oriented APIs and demo panels layered on top of those records
+
 ### Shared Core
 
-`shared/` remains the placeholder for framework-agnostic interfaces and future extracted core contracts. The repo does not force a premature package split yet, but it makes the shared-core boundary visible now so later services have an obvious place to converge on common contracts.
+`shared/` remains the placeholder for framework-agnostic interfaces and future extracted core contracts. The repo does not force a premature package split yet, but it makes the shared-core boundary visible now so later services have an obvious place to converge on common contracts such as queue/domain separation rules, execution envelopes, and reusable review contracts.
 
 ## Why directory separation instead of long-lived branches
 

@@ -2,36 +2,38 @@
 
 ## Overview
 
-This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, but it now also includes an MVP for **DB-centered PLC test automation** that imports Excel/CSV test suites, queues deterministic runs, records pass/fail and raw I/O, and exposes results through API plus a co-hosted reviewer UI.
+This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, and it now also includes a **DB-centered PLC test automation platform slice** that imports Excel/CSV test suites, materializes testcase masters into relational tables, queues deterministic runs, records run items plus raw I/O, and exposes results through API plus a co-hosted reviewer UI.
 
 The key message of the repo is now twofold:
 
 - **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
 - **domain service**: a concrete PLC testing slice that shows how Excel-based industrial test assets can be turned into a DB + queue + dashboard workflow without overhauling the skeleton
 
-## What the PLC Testing MVP Adds
+## What the PLC Testing Slice Adds
 
-The new PLC slice focuses on this problem: LS PLC testcases often start life in spreadsheets, while actual write/read behavior already lives in existing execution assets such as C++ scripts. This MVP turns those spreadsheet-defined cases into a database-backed suite, runs them through the existing worker queue, and stores deterministic verdicts and execution traces in a reviewable form.
+The PLC slice focuses on this problem: LS PLC testcases often start life in spreadsheets, while actual write/read behavior already lives in existing execution assets such as C++ scripts. The current milestone turns those spreadsheet-defined cases into database-backed suite and testcase records, runs them through the existing worker queue, and stores deterministic verdicts plus execution traces in a reviewable relational form.
 
-Included in the current MVP:
+Included in the current milestone:
 
 - CSV and XLSX suite import
 - normalization of spreadsheet rows into runnable testcase records
-- database-backed suite storage
+- database-backed suite storage plus relational testcase master rows
 - `plc_test_run` jobs on the existing `jobs` queue
+- relational `plc_test_runs`, `plc_test_run_items`, and `plc_test_run_io_logs`
 - deterministic stub PLC executor
 - future C++ CLI adapter seam using subprocess + JSON
 - exact-match validator with explicit failure reasons
-- run/result APIs for suite-level and testcase-level review
+- run/result APIs for suite-level, testcase-level, and raw I/O review
+- stub target registry via `/plc-targets`
 - dashboard summary API for recent runs, queue stats, and failure hotspots
 - expanded `/demo` reviewer surface for PLC import, run, and drill-down
 
-Out of scope for this MVP:
+Out of scope for this milestone:
 
 - real PLC hardware control
 - authentication and permissions
 - cancel/retry UI for PLC runs
-- fully normalized PLC case/result tables
+- mutable suite versioning workflows
 - live progress streaming beyond queue polling
 - LLM-driven execution or pass/fail decisions
 
@@ -47,13 +49,14 @@ Out of scope for this MVP:
 ### PLC execution path
 
 1. Upload CSV/XLSX via `POST /plc-testcases/import`
-2. Normalize rows into one stored PLC suite in `plc_test_suites`
+2. Normalize rows into one stored PLC suite in `plc_test_suites` and testcase master rows in `plc_testcases`
 3. Enqueue a `plc_test_run` job with `POST /plc-test-runs`
-4. Worker claims the queued job from the existing `jobs` table
-5. Worker runs `api.services.plc.job_runner` via subprocess
-6. Runner executes a deterministic stub executor or future CLI adapter
-7. Validator records pass/fail and testcase-level detail into `jobs.result_json`
-8. Reviewer UI and APIs read the same stored result payload back
+4. Materialize a matching `plc_test_runs` row and queued `plc_test_run_items`
+5. Worker claims the queued job from the existing `jobs` table
+6. Worker runs `api.services.plc.job_runner` via subprocess
+7. Runner executes a deterministic stub executor or future CLI adapter, validates outputs, and persists run items plus raw I/O logs
+8. Worker writes a compact compatibility summary back to `jobs.result_json`
+9. Reviewer UI and PLC APIs read relational review data first, with legacy JSON compatibility fallback still available where needed
 
 ### Deterministic execution rules
 
@@ -91,6 +94,17 @@ repo/
 - **shared core**: `shared/` as the reserved place for framework-agnostic seams and docs, without forcing a premature package split
 
 This repo intentionally uses **directory separation instead of long-lived branches** to show how demo and service code can coexist inside one expandable monorepo skeleton.
+
+## PLC Relational Model
+
+- `plc_test_suites`: import header and provenance snapshot (`definition_json` retained for compatibility and rollback)
+- `plc_testcases`: relational testcase master rows expanded from spreadsheet input
+- `plc_test_runs`: PLC domain run header linked 1:1 to the backing queue job
+- `plc_test_run_items`: testcase-level execution and validation records
+- `plc_test_run_io_logs`: ordered raw I/O snippets for run-item review
+- `plc_targets`: target registry, seeded with `stub-local`
+
+`jobs` remains the queue and lifecycle source of truth. The PLC run tables mirror that lifecycle so the PLC domain can be reviewed independently from the generic jobs table.
 
 ## Quick Start With Docker Compose
 
@@ -219,6 +233,8 @@ curl -sS http://127.0.0.1:8000/plc-test-runs
 curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>
 curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>/items
 curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>/items/<item_id>
+curl -sS http://127.0.0.1:8000/plc-test-runs/<job_id>/io-logs
+curl -sS http://127.0.0.1:8000/plc-targets
 ```
 
 Dashboard summary:
@@ -238,7 +254,7 @@ http://127.0.0.1:8000/demo
 The page now has two reviewer modes:
 
 - **Workflow reviewer**: the original dataset/workflow/evidence experience
-- **PLC testing MVP**: suite import, testcase preview, run queueing, run detail, raw I/O/result drill-down
+- **PLC testing MVP**: suite import, testcase preview, queued/running/succeeded/failed run review, and raw I/O/result drill-down
 
 ## Stub Executor vs Future C++ Adapter
 
@@ -327,8 +343,8 @@ uv run --project apps/worker pytest -q \
 
 ## Current Limitations
 
-- PLC suite storage is currently one table with normalized JSON, not a fully normalized relational case/result model
-- no persistent PLC target registry yet
+- suite provenance still remains duplicated in `plc_test_suites.definition_json` while the relational model becomes the primary review surface
+- target registry is intentionally lightweight and currently seeded around the deterministic `stub-local` target
 - no auth or multi-user review flow
 - no browser-side spreadsheet mapping wizard
 - no real C++ or live PLC binding in this repo yet
@@ -336,10 +352,11 @@ uv run --project apps/worker pytest -q \
 
 ## Versioning and Milestones
 
-The repo now explicitly starts milestone-based versioning:
+The repo now explicitly uses milestone-based versioning:
 
 - `v0.1.0`: original workflow reviewer skeleton
 - `v0.2.0`: PLC suite import + queue-backed deterministic run MVP
-- next likely milestone: `v0.3.0` for real C++ adapter integration, richer validators, and stronger reviewer drill-down
+- `v0.3.0`: relational PLC testcase/run persistence + stronger reviewer drill-down
+- next likely milestone: `v0.4.0` for real C++ adapter integration, richer validators, and broader target management
 
 See `CHANGELOG.md` for the current milestone notes.
