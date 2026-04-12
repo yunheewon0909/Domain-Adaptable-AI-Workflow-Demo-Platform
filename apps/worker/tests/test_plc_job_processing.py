@@ -157,3 +157,76 @@ def test_worker_claims_and_processes_plc_test_run_job(tmp_path) -> None:
     assert run_row[2] == 0
     assert item_row is not None
     assert item_row[0] == "running"
+
+
+def test_worker_marks_plc_run_failed_after_final_attempt(tmp_path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'worker-plc-fail.db'}")
+    _create_schema(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO jobs (id, type, plc_suite_id, status, payload_json, attempts, max_attempts)
+                VALUES ('8', 'plc_test_run', 'plc-suite-1', 'queued', '{"suite_id":"plc-suite-1"}', 0, 1)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO plc_test_runs (
+                    id, suite_id, target_key, backing_job_id, status,
+                    total_count, queued_count, running_count, passed_count, failed_count, error_count
+                )
+                VALUES ('8', 'plc-suite-1', 'stub-local', '8', 'queued', 1, 1, 0, 0, 0, 0)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO plc_test_run_items (
+                    id, run_id, testcase_id, case_key, instruction_name, status, validator_result_json
+                )
+                VALUES ('8::ADD_001::result', '8', 'plc-suite-1::ADD_001', 'ADD_001', 'add', 'queued', '{}')
+                """
+            )
+        )
+
+    job = _claim_next_job(engine, job_types=("plc_test_run",))
+    assert job is not None
+    _process_claimed_job(
+        engine,
+        job,
+        runner=lambda _: (_ for _ in ()).throw(
+            RuntimeError("executor transport failed")
+        ),
+    )
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT status, attempts, error FROM jobs WHERE id = '8'")
+        ).fetchone()
+        run_row = connection.execute(
+            text(
+                "SELECT status, queued_count, running_count FROM plc_test_runs WHERE id = '8'"
+            )
+        ).fetchone()
+        item_row = connection.execute(
+            text(
+                "SELECT status, failure_reason FROM plc_test_run_items WHERE id = '8::ADD_001::result'"
+            )
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "failed"
+    assert row[1] == 1
+    assert "executor transport failed" in str(row[2])
+    assert run_row is not None
+    assert run_row[0] == "failed"
+    assert run_row[1] == 0
+    assert run_row[2] == 0
+    assert item_row is not None
+    assert item_row[0] == "error"
+    assert "executor transport failed" in str(item_row[1])

@@ -131,6 +131,12 @@ def test_plc_run_and_detail_endpoints(client) -> None:
     assert len(run_items_response.json()) == 2
     assert run_items_response.json()[0]["status"] == "queued"
 
+    run_item_detail_response = client.get(
+        f"/plc-test-runs/{run_id}/items/{run_items_response.json()[0]['id']}"
+    )
+    assert run_item_detail_response.status_code == 200
+    assert run_item_detail_response.json()["id"] == run_items_response.json()[0]["id"]
+
     run_logs_response = client.get(f"/plc-test-runs/{run_id}/io-logs")
     assert run_logs_response.status_code == 200
     assert run_logs_response.json() == []

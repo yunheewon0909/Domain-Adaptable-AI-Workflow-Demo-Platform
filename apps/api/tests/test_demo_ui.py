@@ -8,3 +8,6 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     text = response.text
     assert "Workflow reviewer" in text
     assert "PLC testing MVP" in text
+    assert "Suggestion review" in text
+    assert "Filter run items" in text
+    assert "failed lifecycle state" in text
