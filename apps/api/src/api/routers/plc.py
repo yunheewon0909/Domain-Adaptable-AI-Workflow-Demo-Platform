@@ -23,7 +23,12 @@ from api.services.plc import (
     import_plc_suite,
     list_plc_suites,
 )
-from api.services.plc.persistence import create_plc_run, list_plc_run_items
+from api.services.plc.persistence import (
+    create_plc_run,
+    list_plc_run_io_logs,
+    list_plc_run_items,
+    list_plc_targets,
+)
 from api.services.plc.service import PLCImportError
 
 router = APIRouter(tags=["plc"])
@@ -71,6 +76,12 @@ async def import_plc_testcases(
 def get_plc_test_suites() -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
         return [suite.model_dump(mode="json") for suite in list_plc_suites(session)]
+
+
+@router.get("/plc-targets")
+def get_plc_targets() -> list[dict[str, Any]]:
+    with Session(get_engine()) as session:
+        return list_plc_targets(session)
 
 
 @router.get("/plc-test-suites/{suite_id}")
@@ -241,6 +252,16 @@ def get_plc_test_run_item(run_id: str, item_id: str) -> dict[str, Any]:
         if item.get("id") == item_id:
             return item
     raise HTTPException(status_code=404, detail="PLC test run item not found")
+
+
+@router.get("/plc-test-runs/{run_id}/io-logs")
+def get_plc_test_run_io_logs(run_id: str) -> list[dict[str, Any]]:
+    with Session(get_engine()) as session:
+        job = session.get(JobRecord, run_id)
+        io_logs = list_plc_run_io_logs(session, run_id=run_id)
+    if job is None or job.type != "plc_test_run":
+        raise HTTPException(status_code=404, detail="PLC test run not found")
+    return io_logs
 
 
 @router.get("/plc-dashboard/summary")

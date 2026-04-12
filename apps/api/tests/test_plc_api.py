@@ -124,6 +124,14 @@ def test_plc_run_and_detail_endpoints(client) -> None:
     assert len(run_items_response.json()) == 2
     assert run_items_response.json()[0]["status"] == "queued"
 
+    run_logs_response = client.get(f"/plc-test-runs/{run_id}/io-logs")
+    assert run_logs_response.status_code == 200
+    assert run_logs_response.json() == []
+
+    targets_response = client.get("/plc-targets")
+    assert targets_response.status_code == 200
+    assert targets_response.json()[0]["key"] == "stub-local"
+
     suggestion_response = client.post(
         "/plc-llm/suggest-testcase-normalization",
         json={

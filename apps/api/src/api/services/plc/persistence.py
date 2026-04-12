@@ -11,6 +11,7 @@ from api.models import (
     PLCTestRunIOLogRecord,
     PLCTestRunItemRecord,
     PLCTestRunRecord,
+    PLCTestTargetRecord,
 )
 from api.services.jobs import to_iso
 from api.services.plc.contracts import PLCTestCaseModel, PLCTestRunResultModel
@@ -248,6 +249,68 @@ def list_plc_run_items(session: Session, *, run_id: str) -> list[dict[str, Any]]
             "finished_at": to_iso(item.finished_at),
         }
         for item in items
+    ]
+
+
+def list_plc_run_io_logs(session: Session, *, run_id: str) -> list[dict[str, Any]]:
+    item_ids = session.scalars(
+        select(PLCTestRunItemRecord.id).where(PLCTestRunItemRecord.run_id == run_id)
+    ).all()
+    if not item_ids:
+        return []
+    logs = session.scalars(
+        select(PLCTestRunIOLogRecord)
+        .where(PLCTestRunIOLogRecord.run_item_id.in_(item_ids))
+        .order_by(
+            PLCTestRunIOLogRecord.run_item_id.asc(),
+            PLCTestRunIOLogRecord.sequence_no.asc(),
+        )
+    ).all()
+    return [
+        {
+            "id": log.id,
+            "run_item_id": log.run_item_id,
+            "direction": log.direction,
+            "memory_address": log.memory_address,
+            "memory_symbol": log.memory_symbol,
+            "value_json": log.value_json,
+            "raw_type": log.raw_type,
+            "sequence_no": log.sequence_no,
+            "recorded_at": to_iso(log.recorded_at),
+        }
+        for log in logs
+    ]
+
+
+def list_plc_targets(session: Session) -> list[dict[str, Any]]:
+    targets = session.scalars(
+        select(PLCTestTargetRecord).order_by(PLCTestTargetRecord.key.asc())
+    ).all()
+    if not targets:
+        return [
+            {
+                "key": "stub-local",
+                "display_name": "Stub Local",
+                "description": "Deterministic in-repo stub executor target for PLC test reviews.",
+                "executor_mode": "stub",
+                "metadata_json": {},
+                "is_active": True,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ]
+    return [
+        {
+            "key": target.key,
+            "display_name": target.display_name,
+            "description": target.description,
+            "executor_mode": target.executor_mode,
+            "metadata_json": target.metadata_json,
+            "is_active": target.is_active,
+            "created_at": to_iso(target.created_at),
+            "updated_at": to_iso(target.updated_at),
+        }
+        for target in targets
     ]
 
 

@@ -664,6 +664,8 @@ function renderPlcRuns() {
           <h3>${escapeHtml(run.payload_json?.suite_title || run.plc_suite_id || 'PLC run')}</h3>
           <p class="meta-line">created ${escapeHtml(formatDateTime(run.created_at))}</p>
           <div class="badge-row">
+            ${renderBadge(`queued ${run.summary?.queued_count ?? 0}`)}
+            ${renderBadge(`running ${run.summary?.running_count ?? 0}`)}
             ${renderBadge(`pass ${run.summary?.passed_count ?? 0}`)}
             ${renderBadge(`fail ${run.summary?.failed_count ?? 0}`)}
             ${renderBadge(`error ${run.summary?.error_count ?? 0}`)}
@@ -707,6 +709,14 @@ function renderPlcRunSummary() {
     ]),
     `
       <section class="status-summary">
+        <article class="stat-card">
+          <p class="stat-label">Queued</p>
+          <p class="stat-value">${escapeHtml(run.summary?.queued_count ?? 0)}</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Running</p>
+          <p class="stat-value">${escapeHtml(run.summary?.running_count ?? 0)}</p>
+        </article>
         <article class="stat-card">
           <p class="stat-label">Total</p>
           <p class="stat-value">${escapeHtml(run.summary?.total_count ?? 0)}</p>
