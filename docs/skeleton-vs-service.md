@@ -44,7 +44,9 @@ The PLC service is no longer just an import-and-JSON demo. It now demonstrates a
 - spreadsheet import into suite headers plus testcase master rows
 - queue-backed run orchestration
 - relational run item and raw I/O persistence
+- target-aware queue validation and a versioned future CLI execution seam
 - review-oriented APIs and demo panels layered on top of those records
+- persisted LLM suggestion review artifacts that stay outside the deterministic execution path
 
 ### Shared Core
 
@@ -69,3 +71,5 @@ This repository now demonstrates that the same underlying skeleton can support:
 - deterministic industrial test automation workflows
 
 without changing deployment shape, abandoning the queue model, or introducing a second frontend stack.
+
+That distinction matters in the current PLC milestone. The repo is still a skeleton in the sense that the worker, queue, API assembly, and static shell are reusable. It is also clearly a service now because the PLC slice has its own relational model, validation rules, future native execution contract, target registry rules, and reviewer-specific operational workflows.
