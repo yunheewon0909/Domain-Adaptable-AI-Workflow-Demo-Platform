@@ -478,6 +478,7 @@ def flatten_cases(
     suite_id: str | None = None,
     tag: str | None = None,
 ) -> list[dict[str, Any]]:
+    requested_suite_ids: list[str] | None = [suite_id] if suite_id is not None else None
     case_stmt: Select[tuple[PLCTestCaseRecord]] = select(PLCTestCaseRecord).where(
         PLCTestCaseRecord.is_active.is_(True)
     )
@@ -519,12 +520,38 @@ def flatten_cases(
             )
         return items
 
+    if suite_id is not None:
+        requested_suite_ids = [suite_id]
+    else:
+        requested_suite_ids = None
+
     stmt: Select[tuple[PLCTestSuiteRecord]] = select(PLCTestSuiteRecord)
     if suite_id is not None:
         stmt = stmt.where(PLCTestSuiteRecord.id == suite_id)
     suites = session.scalars(stmt.order_by(PLCTestSuiteRecord.created_at.desc())).all()
+    if not suites:
+        return []
+
+    fallback_suite_ids = {suite.id for suite in suites}
+    if requested_suite_ids is not None:
+        fallback_suite_ids = set(requested_suite_ids)
+
+    suites_with_relational_rows = set(
+        session.scalars(
+            select(PLCTestCaseRecord.suite_id)
+            .where(PLCTestCaseRecord.suite_id.in_(fallback_suite_ids))
+            .where(PLCTestCaseRecord.is_active.is_(True))
+        ).all()
+    )
+
+    fallback_suites = [
+        suite for suite in suites if suite.id not in suites_with_relational_rows
+    ]
+    if not fallback_suites:
+        return []
+
     items: list[dict[str, Any]] = []
-    for suite in suites:
+    for suite in fallback_suites:
         definition = PLCTestSuiteDefinitionModel.model_validate(suite.definition_json)
         for case in definition.cases:
             if instruction_name and case.instruction_name != instruction_name:

@@ -17,6 +17,8 @@ from api.services.plc.persistence import create_plc_run
 from api.services.plc.service import (
     PLCImportError,
     build_normalization_suggestion,
+    create_plc_job_payload,
+    flatten_cases,
     import_plc_suite,
 )
 
@@ -233,3 +235,68 @@ def test_execute_plc_job_persists_relational_run_results(client) -> None:
     assert len(run_items) == 2
     assert {item.status for item in run_items} == {"passed", "failed"}
     assert io_logs
+
+
+def test_flatten_cases_prefers_relational_rows_over_definition_json(client) -> None:
+    csv_bytes = (
+        "instruction_name,input_values,expected_outputs,input_type,output_type\n"
+        'add,"[[1,1]]","[2]",LWORD,LWORD\n'
+    ).encode("utf-8")
+
+    with Session(get_engine()) as session:
+        suite, _, _ = import_plc_suite(
+            session,
+            filename="ls-add.csv",
+            file_bytes=csv_bytes,
+            title="LS Add",
+        )
+        case = session.get(PLCTestCaseRecord, "plc-suite-1::ADD_001")
+        assert case is not None
+        case.expected_output_json = 99
+        session.commit()
+
+        flattened = flatten_cases(session, suite_id=suite.id)
+        _, payload, selected_cases = create_plc_job_payload(
+            session,
+            suite_id=suite.id,
+            testcase_ids=None,
+            target_key="stub-local",
+        )
+
+    assert flattened[0]["expected_output_json"] == 99
+    assert selected_cases[0].expected_output_json == 99
+    assert payload["testcases"][0]["expected_output_json"] == 99
+
+
+def test_flatten_cases_uses_definition_json_only_when_suite_lacks_relational_rows(
+    client,
+) -> None:
+    csv_bytes = (
+        "instruction_name,input_values,expected_outputs,input_type,output_type\n"
+        'add,"[[1,1],[2,2]]","[2,4]",LWORD,LWORD\n'
+    ).encode("utf-8")
+
+    with Session(get_engine()) as session:
+        suite, _, _ = import_plc_suite(
+            session,
+            filename="ls-add.csv",
+            file_bytes=csv_bytes,
+            title="LS Add",
+        )
+        session.query(PLCTestCaseRecord).filter(
+            PLCTestCaseRecord.suite_id == suite.id
+        ).delete()
+        session.commit()
+
+        flattened = flatten_cases(session, suite_id=suite.id)
+        _, payload, selected_cases = create_plc_job_payload(
+            session,
+            suite_id=suite.id,
+            testcase_ids=None,
+            target_key="stub-local",
+        )
+
+    assert len(flattened) == 2
+    assert flattened[0]["expected_output_json"] == 2
+    assert len(selected_cases) == 2
+    assert payload["testcases"][1]["expected_output_json"] == 4
