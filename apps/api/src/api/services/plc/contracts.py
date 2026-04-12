@@ -52,6 +52,7 @@ class PLCTestSuiteDetailModel(PLCTestSuiteSummaryModel):
 class PLCExecutionRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    schema_version: str = "plc-execution-request.v1"
     testcase_id: str
     instruction: str
     input_type: str
@@ -61,6 +62,9 @@ class PLCExecutionRequestModel(BaseModel):
     expected_outcome: Literal["pass", "fail"] = "pass"
     memory_profile_key: str | None = None
     timeout_ms: int = Field(default=3000, ge=1)
+    target_key: str | None = None
+    testcase_metadata: dict[str, Any] = Field(default_factory=dict)
+    execution_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class PLCIOMemoryValueModel(BaseModel):
@@ -75,6 +79,7 @@ class PLCIOMemoryValueModel(BaseModel):
 class PLCExecutionResultModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    schema_version: str = "plc-execution-result.v1"
     status: Literal["completed", "failed"]
     write_values: list[PLCIOMemoryValueModel] = Field(default_factory=list)
     read_values: list[PLCIOMemoryValueModel] = Field(default_factory=list)
@@ -83,6 +88,9 @@ class PLCExecutionResultModel(BaseModel):
     duration_ms: int = Field(default=0, ge=0)
     raw_log: str = ""
     executor_exit_code: int = 0
+    diagnostics: list[str] = Field(default_factory=list)
+    warning_codes: list[str] = Field(default_factory=list)
+    executor_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PLCValidationResultModel(BaseModel):

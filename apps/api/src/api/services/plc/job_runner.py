@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.config import get_settings
 from api.db import get_engine
+from api.services.plc.cli_adapter import PLCExecutorTransportError
 from api.services.plc.contracts import (
     PLCExecutionRequestModel,
     PLCExecutionResultModel,
@@ -70,6 +71,14 @@ def _io_logs_from_result(result: PLCExecutionResultModel) -> list[dict[str, Any]
     return logs
 
 
+def _executor_failure_reason(result: PLCExecutionResultModel) -> str:
+    if result.diagnostics:
+        return "; ".join(str(item) for item in result.diagnostics if str(item).strip())
+    if result.raw_log.strip():
+        return result.raw_log.strip()
+    return "PLC executor reported failed status"
+
+
 def execute_plc_job(
     payload: dict[str, Any], *, session: Session | None = None
 ) -> dict[str, Any]:
@@ -97,32 +106,40 @@ def execute_plc_job(
             expected_outcome=case.expected_outcome,
             memory_profile_key=case.memory_profile_key,
             timeout_ms=case.timeout_ms,
+            target_key=target_key,
+            testcase_metadata={
+                "case_key": case.case_key,
+                "description": case.description,
+                "tags": case.tags,
+                "source_row_number": case.source_row_number,
+                "source_case_index": case.source_case_index,
+            },
+            execution_context={
+                "suite_id": suite_id,
+                "suite_title": suite_title,
+            },
         )
         try:
             execution = executor.run_case(request)
-            validation = validate_execution_result(request=request, result=execution)
-            item_status = "passed" if validation.status == "passed" else "failed"
-            failure_reason = validation.reason
-        except Exception as exc:
-            execution = PLCExecutionResultModel(
-                status="failed",
-                actual_output=None,
-                expected_output=case.expected_output_json,
-                duration_ms=0,
-                raw_log=str(exc),
-                executor_exit_code=1,
-            )
+        except PLCExecutorTransportError:
+            raise
+
+        if execution.status == "failed":
             validation = PLCValidationResultModel(
                 status="failed",
-                validator="exact-match.v1",
-                reason=str(exc),
+                validator="executor-status.v1",
+                reason=_executor_failure_reason(execution),
                 expected_output_json=case.expected_output_json,
-                actual_output_json=None,
+                actual_output_json=execution.actual_output,
                 type_mismatch=False,
             )
             item_status = "error"
-            failure_reason = str(exc)
-            warnings.append(f"case {case.case_key}: executor error")
+            failure_reason = validation.reason
+            warnings.append(f"case {case.case_key}: executor reported failed status")
+        else:
+            validation = validate_execution_result(request=request, result=execution)
+            item_status = "passed" if validation.status == "passed" else "failed"
+            failure_reason = validation.reason
 
         items.append(
             PLCTestRunItemModel(
