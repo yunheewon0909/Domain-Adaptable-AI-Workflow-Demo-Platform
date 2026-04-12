@@ -29,7 +29,11 @@ from api.services.plc.persistence import (
     list_plc_run_items,
     list_plc_targets,
 )
-from api.services.plc.service import PLCImportError, ensure_plc_testcase_records
+from api.services.plc.service import (
+    PLCImportError,
+    ensure_plc_testcase_records,
+    validate_plc_target,
+)
 
 router = APIRouter(tags=["plc"])
 
@@ -125,6 +129,7 @@ def get_plc_testcase(testcase_id: str) -> dict[str, Any]:
 def enqueue_plc_test_run(request: PLCTestRunRequest) -> dict[str, Any]:
     with Session(get_engine()) as session:
         try:
+            validate_plc_target(session, target_key=request.target_key)
             suite, payload, selected_cases = create_plc_job_payload(
                 session,
                 suite_id=request.suite_id,

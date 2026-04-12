@@ -10,6 +10,7 @@ from api.models import (
     PLCTestCaseRecord,
     PLCTestRunItemRecord,
     PLCTestRunRecord,
+    PLCTestTargetRecord,
 )
 
 
@@ -225,3 +226,107 @@ def test_plc_run_enqueue_rolls_back_if_run_materialization_fails(
     with Session(get_engine()) as session:
         jobs = session.query(JobRecord).filter(JobRecord.type == "plc_test_run").all()
     assert jobs == []
+
+
+def test_plc_run_enqueue_rejects_unknown_target(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    response = client.post(
+        "/plc-test-runs",
+        json={"suite_id": suite_id, "target_key": "missing-target"},
+    )
+
+    assert response.status_code == 400
+    assert "was not found" in response.json()["detail"]
+    with Session(get_engine()) as session:
+        jobs = session.query(JobRecord).filter(JobRecord.type == "plc_test_run").all()
+        runs = session.query(PLCTestRunRecord).all()
+    assert jobs == []
+    assert runs == []
+
+
+def test_plc_run_enqueue_rejects_inactive_target(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    with Session(get_engine()) as session:
+        session.add(
+            PLCTestTargetRecord(
+                key="stub-local",
+                display_name="Stub Local",
+                description="disabled",
+                executor_mode="stub",
+                metadata_json={},
+                is_active=False,
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/plc-test-runs",
+        json={"suite_id": suite_id, "target_key": "stub-local"},
+    )
+
+    assert response.status_code == 400
+    assert "is inactive" in response.json()["detail"]
+
+
+def test_plc_run_enqueue_rejects_executor_mode_mismatch(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PLC_EXECUTOR_MODE", "stub")
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    with Session(get_engine()) as session:
+        session.add(
+            PLCTestTargetRecord(
+                key="cli-target",
+                display_name="CLI Target",
+                description="cli only",
+                executor_mode="cli",
+                metadata_json={},
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/plc-test-runs",
+        json={"suite_id": suite_id, "target_key": "cli-target"},
+    )
+
+    assert response.status_code == 400
+    assert "requires executor mode 'cli'" in response.json()["detail"]
+
+
+def test_plc_targets_includes_stub_local_even_when_other_targets_exist(client) -> None:
+    with Session(get_engine()) as session:
+        session.add(
+            PLCTestTargetRecord(
+                key="bench-a",
+                display_name="Bench A",
+                description="custom target",
+                executor_mode="stub",
+                metadata_json={"line": "A"},
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    response = client.get("/plc-targets")
+
+    assert response.status_code == 200
+    keys = [item["key"] for item in response.json()]
+    assert keys[0] == "stub-local"
+    assert "bench-a" in keys

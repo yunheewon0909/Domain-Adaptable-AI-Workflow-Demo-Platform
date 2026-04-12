@@ -17,6 +17,31 @@ from api.services.jobs import to_iso
 from api.services.plc.contracts import PLCTestCaseModel, PLCTestRunResultModel
 
 
+STUB_LOCAL_TARGET = {
+    "key": "stub-local",
+    "display_name": "Stub Local",
+    "description": "Deterministic in-repo stub executor target for PLC test reviews.",
+    "executor_mode": "stub",
+    "metadata_json": {},
+    "is_active": True,
+    "created_at": None,
+    "updated_at": None,
+}
+
+
+def _serialize_target_record(target: PLCTestTargetRecord) -> dict[str, Any]:
+    return {
+        "key": target.key,
+        "display_name": target.display_name,
+        "description": target.description,
+        "executor_mode": target.executor_mode,
+        "metadata_json": target.metadata_json,
+        "is_active": target.is_active,
+        "created_at": to_iso(target.created_at),
+        "updated_at": to_iso(target.updated_at),
+    }
+
+
 def create_plc_run(
     session: Session,
     *,
@@ -286,32 +311,28 @@ def list_plc_targets(session: Session) -> list[dict[str, Any]]:
     targets = session.scalars(
         select(PLCTestTargetRecord).order_by(PLCTestTargetRecord.key.asc())
     ).all()
-    if not targets:
-        return [
-            {
-                "key": "stub-local",
-                "display_name": "Stub Local",
-                "description": "Deterministic in-repo stub executor target for PLC test reviews.",
-                "executor_mode": "stub",
-                "metadata_json": {},
-                "is_active": True,
-                "created_at": None,
-                "updated_at": None,
-            }
-        ]
-    return [
-        {
-            "key": target.key,
-            "display_name": target.display_name,
-            "description": target.description,
-            "executor_mode": target.executor_mode,
-            "metadata_json": target.metadata_json,
-            "is_active": target.is_active,
-            "created_at": to_iso(target.created_at),
-            "updated_at": to_iso(target.updated_at),
-        }
-        for target in targets
-    ]
+    items = [_serialize_target_record(target) for target in targets]
+    if not any(target["key"] == STUB_LOCAL_TARGET["key"] for target in items):
+        items.insert(0, dict(STUB_LOCAL_TARGET))
+    return items
+
+
+def resolve_plc_target(session: Session, *, target_key: str) -> dict[str, Any] | None:
+    normalized_key = target_key.strip()
+    if not normalized_key:
+        return None
+    if normalized_key == STUB_LOCAL_TARGET["key"]:
+        target = session.get(PLCTestTargetRecord, normalized_key)
+        return (
+            _serialize_target_record(target)
+            if target is not None
+            else dict(STUB_LOCAL_TARGET)
+        )
+
+    target = session.get(PLCTestTargetRecord, normalized_key)
+    if target is None:
+        return None
+    return _serialize_target_record(target)
 
 
 def build_plc_job_summary(result: PLCTestRunResultModel) -> dict[str, Any]:

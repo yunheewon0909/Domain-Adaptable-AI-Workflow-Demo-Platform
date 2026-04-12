@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
+from api.config import get_settings
 from api.models import PLCTestCaseRecord, PLCTestSuiteRecord
 from api.services.jobs import to_iso
 from api.services.plc.contracts import (
@@ -19,11 +20,32 @@ from api.services.plc.contracts import (
     PLCTestSuiteDetailModel,
     PLCTestSuiteSummaryModel,
 )
-from api.services.plc.persistence import get_testcase_models_for_suite
+from api.services.plc.persistence import (
+    get_testcase_models_for_suite,
+    resolve_plc_target,
+)
 
 
 class PLCImportError(RuntimeError):
     pass
+
+
+def validate_plc_target(session: Session, *, target_key: str) -> dict[str, Any]:
+    target = resolve_plc_target(session, target_key=target_key)
+    if target is None:
+        raise PLCImportError(f"PLC target '{target_key}' was not found")
+    if not bool(target.get("is_active")):
+        raise PLCImportError(f"PLC target '{target_key}' is inactive")
+
+    configured_executor_mode = get_settings().plc_executor_mode
+    target_executor_mode = str(target.get("executor_mode") or "").strip().lower()
+    if target_executor_mode and target_executor_mode != configured_executor_mode:
+        raise PLCImportError(
+            "PLC target "
+            f"'{target_key}' requires executor mode '{target_executor_mode}', "
+            f"but API is configured for '{configured_executor_mode}'"
+        )
+    return target
 
 
 REQUIRED_COLUMNS = {
