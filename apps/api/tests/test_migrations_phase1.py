@@ -2,7 +2,9 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+import json
+
+from sqlalchemy import create_engine, inspect, text
 
 
 def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
@@ -118,3 +120,75 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "metadata_json",
         "is_active",
     }.issubset(plc_target_columns)
+
+
+def test_alembic_upgrade_backfills_plc_testcases_from_legacy_suite_json(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "migration-phase1-backfill.db"
+    monkeypatch.setenv("API_DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
+
+    config = Config("apps/api/alembic.ini")
+    command.upgrade(config, "20260411_0005")
+
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO plc_test_suites (
+                    id, title, source_filename, source_format, case_count, definition_json
+                ) VALUES (
+                    :id, :title, :source_filename, :source_format, :case_count, :definition_json
+                )
+                """
+            ),
+            {
+                "id": "plc-suite-legacy",
+                "title": "Legacy Suite",
+                "source_filename": "legacy.csv",
+                "source_format": "csv",
+                "case_count": 1,
+                "definition_json": json.dumps(
+                    {
+                        "schema_version": "plc-suite.v1",
+                        "warnings": [],
+                        "cases": [
+                            {
+                                "id": "plc-suite-legacy::ADD_001",
+                                "case_key": "ADD_001",
+                                "instruction_name": "add",
+                                "input_type": "LWORD",
+                                "output_type": "LWORD",
+                                "input_vector_json": [1, 1],
+                                "expected_output_json": 2,
+                                "expected_outputs_json": [2],
+                                "memory_profile_key": "legacy_profile",
+                                "description": "legacy case",
+                                "tags": ["legacy"],
+                                "timeout_ms": 3000,
+                                "source_row_number": 2,
+                                "source_case_index": 0,
+                                "expected_outcome": "pass",
+                            }
+                        ],
+                    }
+                ),
+            },
+        )
+
+    command.upgrade(config, "head")
+    inspector = inspect(engine)
+    assert "plc_testcases" in inspector.get_table_names()
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT id, suite_id, case_key FROM plc_testcases WHERE id = 'plc-suite-legacy::ADD_001'"
+            )
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "plc-suite-legacy::ADD_001"
+    assert row[1] == "plc-suite-legacy"
+    assert row[2] == "ADD_001"

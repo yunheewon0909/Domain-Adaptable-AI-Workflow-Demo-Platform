@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from openpyxl import load_workbook
 from sqlalchemy import Select, select
@@ -124,7 +124,7 @@ def _coerce_timeout(value: Any) -> int:
     return max(1, int(value))
 
 
-def _coerce_expected_outcome(value: Any) -> str:
+def _coerce_expected_outcome(value: Any) -> Literal["pass", "fail"]:
     normalized = str(value or "pass").strip().lower()
     return "fail" if normalized == "fail" else "pass"
 
@@ -330,6 +330,9 @@ def _serialize_testcase_record(
 
 
 def _record_to_case_model(record: PLCTestCaseRecord) -> PLCTestCaseModel:
+    expected_outcome: Literal["pass", "fail"] = (
+        "fail" if record.expected_outcome == "fail" else "pass"
+    )
     return PLCTestCaseModel(
         id=record.id,
         case_key=record.case_key,
@@ -345,8 +348,29 @@ def _record_to_case_model(record: PLCTestCaseRecord) -> PLCTestCaseModel:
         timeout_ms=record.timeout_ms,
         source_row_number=record.source_row_number,
         source_case_index=record.source_case_index,
-        expected_outcome=record.expected_outcome,
+        expected_outcome=expected_outcome,
     )
+
+
+def ensure_plc_testcase_records(
+    session: Session,
+    *,
+    suite_id: str,
+    cases: list[PLCTestCaseModel],
+) -> None:
+    existing_case_ids = set(
+        session.scalars(
+            select(PLCTestCaseRecord.id).where(PLCTestCaseRecord.suite_id == suite_id)
+        ).all()
+    )
+    missing_records = [
+        _case_model_to_record(suite_id, case)
+        for case in cases
+        if case.id not in existing_case_ids
+    ]
+    if missing_records:
+        session.add_all(missing_records)
+        session.flush()
 
 
 def import_plc_suite(

@@ -466,10 +466,15 @@ def _run_reindex_subprocess(
 
 
 def _mark_job_succeeded(
-    engine: Engine, job_id: int | str, result_json: dict[str, Any]
+    engine: Engine,
+    job_id: int | str,
+    result_json: dict[str, Any],
+    *,
+    job_type: str,
 ) -> None:
     with engine.begin() as connection:
-        _sync_plc_run_status(connection, job_id=job_id, status="succeeded")
+        if job_type == "plc_test_run":
+            _sync_plc_run_status(connection, job_id=job_id, status="succeeded")
         connection.execute(
             text(
                 """
@@ -490,6 +495,7 @@ def _mark_job_failure(
     engine: Engine,
     *,
     job_id: int | str,
+    job_type: str,
     attempts: int,
     max_attempts: int,
     error_message: str,
@@ -498,12 +504,13 @@ def _mark_job_failure(
     requeue = next_attempts < max_attempts
 
     with engine.begin() as connection:
-        _sync_plc_run_status(
-            connection,
-            job_id=job_id,
-            status="queued" if requeue else "failed",
-            error_message=error_message,
-        )
+        if job_type == "plc_test_run":
+            _sync_plc_run_status(
+                connection,
+                job_id=job_id,
+                status="queued" if requeue else "failed",
+                error_message=error_message,
+            )
         connection.execute(
             text(
                 """
@@ -544,6 +551,7 @@ def _process_claimed_job(
         _mark_job_failure(
             engine,
             job_id=job_id,
+            job_type=job_type,
             attempts=attempts,
             max_attempts=max_attempts,
             error_message=str(exc),
@@ -557,7 +565,7 @@ def _process_claimed_job(
         )
         return
 
-    _mark_job_succeeded(engine, job_id, result_json)
+    _mark_job_succeeded(engine, job_id, result_json, job_type=job_type)
     print(
         f"[worker] job succeeded job_id={job_id} type={job_type} result={result_json}",
         flush=True,

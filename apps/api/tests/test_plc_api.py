@@ -1,10 +1,16 @@
 from io import BytesIO
 
 from openpyxl import Workbook
+import pytest
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
-from api.models import PLCTestRunItemRecord, PLCTestRunRecord
+from api.models import (
+    JobRecord,
+    PLCTestCaseRecord,
+    PLCTestRunItemRecord,
+    PLCTestRunRecord,
+)
 
 
 def _csv_upload_bytes() -> bytes:
@@ -166,3 +172,56 @@ def test_plc_dashboard_summary_endpoint(client) -> None:
     payload = response.json()
     assert payload["suite_count"] == 1
     assert payload["run_count"] == 1
+
+
+def test_plc_run_enqueue_recreates_missing_relational_testcases(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    with Session(get_engine()) as session:
+        session.query(PLCTestCaseRecord).filter(
+            PLCTestCaseRecord.suite_id == suite_id
+        ).delete()
+        session.commit()
+
+    run_response = client.post(
+        "/plc-test-runs",
+        json={"suite_id": suite_id, "target_key": "stub-local"},
+    )
+
+    assert run_response.status_code == 202
+    with Session(get_engine()) as session:
+        recreated_cases = (
+            session.query(PLCTestCaseRecord)
+            .filter(PLCTestCaseRecord.suite_id == suite_id)
+            .all()
+        )
+    assert len(recreated_cases) == 2
+
+
+def test_plc_run_enqueue_rolls_back_if_run_materialization_fails(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("api.routers.plc.create_plc_run", _boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(
+            "/plc-test-runs",
+            json={"suite_id": suite_id, "target_key": "stub-local"},
+        )
+
+    with Session(get_engine()) as session:
+        jobs = session.query(JobRecord).filter(JobRecord.type == "plc_test_run").all()
+    assert jobs == []

@@ -139,6 +139,7 @@ def create_job(
     dataset_key: str | None = None,
     plc_suite_id: str | None = None,
     max_attempts: int = 3,
+    commit: bool = True,
 ) -> JobRecord:
     job = JobRecord(
         id=next_job_id(session),
@@ -153,6 +154,9 @@ def create_job(
         updated_at=datetime.now(timezone.utc),
     )
     session.add(job)
-    session.commit()
-    session.refresh(job)
+    if commit:
+        session.commit()
+        session.refresh(job)
+    else:
+        session.flush()
     return job

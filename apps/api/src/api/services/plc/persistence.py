@@ -358,7 +358,7 @@ def get_testcase_models_for_suite(
             timeout_ms=record.timeout_ms,
             source_row_number=record.source_row_number,
             source_case_index=record.source_case_index,
-            expected_outcome=record.expected_outcome,
+            expected_outcome=("fail" if record.expected_outcome == "fail" else "pass"),
         )
         for record in records
     ]
