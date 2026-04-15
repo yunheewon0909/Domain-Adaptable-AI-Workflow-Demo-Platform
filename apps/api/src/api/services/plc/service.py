@@ -339,11 +339,13 @@ def _serialize_testcase_record(
     *,
     suite_title: str | None = None,
     execution_profile: dict[str, Any] | None = None,
+    case_source: str = "relational",
 ) -> dict[str, Any]:
     return {
         "id": record.id,
         "suite_id": record.suite_id,
         "suite_title": suite_title,
+        "case_source": case_source,
         "testcase_key": record.testcase_key,
         "case_key": record.case_key,
         "instruction_name": record.instruction_name,
@@ -546,6 +548,7 @@ def flatten_cases(
                         if case.execution_profile_key in execution_profiles
                         else None
                     ),
+                    case_source="relational",
                 )
             )
         return items
@@ -595,6 +598,7 @@ def flatten_cases(
                     "id": case.id,
                     "suite_id": suite.id,
                     "suite_title": suite.title,
+                    "case_source": "definition_json_fallback",
                     **case.model_dump(mode="json"),
                 }
             )
@@ -638,6 +642,9 @@ def create_plc_job_payload(
         "suite_id": suite.id,
         "suite_title": suite.title,
         "target_key": target_key,
+        "testcase_source": (
+            "relational" if relational_cases else "definition_json_fallback"
+        ),
         "testcases": [case.model_dump(mode="json") for case in selected_cases],
     }
     return suite, payload, selected_cases

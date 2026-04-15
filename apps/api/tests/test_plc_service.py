@@ -285,9 +285,11 @@ def test_flatten_cases_prefers_relational_rows_over_definition_json(client) -> N
         )
 
     assert flattened[0]["expected_output_json"] == 99
+    assert flattened[0]["case_source"] == "relational"
     assert flattened[0]["execution_profile_key"] == "add--lword--lword"
     assert flattened[0]["execution_profile"]["instruction_name"] == "add"
     assert selected_cases[0].expected_output_json == 99
+    assert payload["testcase_source"] == "relational"
     assert payload["testcases"][0]["expected_output_json"] == 99
 
 
@@ -321,5 +323,7 @@ def test_flatten_cases_uses_definition_json_only_when_suite_lacks_relational_row
 
     assert len(flattened) == 2
     assert flattened[0]["expected_output_json"] == 2
+    assert flattened[0]["case_source"] == "definition_json_fallback"
     assert len(selected_cases) == 2
+    assert payload["testcase_source"] == "definition_json_fallback"
     assert payload["testcases"][1]["expected_output_json"] == 4

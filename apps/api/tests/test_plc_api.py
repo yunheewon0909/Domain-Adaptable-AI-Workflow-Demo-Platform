@@ -62,6 +62,7 @@ def test_plc_import_and_query_happy_path(client) -> None:
     testcases = testcase_response.json()
     assert len(testcases) == 2
     assert testcases[0]["testcase_key"] == testcases[0]["id"]
+    assert testcases[0]["case_source"] == "relational"
     assert testcases[0]["instruction_name"] == "add"
     assert testcases[0]["is_active"] is True
     assert testcases[0]["execution_profile_key"] == "ls-add-lword-v1"
