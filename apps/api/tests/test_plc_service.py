@@ -249,6 +249,7 @@ def test_execute_plc_job_persists_relational_run_results(client) -> None:
     assert run.failed_count == 1
     assert run.request_schema_version == "plc-execution-request.v2"
     assert run.executor_mode == "stub"
+    assert run.target_snapshot_json is not None
     assert run.target_snapshot_json["key"] == "stub-local"
     assert len(run_items) == 2
     assert {item.status for item in run_items} == {"passed", "failed"}
