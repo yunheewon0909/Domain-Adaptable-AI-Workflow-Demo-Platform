@@ -158,6 +158,7 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "suite_id",
         "testcase_id",
         "suggestion_type",
+        "payload_schema_version",
         "source_payload_json",
         "suggestion_payload_json",
         "status",

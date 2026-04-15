@@ -427,6 +427,9 @@ def suggest_plc_testcase_normalization(
             suite_id=request.suite_id,
             testcase_id=request.testcase_id,
             suggestion_type=str(suggestion["suggestion_type"]),
+            payload_schema_version=str(
+                suggestion.get("payload_schema_version", "plc-llm-suggestion.v1")
+            ),
             source_payload_json={"raw_row": request.raw_row},
             suggestion_payload_json=suggestion,
         )
@@ -438,6 +441,7 @@ def get_plc_llm_suggestions(
     suite_id: str | None = Query(default=None),
     testcase_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    suggestion_type: str | None = Query(default=None),
 ) -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
         return list_plc_llm_suggestions(
@@ -445,6 +449,7 @@ def get_plc_llm_suggestions(
             suite_id=suite_id,
             testcase_id=testcase_id,
             status=status,
+            suggestion_type=suggestion_type,
         )
 
 
@@ -463,11 +468,14 @@ def review_plc_llm_suggestion_detail(
     request: PLLMSuggestionReviewRequest,
 ) -> dict[str, Any]:
     with Session(get_engine()) as session:
-        suggestion = review_plc_llm_suggestion(
-            session,
-            suggestion_id=suggestion_id,
-            status=request.status,
-        )
+        try:
+            suggestion = review_plc_llm_suggestion(
+                session,
+                suggestion_id=suggestion_id,
+                status=request.status,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if suggestion is None:
         raise HTTPException(status_code=404, detail="PLC LLM suggestion not found")
     return suggestion

@@ -273,6 +273,7 @@ class PLCLLMSuggestionRecord(Base):
         String(128), ForeignKey("plc_testcases.id"), nullable=True
     )
     suggestion_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
     source_payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     suggestion_payload_json: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False

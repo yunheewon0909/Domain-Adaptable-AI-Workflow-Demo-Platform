@@ -2,6 +2,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
@@ -498,13 +499,54 @@ def test_plc_llm_suggestion_persistence_and_review_flow(client) -> None:
     assert persisted["status"] == "pending"
     assert persisted["suite_id"] == suite_id
     assert persisted["testcase_id"] == testcase_id
+    assert persisted["suggestion_type"] == "normalization"
+    assert persisted["payload_schema_version"] == "plc-llm-suggestion.v1"
+
+    with Session(get_engine()) as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO plc_llm_suggestions (
+                    suite_id, testcase_id, suggestion_type, payload_schema_version,
+                    source_payload_json, suggestion_payload_json, status
+                ) VALUES (
+                    :suite_id, :testcase_id, :suggestion_type, :payload_schema_version,
+                    :source_payload_json, :suggestion_payload_json, :status
+                )
+                """
+            ),
+            {
+                "suite_id": suite_id,
+                "testcase_id": testcase_id,
+                "suggestion_type": "failure_summary",
+                "payload_schema_version": "plc-llm-suggestion.v1",
+                "source_payload_json": '{"raw_row": {"instruction_name": "add"}}',
+                "suggestion_payload_json": '{"payload_schema_version": "plc-llm-suggestion.v1", "review_required": true, "suggestion_type": "failure_summary", "summary": "case failed"}',
+                "status": "pending",
+            },
+        )
+        session.commit()
 
     list_response = client.get(
         "/plc-llm/suggestions",
         params={"suite_id": suite_id, "testcase_id": testcase_id, "status": "pending"},
     )
     assert list_response.status_code == 200
-    assert len(list_response.json()) == 1
+    assert len(list_response.json()) == 2
+
+    type_filtered = client.get(
+        "/plc-llm/suggestions",
+        params={
+            "suite_id": suite_id,
+            "testcase_id": testcase_id,
+            "status": "pending",
+            "suggestion_type": "normalization",
+        },
+    )
+    assert type_filtered.status_code == 200
+    assert [item["suggestion_type"] for item in type_filtered.json()] == [
+        "normalization"
+    ]
 
     detail_response = client.get(f"/plc-llm/suggestions/{persisted['id']}")
     assert detail_response.status_code == 200
@@ -520,6 +562,13 @@ def test_plc_llm_suggestion_persistence_and_review_flow(client) -> None:
     assert review_response.status_code == 200
     assert review_response.json()["status"] == "accepted"
     assert review_response.json()["reviewed_at"] is not None
+
+    second_review = client.post(
+        f"/plc-llm/suggestions/{persisted['id']}/review",
+        json={"status": "rejected"},
+    )
+    assert second_review.status_code == 400
+    assert "immutable after leaving pending state" in second_review.json()["detail"]
 
     testcase_response = client.get(f"/plc-testcases/{testcase_id}")
     assert testcase_response.status_code == 200

@@ -423,6 +423,7 @@ def create_plc_llm_suggestion(
     suite_id: str | None,
     testcase_id: str | None,
     suggestion_type: str,
+    payload_schema_version: str,
     source_payload_json: dict[str, Any],
     suggestion_payload_json: dict[str, Any],
 ) -> dict[str, Any]:
@@ -430,6 +431,7 @@ def create_plc_llm_suggestion(
         suite_id=suite_id,
         testcase_id=testcase_id,
         suggestion_type=suggestion_type,
+        payload_schema_version=payload_schema_version,
         source_payload_json=source_payload_json,
         suggestion_payload_json=suggestion_payload_json,
         status="pending",
@@ -446,6 +448,7 @@ def serialize_plc_llm_suggestion(record: PLCLLMSuggestionRecord) -> dict[str, An
         "suite_id": record.suite_id,
         "testcase_id": record.testcase_id,
         "suggestion_type": record.suggestion_type,
+        "payload_schema_version": record.payload_schema_version,
         "source_payload_json": record.source_payload_json,
         "suggestion_payload_json": record.suggestion_payload_json,
         "status": record.status,
@@ -460,6 +463,7 @@ def list_plc_llm_suggestions(
     suite_id: str | None = None,
     testcase_id: str | None = None,
     status: str | None = None,
+    suggestion_type: str | None = None,
 ) -> list[dict[str, Any]]:
     stmt = select(PLCLLMSuggestionRecord)
     if suite_id is not None:
@@ -468,6 +472,8 @@ def list_plc_llm_suggestions(
         stmt = stmt.where(PLCLLMSuggestionRecord.testcase_id == testcase_id)
     if status is not None:
         stmt = stmt.where(PLCLLMSuggestionRecord.status == status)
+    if suggestion_type is not None:
+        stmt = stmt.where(PLCLLMSuggestionRecord.suggestion_type == suggestion_type)
     records = session.scalars(
         stmt.order_by(
             PLCLLMSuggestionRecord.created_at.desc(),
@@ -492,6 +498,10 @@ def review_plc_llm_suggestion(
     record = session.get(PLCLLMSuggestionRecord, suggestion_id)
     if record is None:
         return None
+    if record.status != "pending" and record.status != status:
+        raise ValueError(
+            "PLC LLM suggestion review is immutable after leaving pending state"
+        )
     record.status = status
     record.reviewed_at = datetime.now(timezone.utc)
     session.commit()

@@ -647,9 +647,10 @@ def build_normalization_suggestion(raw_row: dict[str, Any]) -> dict[str, Any]:
     cases, warnings = _normalize_import_rows([raw_row])
     suggestion = _suite_definition_with_ids("suggestion", cases, warnings)
     return {
+        "payload_schema_version": "plc-llm-suggestion.v1",
         "source_of_truth": False,
         "review_required": True,
-        "suggestion_type": "heuristic_normalization_preview",
+        "suggestion_type": "normalization",
         "normalized_cases": [case.model_dump(mode="json") for case in suggestion.cases],
         "warnings": suggestion.warnings,
     }
