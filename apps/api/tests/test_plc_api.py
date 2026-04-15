@@ -366,6 +366,38 @@ def test_plc_targets_includes_stub_local_even_when_other_targets_exist(client) -
     keys = [item["key"] for item in response.json()]
     assert keys[0] == "stub-local"
     assert "bench-a" in keys
+    stub_target = response.json()[0]
+    assert stub_target["environment_label"] == "stub-lab"
+    assert "demo" in stub_target["tags"]
+
+
+def test_plc_run_enqueue_rejects_target_with_invalid_metadata_shape(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+
+    with Session(get_engine()) as session:
+        session.add(
+            PLCTestTargetRecord(
+                key="broken-target",
+                display_name="Broken Target",
+                description="invalid metadata",
+                executor_mode="stub",
+                metadata_json=["bad"],
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/plc-test-runs",
+        json={"suite_id": suite_id, "target_key": "broken-target"},
+    )
+
+    assert response.status_code == 400
+    assert "metadata_json must be a JSON object" in response.json()["detail"]
 
 
 def test_plc_llm_suggestion_persistence_and_review_flow(client) -> None:

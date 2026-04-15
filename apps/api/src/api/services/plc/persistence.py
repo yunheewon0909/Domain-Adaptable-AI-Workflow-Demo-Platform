@@ -17,6 +17,7 @@ from api.models import (
 from api.services.jobs import to_iso
 from api.services.plc.contracts import PLCTestCaseModel, PLCTestRunResultModel
 from api.services.plc.profiles import list_execution_profile_models
+from api.services.plc.targets import normalize_target_payload
 
 
 STUB_LOCAL_TARGET = {
@@ -37,16 +38,18 @@ STUB_LOCAL_TARGET = {
 
 
 def _serialize_target_record(target: PLCTestTargetRecord) -> dict[str, Any]:
-    return {
-        "key": target.key,
-        "display_name": target.display_name,
-        "description": target.description,
-        "executor_mode": target.executor_mode,
-        "metadata_json": target.metadata_json,
-        "is_active": target.is_active,
-        "created_at": to_iso(target.created_at),
-        "updated_at": to_iso(target.updated_at),
-    }
+    return normalize_target_payload(
+        {
+            "key": target.key,
+            "display_name": target.display_name,
+            "description": target.description,
+            "executor_mode": target.executor_mode,
+            "metadata_json": target.metadata_json,
+            "is_active": target.is_active,
+            "created_at": to_iso(target.created_at),
+            "updated_at": to_iso(target.updated_at),
+        }
+    )
 
 
 def create_plc_run(
@@ -392,7 +395,7 @@ def list_plc_targets(session: Session) -> list[dict[str, Any]]:
     ).all()
     items = [_serialize_target_record(target) for target in targets]
     if not any(target["key"] == STUB_LOCAL_TARGET["key"] for target in items):
-        items.insert(0, dict(STUB_LOCAL_TARGET))
+        items.insert(0, normalize_target_payload(dict(STUB_LOCAL_TARGET)))
     return items
 
 
@@ -405,7 +408,7 @@ def resolve_plc_target(session: Session, *, target_key: str) -> dict[str, Any] |
         return (
             _serialize_target_record(target)
             if target is not None
-            else dict(STUB_LOCAL_TARGET)
+            else normalize_target_payload(dict(STUB_LOCAL_TARGET))
         )
 
     target = session.get(PLCTestTargetRecord, normalized_key)

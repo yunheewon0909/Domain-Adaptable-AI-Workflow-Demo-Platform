@@ -36,7 +36,10 @@ class PLCImportError(RuntimeError):
 
 
 def validate_plc_target(session: Session, *, target_key: str) -> dict[str, Any]:
-    target = resolve_plc_target(session, target_key=target_key)
+    try:
+        target = resolve_plc_target(session, target_key=target_key)
+    except ValueError as exc:
+        raise PLCImportError(str(exc)) from exc
     if target is None:
         raise PLCImportError(f"PLC target '{target_key}' was not found")
     if not bool(target.get("is_active")):
