@@ -178,15 +178,82 @@ def test_plc_dashboard_summary_endpoint(client) -> None:
         files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
     )
     suite_id = import_response.json()["suite_id"]
-    client.post(
+    run_response = client.post(
         "/plc-test-runs", json={"suite_id": suite_id, "target_key": "stub-local"}
     )
+
+    with Session(get_engine()) as session:
+        run = session.get(PLCTestRunRecord, run_response.json()["job_id"])
+        assert run is not None
+        run.status = "succeeded"
+        run.failed_count = 1
+        run.error_count = 0
+        run.passed_count = 1
+        item = (
+            session.query(PLCTestRunItemRecord)
+            .filter(PLCTestRunItemRecord.run_id == run.id)
+            .first()
+        )
+        assert item is not None
+        item.status = "failed"
+        item.failure_reason = "expected mismatch"
+        session.commit()
 
     response = client.get("/plc-dashboard/summary")
     assert response.status_code == 200
     payload = response.json()
     assert payload["suite_count"] == 1
     assert payload["run_count"] == 1
+    assert payload["recent_runs"][0]["target_key"] == "stub-local"
+    assert (
+        payload["failure_hotspots"][0]["latest_failure_reason"] == "expected mismatch"
+    )
+    assert payload["target_statuses"][0]["target_key"] == "stub-local"
+    assert payload["instruction_failure_stats"][0]["instruction_name"] == "add"
+
+
+def test_plc_run_list_supports_target_status_and_failed_only_filters(client) -> None:
+    import_response = client.post(
+        "/plc-testcases/import",
+        files={"file": ("suite.csv", _csv_upload_bytes(), "text/csv")},
+    )
+    suite_id = import_response.json()["suite_id"]
+    first_run = client.post(
+        "/plc-test-runs", json={"suite_id": suite_id, "target_key": "stub-local"}
+    ).json()["job_id"]
+
+    with Session(get_engine()) as session:
+        session.add(
+            PLCTestTargetRecord(
+                key="bench-a",
+                display_name="Bench A",
+                description="custom target",
+                executor_mode="stub",
+                metadata_json={"environment_label": "lab-a", "tags": ["bench"]},
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    second_run = client.post(
+        "/plc-test-runs", json={"suite_id": suite_id, "target_key": "bench-a"}
+    ).json()["job_id"]
+
+    with Session(get_engine()) as session:
+        first = session.get(PLCTestRunRecord, first_run)
+        second = session.get(PLCTestRunRecord, second_run)
+        assert first is not None and second is not None
+        first.status = "succeeded"
+        first.failed_count = 1
+        second.status = "running"
+        session.commit()
+
+    filtered = client.get(
+        "/plc-test-runs",
+        params={"target_key": "stub-local", "status": "succeeded", "failed_only": True},
+    )
+    assert filtered.status_code == 200
+    assert [item["id"] for item in filtered.json()] == [first_run]
 
 
 def test_plc_run_enqueue_recreates_missing_relational_testcases(client) -> None:

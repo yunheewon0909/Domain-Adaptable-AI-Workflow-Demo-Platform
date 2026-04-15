@@ -17,6 +17,7 @@ const state = {
   },
   plc: {
     hasLoadedInitialData: false,
+    dashboardScope: 'selected',
     summary: null,
     targets: [],
     selectedTargetKey: 'stub-local',
@@ -24,6 +25,7 @@ const state = {
     selectedSuiteId: null,
     selectedSuite: null,
     testcases: [],
+    suiteSuggestions: [],
     selectedTestcaseId: null,
     normalization: null,
     suggestions: [],
@@ -36,8 +38,12 @@ const state = {
     selectedRunItemId: null,
     filters: {
       testcaseQuery: '',
+      testcaseInstruction: '',
+      testcaseInputType: '',
       testcaseOutcome: '',
+      testcaseSuggestionStatus: '',
       runQuery: '',
+      runTargetKey: '',
       runStatus: '',
       runProblemsOnly: false,
       itemQuery: '',
@@ -50,6 +56,7 @@ const state = {
       targets: 0,
       suite: 0,
       normalization: 0,
+      suiteSuggestions: 0,
       suggestions: 0,
       suggestionDetail: 0,
       run: 0,
@@ -73,9 +80,13 @@ const dom = {
   },
   plc: {
     summaryRefresh: document.querySelector('#plc-summary-refresh'),
+    summaryScopeSelect: document.querySelector('#plc-dashboard-scope'),
+    summaryScopeLine: document.querySelector('#plc-summary-scope'),
     summaryCards: document.querySelector('#plc-summary-cards'),
     recentRuns: document.querySelector('#plc-recent-runs'),
     failureHotspots: document.querySelector('#plc-failure-hotspots'),
+    targetStatuses: document.querySelector('#plc-target-statuses'),
+    instructionFailureStats: document.querySelector('#plc-instruction-failure-stats'),
     importTitle: document.querySelector('#plc-suite-title'),
     importFile: document.querySelector('#plc-suite-file'),
     importButton: document.querySelector('#plc-import-button'),
@@ -85,7 +96,10 @@ const dom = {
     suiteDetail: document.querySelector('#plc-suite-detail'),
     testcaseList: document.querySelector('#plc-testcase-list'),
     testcaseFilterInput: document.querySelector('#plc-testcase-filter'),
+    testcaseInstructionFilter: document.querySelector('#plc-testcase-instruction-filter'),
+    testcaseInputTypeFilter: document.querySelector('#plc-testcase-input-type-filter'),
     testcaseOutcomeFilter: document.querySelector('#plc-testcase-outcome-filter'),
+    testcaseSuggestionFilter: document.querySelector('#plc-testcase-suggestion-filter'),
     testcaseFilterSummary: document.querySelector('#plc-testcase-filter-summary'),
     testcaseDetail: document.querySelector('#plc-testcase-detail'),
     normalizationRefresh: document.querySelector('#plc-normalization-refresh'),
@@ -101,6 +115,7 @@ const dom = {
     runHint: document.querySelector('#plc-run-hint'),
     runsRefresh: document.querySelector('#plc-runs-refresh'),
     runFilterInput: document.querySelector('#plc-run-filter'),
+    runTargetFilter: document.querySelector('#plc-run-target-filter'),
     runStatusFilter: document.querySelector('#plc-run-status-filter'),
     runProblemsOnly: document.querySelector('#plc-run-problems-only'),
     runFilterSummary: document.querySelector('#plc-run-filter-summary'),
@@ -234,6 +249,121 @@ function countLabel(value, noun) {
   return `${value} ${noun}${value === 1 ? '' : 's'}`;
 }
 
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function uniqueSortedValues(values) {
+  return Array.from(new Set(safeArray(values).filter(Boolean).map((value) => String(value).trim()).filter(Boolean))).sort((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+function populateSelectOptions(select, options, { placeholderLabel, selectedValue } = {}) {
+  if (!select) {
+    return;
+  }
+  const fragments = [];
+  if (placeholderLabel) {
+    fragments.push(`<option value="">${escapeHtml(placeholderLabel)}</option>`);
+  }
+  fragments.push(
+    options
+      .map(
+        (option) =>
+          `<option value="${escapeHtml(option)}" ${String(option) === String(selectedValue || '') ? 'selected' : ''}>${escapeHtml(option)}</option>`,
+      )
+      .join(''),
+  );
+  select.innerHTML = fragments.join('');
+}
+
+function currentPlcDashboardSuiteId() {
+  return state.plc.dashboardScope === 'selected' ? state.plc.selectedSuiteId : null;
+}
+
+function dashboardScopeSummary() {
+  if (state.plc.dashboardScope === 'all') {
+    return {
+      label: 'All imported suites',
+      detail: 'Refresh returns queue and failure data across every PLC suite in the demo.',
+    };
+  }
+
+  const suite = selectedPlcSuite();
+  if (!suite) {
+    return {
+      label: 'Selected suite only',
+      detail: 'No suite is selected yet, so the dashboard is temporarily showing all suites until you choose one.',
+    };
+  }
+
+  return {
+    label: `${suite.title} (${suite.id})`,
+    detail: 'Refresh follows the currently selected suite so dashboard cards and hotspot lists stay aligned with the reviewer context.',
+  };
+}
+
+function latestSuggestionForTestcase(testcaseId) {
+  return state.plc.suiteSuggestions.find((suggestion) => suggestion.testcase_id === testcaseId) || null;
+}
+
+function suggestionContextForTestcase(testcaseId) {
+  const suggestions = state.plc.suiteSuggestions.filter((suggestion) => suggestion.testcase_id === testcaseId);
+  const latest = suggestions[0] || null;
+  return {
+    count: suggestions.length,
+    latest,
+    latestStatus: latest?.status || null,
+    reviewRequired: Boolean(latest?.suggestion_payload_json?.review_required),
+  };
+}
+
+function hasSavedSuggestionStatus(testcaseId, status) {
+  const context = suggestionContextForTestcase(testcaseId);
+  if (status === 'none') {
+    return context.count === 0;
+  }
+  if (status === 'review-required') {
+    return context.reviewRequired;
+  }
+  return context.latestStatus === status;
+}
+
+function renderJsonDetails(title, value, { open = false, summaryDetail = '' } = {}) {
+  return `
+    <details class="json-details" ${open ? 'open' : ''}>
+      <summary>
+        <span>${escapeHtml(title)}</span>
+        ${summaryDetail ? `<span class="meta-line">${escapeHtml(summaryDetail)}</span>` : ''}
+      </summary>
+      <pre class="json-block">${formatJson(value)}</pre>
+    </details>
+  `;
+}
+
+function renderTextLog(title, value) {
+  const lines = String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line, index, items) => line || items.length === 1 || index < items.length - 1);
+  if (!lines.length) {
+    return '';
+  }
+  return `
+    <section class="detail-stack">
+      <h4 class="subsection-title">${escapeHtml(title)}</h4>
+      <ol class="log-line-list">
+        ${lines.map((line) => `<li>${escapeHtml(line || ' ')}</li>`).join('')}
+      </ol>
+    </section>
+  `;
+}
+
+function targetForKey(targetKey) {
+  return state.plc.targets.find((target) => target.key === targetKey) || null;
+}
+
 function selectedPlcTarget() {
   return state.plc.targets.find((target) => target.key === state.plc.selectedTargetKey) || null;
 }
@@ -253,7 +383,16 @@ function hasRunItemProblems(item) {
 
 function filteredPlcTestcases() {
   return state.plc.testcases.filter((testcase) => {
+    if (state.plc.filters.testcaseInstruction && testcase.instruction_name !== state.plc.filters.testcaseInstruction) {
+      return false;
+    }
+    if (state.plc.filters.testcaseInputType && testcase.input_type !== state.plc.filters.testcaseInputType) {
+      return false;
+    }
     if (state.plc.filters.testcaseOutcome && testcase.expected_outcome !== state.plc.filters.testcaseOutcome) {
+      return false;
+    }
+    if (state.plc.filters.testcaseSuggestionStatus && !hasSavedSuggestionStatus(testcase.id, state.plc.filters.testcaseSuggestionStatus)) {
       return false;
     }
     return matchesTextFilter(
@@ -261,7 +400,10 @@ function filteredPlcTestcases() {
         testcase.id,
         testcase.case_key,
         testcase.instruction_name,
+        testcase.execution_profile_key,
         testcase.description,
+        testcase.input_type,
+        testcase.output_type,
         ...(Array.isArray(testcase.tags) ? testcase.tags : []),
       ],
       state.plc.filters.testcaseQuery,
@@ -271,6 +413,9 @@ function filteredPlcTestcases() {
 
 function filteredPlcRuns() {
   return state.plc.runs.filter((run) => {
+    if (state.plc.filters.runTargetKey && (run.target_key || run.payload_json?.target_key) !== state.plc.filters.runTargetKey) {
+      return false;
+    }
     if (state.plc.filters.runStatus && run.status !== state.plc.filters.runStatus) {
       return false;
     }
@@ -286,6 +431,9 @@ function filteredPlcRuns() {
 
 function filteredPlcRunItems() {
   return state.plc.runItems.filter((item) => {
+    const requestContext = item.request_context_json || {};
+    const testcaseContext = requestContext.testcase_context || {};
+    const targetContext = requestContext.target_context || {};
     if (state.plc.filters.itemStatus && item.status !== state.plc.filters.itemStatus) {
       return false;
     }
@@ -293,7 +441,23 @@ function filteredPlcRunItems() {
       return false;
     }
     return matchesTextFilter(
-      [item.id, item.testcase_id, item.case_key, item.instruction_name, item.failure_reason, item.status],
+      [
+        item.id,
+        item.testcase_id,
+        item.case_key,
+        item.instruction_name,
+        item.failure_reason,
+        item.status,
+        item.input_type,
+        item.output_type,
+        item.expected_outcome,
+        testcaseContext.description,
+        targetContext.key,
+        targetContext.display_name,
+        targetContext.environment_label,
+        ...(safeArray(testcaseContext.tags)),
+        ...(safeArray(targetContext.tags)),
+      ],
       state.plc.filters.itemQuery,
     );
   });
@@ -323,22 +487,25 @@ function renderComparisonSection(title, value) {
 }
 
 function renderIoLogList(logs) {
+  const orderedLogs = safeArray(logs).slice().sort((left, right) => Number(left.sequence_no || 0) - Number(right.sequence_no || 0));
   return `
     <section class="detail-stack">
-      <h4 class="subsection-title">Raw I/O log</h4>
+      <h4 class="subsection-title">Execution I/O timeline</h4>
       <div class="io-log-list">
-        ${logs
+        ${orderedLogs
           .map(
             (log) => `
-              <article class="io-log-card">
+              <article class="io-log-card io-log-timeline-card">
                 <div class="inline-meta">
                   ${renderStatusBadge(log.direction || 'unknown')}
-                  ${renderBadge(`step ${log.sequence_no ?? 0}`)}
+                  ${renderBadge(`sequence ${log.sequence_no ?? 0}`)}
                   ${log.raw_type ? renderBadge(log.raw_type) : ''}
                 </div>
+                <p class="meta-line">${escapeHtml(log.memory_symbol || 'unmapped symbol')} · ${escapeHtml(log.memory_address || 'address n/a')} · recorded ${escapeHtml(formatDateTime(log.recorded_at))}</p>
                 ${renderDetailGrid([
-                  { label: 'Memory address', value: log.memory_address || '—' },
+                  { label: 'Direction', value: log.direction || '—' },
                   { label: 'Memory symbol', value: log.memory_symbol || '—' },
+                  { label: 'Memory address', value: log.memory_address || '—' },
                   { label: 'Recorded', value: formatDateTime(log.recorded_at) },
                 ])}
                 <section class="detail-stack compact-stack">
@@ -583,6 +750,9 @@ async function activateDataset(datasetKey) {
 
 function renderPlcDashboard() {
   const summary = state.plc.summary;
+  const scope = dashboardScopeSummary();
+  dom.plc.summaryScopeSelect.value = state.plc.dashboardScope;
+  dom.plc.summaryScopeLine.textContent = `${scope.label} — ${scope.detail}`;
   if (!summary) {
     dom.plc.summaryCards.className = 'stat-grid empty';
     dom.plc.summaryCards.textContent = 'PLC dashboard metrics will appear here.';
@@ -590,12 +760,17 @@ function renderPlcDashboard() {
     dom.plc.recentRuns.textContent = 'No PLC runs yet.';
     dom.plc.failureHotspots.className = 'stack-list empty';
     dom.plc.failureHotspots.textContent = 'No failures captured yet.';
+    dom.plc.targetStatuses.className = 'stack-list empty';
+    dom.plc.targetStatuses.textContent = 'Target status snapshots will appear here.';
+    dom.plc.instructionFailureStats.className = 'stack-list empty';
+    dom.plc.instructionFailureStats.textContent = 'Instruction failure trends will appear here.';
     return;
   }
 
   const queueStats = summary.queue_stats || {};
+  const selectedSuiteId = currentPlcDashboardSuiteId();
   const cards = [
-    { label: 'Suites', value: summary.suite_count ?? 0 },
+    { label: selectedSuiteId ? 'Scoped suites' : 'Suites', value: summary.suite_count ?? 0 },
     { label: 'Runs', value: summary.run_count ?? 0 },
     { label: 'Queued', value: queueStats.queued ?? 0 },
     { label: 'Running', value: queueStats.running ?? 0 },
@@ -624,9 +799,10 @@ function renderPlcDashboard() {
               <div class="inline-meta">
                 ${renderStatusBadge(run.status)}
                 <span class="meta-line">run ${escapeHtml(run.id)}</span>
+                ${run.target_key ? renderBadge(`target ${run.target_key}`) : ''}
               </div>
-              <h3>${escapeHtml(run.plc_suite_id || 'suite')}</h3>
-              <p class="meta-line">created ${escapeHtml(formatDateTime(run.created_at))}</p>
+              <h3>${escapeHtml(run.suite_title || run.plc_suite_id || 'suite')}</h3>
+              <p class="meta-line">suite ${escapeHtml(run.plc_suite_id || '—')} · created ${escapeHtml(formatDateTime(run.created_at))}</p>
               <div class="badge-row">
                 ${renderBadge(`pass ${run.summary?.passed_count ?? 0}`)}
                 ${renderBadge(`fail ${run.summary?.failed_count ?? 0}`)}
@@ -646,12 +822,61 @@ function renderPlcDashboard() {
           (item) => `
             <article class="list-card">
               <h3>${escapeHtml(item.case_key)}</h3>
-              <p class="meta-line">${escapeHtml(item.count)} recorded failures</p>
+              <p class="meta-line">${escapeHtml(item.count)} recorded failures · ${escapeHtml(item.instruction_name || 'unknown instruction')}</p>
+              ${item.latest_failure_reason ? `<p class="detail-copy">${escapeHtml(item.latest_failure_reason)}</p>` : ''}
             </article>
           `,
         )
         .join('')
     : 'No failures captured yet.';
+
+  const targetStatuses = safeArray(summary.target_statuses);
+  dom.plc.targetStatuses.className = targetStatuses.length ? 'stack-list' : 'stack-list empty';
+  dom.plc.targetStatuses.innerHTML = targetStatuses.length
+    ? targetStatuses
+        .map((targetStatus) => {
+          const target = targetForKey(targetStatus.target_key);
+          return `
+            <article class="list-card">
+              <div class="inline-meta">
+                ${renderStatusBadge(targetStatus.status)}
+                ${renderBadge(targetStatus.target_key || 'unknown target')}
+              </div>
+              <h3>${escapeHtml(target?.display_name || targetStatus.target_key || 'Target')}</h3>
+              <p class="meta-line">suite ${escapeHtml(targetStatus.suite_id || '—')} · updated ${escapeHtml(formatDateTime(targetStatus.created_at))}</p>
+              <div class="badge-row">
+                ${target?.environment_label ? renderBadge(target.environment_label) : ''}
+                ${target?.line ? renderBadge(`line ${target.line}`) : ''}
+                ${target?.bench ? renderBadge(`bench ${target.bench}`) : ''}
+              </div>
+              <div class="badge-row">
+                ${renderBadge(`pass ${targetStatus.summary?.passed_count ?? 0}`)}
+                ${renderBadge(`fail ${targetStatus.summary?.failed_count ?? 0}`)}
+                ${renderBadge(`error ${targetStatus.summary?.error_count ?? 0}`)}
+              </div>
+            </article>
+          `;
+        })
+        .join('')
+    : 'Target status snapshots will appear here.';
+
+  const instructionFailureStats = safeArray(summary.instruction_failure_stats);
+  dom.plc.instructionFailureStats.className = instructionFailureStats.length ? 'stack-list' : 'stack-list empty';
+  dom.plc.instructionFailureStats.innerHTML = instructionFailureStats.length
+    ? instructionFailureStats
+        .map(
+          (entry) => `
+            <article class="list-card">
+              <div class="inline-meta">
+                ${renderBadge(`failures ${entry.count}`)}
+              </div>
+              <h3>${escapeHtml(entry.instruction_name || 'unknown instruction')}</h3>
+              <p class="meta-line">Instruction-level failure concentration across the current dashboard scope.</p>
+            </article>
+          `,
+        )
+        .join('')
+    : 'Instruction failure trends will appear here.';
 }
 
 function renderPlcTargets() {
@@ -659,6 +884,10 @@ function renderPlcTargets() {
   if (!targets.length) {
     dom.plc.targetSelect.innerHTML = '';
     dom.plc.targetSelect.disabled = true;
+    populateSelectOptions(dom.plc.runTargetFilter, [], {
+      placeholderLabel: 'All targets',
+      selectedValue: state.plc.filters.runTargetKey,
+    });
     dom.plc.targetSummary.className = 'callout empty';
     dom.plc.targetSummary.textContent = 'Available PLC targets will appear here.';
     return;
@@ -674,6 +903,14 @@ function renderPlcTargets() {
       `,
     )
     .join('');
+  if (state.plc.filters.runTargetKey && !targets.some((target) => target.key === state.plc.filters.runTargetKey)) {
+    state.plc.filters.runTargetKey = '';
+  }
+  populateSelectOptions(
+    dom.plc.runTargetFilter,
+    targets.map((target) => target.key),
+    { placeholderLabel: 'All targets', selectedValue: state.plc.filters.runTargetKey },
+  );
 
   const target = selectedPlcTarget();
   if (!target) {
@@ -691,7 +928,14 @@ function renderPlcTargets() {
       ${renderBadge(`mode ${target.executor_mode || 'unknown'}`)}
       ${renderStatusBadge(target.is_active ? 'active' : 'inactive')}
     </div>
+    ${renderDetailGrid([
+      { label: 'Environment', value: target.environment_label || '—' },
+      { label: 'Line', value: target.line || '—' },
+      { label: 'Bench', value: target.bench || '—' },
+      { label: 'Target tags', value: safeArray(target.tags).join(', ') || '—' },
+    ])}
     <p class="detail-copy">${escapeHtml(target.description || 'No target description available.')}</p>
+    ${target.metadata_json?.attributes_json && Object.keys(target.metadata_json.attributes_json).length ? renderJsonDetails('Additional target metadata', target.metadata_json.attributes_json) : ''}
   `;
 }
 
@@ -735,6 +979,9 @@ function renderPlcSuiteDetail() {
   }
 
   const warnings = Array.isArray(suite.definition_json?.warnings) ? suite.definition_json.warnings : [];
+  const expectedFailCount = state.plc.testcases.filter((testcase) => testcase.expected_outcome === 'fail').length;
+  const instructionCount = uniqueSortedValues(state.plc.testcases.map((testcase) => testcase.instruction_name)).length;
+  const inputTypeCount = uniqueSortedValues(state.plc.testcases.map((testcase) => testcase.input_type)).length;
   const fragments = [
     renderDetailGrid([
       { label: 'Suite ID', value: suite.id },
@@ -742,6 +989,10 @@ function renderPlcSuiteDetail() {
       { label: 'Source file', value: suite.source_filename },
       { label: 'Format', value: suite.source_format.toUpperCase() },
       { label: 'Case count', value: suite.case_count },
+      { label: 'Expected-fail cases', value: expectedFailCount },
+      { label: 'Instruction count', value: instructionCount },
+      { label: 'Input types', value: inputTypeCount },
+      { label: 'Saved suggestions', value: state.plc.suiteSuggestions.length },
       { label: 'Updated', value: formatDateTime(suite.updated_at) },
     ]),
   ];
@@ -761,6 +1012,26 @@ function renderPlcSuiteDetail() {
   dom.plc.suiteDetail.innerHTML = fragments.join('');
 }
 
+function renderPlcTestcaseFilters() {
+  const instructions = uniqueSortedValues(state.plc.testcases.map((testcase) => testcase.instruction_name));
+  const inputTypes = uniqueSortedValues(state.plc.testcases.map((testcase) => testcase.input_type));
+  if (state.plc.filters.testcaseInstruction && !instructions.includes(state.plc.filters.testcaseInstruction)) {
+    state.plc.filters.testcaseInstruction = '';
+  }
+  if (state.plc.filters.testcaseInputType && !inputTypes.includes(state.plc.filters.testcaseInputType)) {
+    state.plc.filters.testcaseInputType = '';
+  }
+  populateSelectOptions(dom.plc.testcaseInstructionFilter, instructions, {
+    placeholderLabel: 'All instructions',
+    selectedValue: state.plc.filters.testcaseInstruction,
+  });
+  populateSelectOptions(dom.plc.testcaseInputTypeFilter, inputTypes, {
+    placeholderLabel: 'All input types',
+    selectedValue: state.plc.filters.testcaseInputType,
+  });
+  dom.plc.testcaseSuggestionFilter.value = state.plc.filters.testcaseSuggestionStatus;
+}
+
 function renderPlcTestcaseList() {
   const visibleTestcases = filteredPlcTestcases();
   if (!state.plc.testcases.length) {
@@ -770,7 +1041,9 @@ function renderPlcTestcaseList() {
     return;
   }
 
-  dom.plc.testcaseFilterSummary.textContent = `${countLabel(visibleTestcases.length, 'testcase')} shown out of ${state.plc.testcases.length}.`;
+  const expectedFailCount = state.plc.testcases.filter((testcase) => testcase.expected_outcome === 'fail').length;
+  const savedSuggestionCount = state.plc.testcases.filter((testcase) => suggestionContextForTestcase(testcase.id).count > 0).length;
+  dom.plc.testcaseFilterSummary.textContent = `${countLabel(visibleTestcases.length, 'testcase')} shown out of ${state.plc.testcases.length} · ${expectedFailCount} expected fail · ${savedSuggestionCount} with saved suggestions.`;
 
   if (!visibleTestcases.length) {
     dom.plc.testcaseList.className = 'stack-list empty';
@@ -780,20 +1053,26 @@ function renderPlcTestcaseList() {
 
   dom.plc.testcaseList.className = 'stack-list';
   dom.plc.testcaseList.innerHTML = visibleTestcases
-    .map(
-      (testcase) => `
+    .map((testcase) => {
+      const suggestionContext = suggestionContextForTestcase(testcase.id);
+      return `
         <button type="button" class="list-card${testcase.id === state.plc.selectedTestcaseId ? ' active' : ''}" data-testcase-id="${escapeHtml(testcase.id)}">
           <div class="inline-meta">
             ${renderBadge(testcase.case_key)}
             ${renderBadge(`${testcase.input_type} → ${testcase.output_type}`)}
             ${renderStatusBadge(testcase.expected_outcome)}
+            ${suggestionContext.latestStatus ? renderStatusBadge(suggestionContext.latestStatus) : renderBadge('no saved suggestion')}
           </div>
           <h3>${escapeHtml(testcase.instruction_name)}</h3>
-          <p class="meta-line">row ${escapeHtml(testcase.source_row_number)} · case ${escapeHtml(testcase.source_case_index + 1)}</p>
-          <div class="badge-row">${(testcase.tags || []).map(renderBadge).join('')}</div>
+          <p class="meta-line">row ${escapeHtml(testcase.source_row_number)} · case ${escapeHtml(testcase.source_case_index + 1)} · profile ${escapeHtml(testcase.execution_profile_key || 'n/a')}</p>
+          <div class="badge-row">
+            ${(testcase.tags || []).map(renderBadge).join('')}
+            ${suggestionContext.count ? renderBadge(`${suggestionContext.count} suggestion${suggestionContext.count === 1 ? '' : 's'}`) : ''}
+            ${suggestionContext.reviewRequired ? renderBadge('review required') : ''}
+          </div>
         </button>
-      `,
-    )
+      `;
+    })
     .join('');
 
   dom.plc.testcaseList.querySelectorAll('[data-testcase-id]').forEach((button) => {
@@ -814,16 +1093,38 @@ function renderPlcTestcaseDetail() {
     return;
   }
 
+  const suggestionContext = suggestionContextForTestcase(testcase.id);
+  const executionProfile = testcase.execution_profile || {};
   const fragments = [
+    `<div class="inline-meta">${renderStatusBadge(testcase.expected_outcome)}${renderBadge(testcase.case_key)}${testcase.execution_profile_key ? renderBadge(`profile ${testcase.execution_profile_key}`) : ''}${suggestionContext.latestStatus ? renderStatusBadge(suggestionContext.latestStatus) : renderBadge('no saved suggestion')}</div>`,
     renderDetailGrid([
       { label: 'Testcase ID', value: testcase.id },
       { label: 'Case key', value: testcase.case_key },
       { label: 'Instruction', value: testcase.instruction_name },
+      { label: 'Input type', value: testcase.input_type },
+      { label: 'Output type', value: testcase.output_type },
       { label: 'Expected outcome', value: testcase.expected_outcome },
       { label: 'Timeout (ms)', value: testcase.timeout_ms },
       { label: 'Memory profile', value: testcase.memory_profile_key || '—' },
+      { label: 'Execution profile', value: testcase.execution_profile_key || '—' },
     ]),
   ];
+
+  fragments.push(`
+    <section class="callout${suggestionContext.latestStatus === 'rejected' ? ' failure' : suggestionContext.latestStatus ? ' success' : ''}">
+      <p class="callout-title">Suggestion review context</p>
+      <div class="inline-meta">
+        ${suggestionContext.latestStatus ? renderStatusBadge(suggestionContext.latestStatus) : renderBadge('no saved suggestion')}
+        ${renderBadge(`${suggestionContext.count} saved suggestion${suggestionContext.count === 1 ? '' : 's'}`)}
+        ${suggestionContext.reviewRequired ? renderBadge('review required') : ''}
+      </div>
+      <p>${escapeHtml(
+        suggestionContext.latest
+          ? `Latest suggestion ${suggestionContext.latest.id} was created ${formatDateTime(suggestionContext.latest.created_at)} and keeps the testcase in reviewer context before you drop into the saved suggestion slice below.`
+          : 'Use the normalization preview below to create or review testcase-specific suggestions without leaving the testcase reviewer flow.',
+      )}</p>
+    </section>
+  `);
 
   if (testcase.description) {
     fragments.push(`
@@ -834,9 +1135,20 @@ function renderPlcTestcaseDetail() {
     `);
   }
 
+  fragments.push(
+    renderDetailGrid([
+      { label: 'Profile instruction', value: executionProfile.instruction_name || '—' },
+      { label: 'Profile memory key', value: executionProfile.memory_profile_key || '—' },
+      { label: 'Profile input type', value: executionProfile.input_type || '—' },
+      { label: 'Profile output type', value: executionProfile.output_type || '—' },
+    ]),
+  );
   fragments.push(renderJsonCallout('Input vector', testcase.input_vector_json));
   fragments.push(renderJsonCallout('Expected output', testcase.expected_output_json));
   fragments.push(renderJsonCallout('Expanded expected outputs', testcase.expected_outputs_json));
+  if (executionProfile && Object.keys(executionProfile).length) {
+    fragments.push(renderJsonDetails('Execution profile payload', executionProfile));
+  }
 
   dom.plc.testcaseDetail.className = 'detail-stack';
   dom.plc.testcaseDetail.innerHTML = fragments.join('');
@@ -845,6 +1157,7 @@ function renderPlcTestcaseDetail() {
 function renderPlcNormalizationPanel() {
   const normalization = state.plc.normalization;
   const testcase = selectedPlcTestcase();
+  const suggestionContext = testcase ? suggestionContextForTestcase(testcase.id) : null;
   dom.plc.normalizationPersistButton.disabled = !testcase || !normalization || Boolean(normalization.error);
   dom.plc.suggestionsRefresh.disabled = !testcase;
   if (!normalization) {
@@ -878,6 +1191,20 @@ function renderPlcNormalizationPanel() {
       </section>
     `,
   ];
+
+  if (suggestionContext?.latest) {
+    fragments.push(`
+      <section class="callout ${suggestionContext.latestStatus === 'rejected' ? 'failure' : suggestionContext.latestStatus === 'accepted' ? 'success' : 'warning'}">
+        <p class="callout-title">Saved suggestion status</p>
+        <div class="inline-meta">
+          ${renderStatusBadge(suggestionContext.latestStatus)}
+          ${renderBadge(`suggestion ${suggestionContext.latest.id}`)}
+          ${suggestionContext.reviewRequired ? renderBadge('review required') : ''}
+        </div>
+        <p>Latest saved suggestion created ${escapeHtml(formatDateTime(suggestionContext.latest.created_at))} so you can compare the live preview with the persisted review state.</p>
+      </section>
+    `);
+  }
 
   if (normalization.persisted_suggestion) {
     fragments.push(`
@@ -991,7 +1318,13 @@ function renderPlcRuns() {
     return;
   }
 
-  dom.plc.runFilterSummary.textContent = `${countLabel(visibleRuns.length, 'run')} shown out of ${state.plc.runs.length}.`;
+  const backendFilters = [
+    state.plc.selectedSuiteId ? `suite ${state.plc.selectedSuiteId}` : 'all suites',
+    state.plc.filters.runTargetKey ? `target ${state.plc.filters.runTargetKey}` : null,
+    state.plc.filters.runStatus ? `status ${state.plc.filters.runStatus}` : null,
+    state.plc.filters.runProblemsOnly ? 'problem runs only' : null,
+  ].filter(Boolean);
+  dom.plc.runFilterSummary.textContent = `${countLabel(visibleRuns.length, 'run')} shown out of ${state.plc.runs.length} fetched for ${backendFilters.join(' · ')}.`;
 
   if (!visibleRuns.length) {
     dom.plc.runList.className = 'stack-list empty';
@@ -1001,26 +1334,30 @@ function renderPlcRuns() {
 
   dom.plc.runList.className = 'stack-list';
   dom.plc.runList.innerHTML = visibleRuns
-    .map(
-      (run) => `
+    .map((run) => {
+      const target = targetForKey(run.payload_json?.target_key || run.target_key);
+      return `
         <button type="button" class="list-card plc-run-card${run.id === state.plc.selectedRunId ? ' active' : ''}${hasRunProblems(run) ? ' has-problem' : ''}" data-run-id="${escapeHtml(run.id)}">
           <div class="inline-meta">
             ${renderStatusBadge(run.status)}
             ${renderBadge(`job ${run.id}`)}
             ${run.payload_json?.target_key ? renderBadge(`target ${run.payload_json.target_key}`) : ''}
+            ${target?.environment_label ? renderBadge(target.environment_label) : ''}
           </div>
           <h3>${escapeHtml(run.payload_json?.suite_title || run.plc_suite_id || 'PLC run')}</h3>
-          <p class="meta-line">created ${escapeHtml(formatDateTime(run.created_at))}</p>
+          <p class="meta-line">created ${escapeHtml(formatDateTime(run.created_at))} · ${escapeHtml(target?.display_name || target?.key || 'target metadata unavailable')}</p>
           <div class="badge-row">
             ${renderBadge(`queued ${run.summary?.queued_count ?? 0}`)}
             ${renderBadge(`running ${run.summary?.running_count ?? 0}`)}
             ${renderBadge(`pass ${run.summary?.passed_count ?? 0}`)}
             ${renderBadge(`fail ${run.summary?.failed_count ?? 0}`)}
             ${renderBadge(`error ${run.summary?.error_count ?? 0}`)}
+            ${target?.line ? renderBadge(`line ${target.line}`) : ''}
+            ${target?.bench ? renderBadge(`bench ${target.bench}`) : ''}
           </div>
         </button>
-      `,
-    )
+      `;
+    })
     .join('');
 
   dom.plc.runList.querySelectorAll('[data-run-id]').forEach((button) => {
@@ -1047,21 +1384,45 @@ function renderPlcRunSummary() {
 
   const payload = run.payload_json || {};
   const result = run.result_json || {};
+  const targetSnapshot = payload.target_snapshot || targetForKey(payload.target_key || run.target_key) || {};
+  const targetMetadata = targetSnapshot.metadata_json || {};
+  const requestedCases = safeArray(payload.testcases);
   const warnings = Array.isArray(result.warnings) ? result.warnings : [];
   dom.plc.runLifecycle.className = 'run-lifecycle';
   dom.plc.runLifecycle.innerHTML = renderRunLifecycle(run.status);
   const fragments = [
-    `<div class="inline-meta">${renderStatusBadge(run.status)}${renderBadge(`suite ${run.plc_suite_id || '—'}`)}${renderBadge(`target ${payload.target_key || 'stub-local'}`)}</div>`,
+    `<div class="inline-meta">${renderStatusBadge(run.status)}${renderBadge(`suite ${run.plc_suite_id || '—'}`)}${renderBadge(`target ${payload.target_key || run.target_key || 'stub-local'}`)}${targetSnapshot.environment_label ? renderBadge(targetSnapshot.environment_label) : ''}</div>`,
     renderDetailGrid([
       { label: 'Run ID', value: run.id },
       { label: 'Suite title', value: payload.suite_title || run.plc_suite_id || '—' },
+      { label: 'Target display', value: targetSnapshot.display_name || targetSnapshot.key || '—' },
+      { label: 'Target environment', value: targetSnapshot.environment_label || '—' },
+      { label: 'Line', value: targetSnapshot.line || targetMetadata.line || '—' },
+      { label: 'Bench', value: targetSnapshot.bench || targetMetadata.bench || '—' },
       { label: 'Executor mode', value: result.executor_mode || '—' },
       { label: 'Validator version', value: result.validator_version || '—' },
+      { label: 'Requested cases', value: requestedCases.length || run.summary?.total_count || 0 },
       { label: 'Created', value: formatDateTime(run.created_at) },
       { label: 'Started', value: formatDateTime(run.started_at) },
       { label: 'Finished', value: formatDateTime(run.finished_at) },
       { label: 'Attempts', value: `${run.attempts}/${run.max_attempts}` },
     ]),
+    `
+      <section class="callout ${hasRunProblems(run) ? 'failure' : 'success'}">
+        <p class="callout-title">Run review summary</p>
+        <div class="inline-meta">
+          ${renderBadge(`${run.summary?.total_count ?? 0} total items`)}
+          ${renderBadge(`${run.summary?.passed_count ?? 0} passed`)}
+          ${renderBadge(`${run.summary?.failed_count ?? 0} failed`)}
+          ${renderBadge(`${run.summary?.error_count ?? 0} errors`)}
+        </div>
+        <p>${escapeHtml(
+          hasRunProblems(run)
+            ? 'This run needs reviewer attention because at least one testcase failed validation or the executor reported an error condition.'
+            : 'This run completed without recorded testcase failures, so the drill-down can focus on confirming expected behavior and trace coverage.',
+        )}</p>
+      </section>
+    `,
     `
       <section class="status-summary">
         <article class="stat-card">
@@ -1092,6 +1453,16 @@ function renderPlcRunSummary() {
     `,
   ];
 
+  fragments.push(`
+    <section class="callout">
+      <p class="callout-title">Target context</p>
+      <div class="badge-row">
+        ${safeArray(targetSnapshot.tags || targetMetadata.tags).map(renderBadge).join('') || '<span class="meta-line">No target tags</span>'}
+      </div>
+      <p class="detail-copy">${escapeHtml(targetSnapshot.description || 'Run target metadata is shown here so reviewers can confirm the environment, line, and bench before interpreting failures.')}</p>
+    </section>
+  `);
+
   if (run.error) {
     fragments.push(`
       <section class="callout failure">
@@ -1103,6 +1474,14 @@ function renderPlcRunSummary() {
 
   if (warnings.length) {
     fragments.push(renderDetailList('Run warnings', warnings, 'warning'));
+  }
+
+  if (requestedCases.length) {
+    fragments.push(renderJsonDetails('Run request testcases', requestedCases, { summaryDetail: `${requestedCases.length} queued case payloads` }));
+  }
+
+  if (Object.keys(payload).length) {
+    fragments.push(renderJsonDetails('Full run payload', payload));
   }
 
   dom.plc.runSummary.className = 'detail-stack';
@@ -1130,20 +1509,27 @@ function renderPlcRunItemList() {
 
   dom.plc.runItemList.className = 'stack-list';
   dom.plc.runItemList.innerHTML = visibleItems
-    .map(
-      (item) => `
+    .map((item) => {
+      const requestContext = item.request_context_json || {};
+      const targetContext = requestContext.target_context || {};
+      return `
         <button type="button" class="list-card plc-run-item-card${item.id === state.plc.selectedRunItemId ? ' active' : ''}${hasRunItemProblems(item) ? ' has-problem' : ''}" data-run-item-id="${escapeHtml(item.id)}">
           <div class="inline-meta">
             ${renderStatusBadge(item.status)}
             ${renderBadge(item.case_key)}
+            ${renderBadge(item.expected_outcome || 'unknown outcome')}
           </div>
           <h3>${escapeHtml(item.instruction_name)}</h3>
-          <p class="meta-line">duration ${escapeHtml(item.duration_ms)} ms</p>
-          <p class="meta-line">testcase ${escapeHtml(item.testcase_id)}</p>
+          <p class="meta-line">duration ${escapeHtml(item.duration_ms)} ms · testcase ${escapeHtml(item.testcase_id)}</p>
+          <div class="badge-row">
+            ${renderBadge(`${item.input_type} → ${item.output_type}`)}
+            ${item.execution_profile_key ? renderBadge(`profile ${item.execution_profile_key}`) : ''}
+            ${targetContext.environment_label ? renderBadge(targetContext.environment_label) : ''}
+          </div>
           ${item.failure_reason ? `<p class="meta-line">${escapeHtml(item.failure_reason)}</p>` : ''}
         </button>
-      `,
-    )
+      `;
+    })
     .join('');
 
   dom.plc.runItemList.querySelectorAll('[data-run-item-id]').forEach((button) => {
@@ -1164,21 +1550,43 @@ function renderPlcRunItemDetail() {
   }
 
   const validatorResult = item.validator_result_json || {};
+  const requestContext = item.request_context_json || {};
+  const runContext = requestContext.run_context || {};
+  const testcaseContext = requestContext.testcase_context || {};
+  const targetContext = requestContext.target_context || {};
+  const executionProfile = requestContext.execution_profile || {};
   const diagnostics = Array.isArray(validatorResult.diagnostics) ? validatorResult.diagnostics : [];
   const mismatches = Array.isArray(validatorResult.mismatches) ? validatorResult.mismatches : [];
   const fragments = [
-    `<div class="inline-meta">${renderStatusBadge(item.status)}${renderBadge(item.case_key)}${renderBadge(`${item.duration_ms} ms`)}</div>`,
+    `<div class="inline-meta">${renderStatusBadge(item.status)}${renderBadge(item.case_key)}${renderBadge(`${item.duration_ms} ms`)}${targetContext.environment_label ? renderBadge(targetContext.environment_label) : ''}</div>`,
     renderDetailGrid([
       { label: 'Item ID', value: item.id },
       { label: 'Testcase ID', value: item.testcase_id },
       { label: 'Instruction', value: item.instruction_name },
+      { label: 'Input type', value: item.input_type || '—' },
+      { label: 'Output type', value: item.output_type || '—' },
+      { label: 'Expected outcome', value: item.expected_outcome || '—' },
+      { label: 'Execution profile', value: item.execution_profile_key || '—' },
       { label: 'Validator', value: validatorResult.validator || '—' },
       { label: 'Validator status', value: validatorResult.status || '—' },
       { label: 'Mismatch count', value: mismatches.length },
       { label: 'Type mismatch', value: validatorResult.type_mismatch ? 'yes' : 'no' },
+      { label: 'Started', value: formatDateTime(item.started_at) },
+      { label: 'Finished', value: formatDateTime(item.finished_at) },
     ]),
     `
+      <section class="callout ${hasRunItemProblems(item) ? 'failure' : 'success'}">
+        <p class="callout-title">Expected vs actual review</p>
+        <p>${escapeHtml(
+          hasRunItemProblems(item)
+            ? 'The executor completed this testcase with a validation problem. Compare the requested inputs, expected output, actual output, and validator diagnostics below before deciding whether the issue is data, target, or execution behavior.'
+            : 'This testcase passed validation. Use the trace below to confirm the request context, I/O order, and validator payload all line up with the intended execution profile.',
+        )}</p>
+      </section>
+    `,
+    `
       <section class="comparison-grid">
+        ${renderComparisonSection('Input vector', item.inputs_json)}
         ${renderComparisonSection('Expected output', item.expected_output_json)}
         ${renderComparisonSection('Actual output', item.actual_output_json)}
       </section>
@@ -1199,30 +1607,76 @@ function renderPlcRunItemDetail() {
   }
 
   if (mismatches.length) {
-    fragments.push(renderJsonCallout('Validator mismatches', mismatches));
+    fragments.push(renderJsonDetails('Validator mismatches', mismatches, { open: true, summaryDetail: `${mismatches.length} mismatch entries` }));
   }
 
-  fragments.push(renderJsonCallout('Validation payload', validatorResult));
+  fragments.push(
+    renderDetailGrid([
+      { label: 'Run ID', value: runContext.run_id || '—' },
+      { label: 'Suite ID', value: runContext.suite_id || '—' },
+      { label: 'Suite title', value: runContext.suite_title || '—' },
+      { label: 'Source row', value: testcaseContext.source_row_number ?? '—' },
+      { label: 'Source case index', value: testcaseContext.source_case_index ?? '—' },
+      { label: 'Target key', value: targetContext.key || '—' },
+      { label: 'Target name', value: targetContext.display_name || '—' },
+      { label: 'Target environment', value: targetContext.environment_label || '—' },
+      { label: 'Target mode', value: targetContext.executor_mode || '—' },
+    ]),
+  );
+
+  if (testcaseContext.description || safeArray(testcaseContext.tags).length) {
+    fragments.push(`
+      <section class="callout">
+        <p class="callout-title">Testcase context</p>
+        ${testcaseContext.description ? `<p>${escapeHtml(testcaseContext.description)}</p>` : ''}
+        <div class="badge-row">${safeArray(testcaseContext.tags).map(renderBadge).join('') || '<span class="meta-line">No testcase tags</span>'}</div>
+      </section>
+    `);
+  }
+
+  if (safeArray(targetContext.tags).length) {
+    fragments.push(`
+      <section class="callout">
+        <p class="callout-title">Target tags</p>
+        <div class="badge-row">${safeArray(targetContext.tags).map(renderBadge).join('')}</div>
+      </section>
+    `);
+  }
+
+  if (Object.keys(executionProfile).length) {
+    fragments.push(
+      renderDetailGrid([
+        { label: 'Profile key', value: executionProfile.key || item.execution_profile_key || '—' },
+        { label: 'Profile instruction', value: executionProfile.instruction_name || '—' },
+        { label: 'Profile memory key', value: executionProfile.memory_profile_key || '—' },
+        { label: 'Profile input type', value: executionProfile.input_type || '—' },
+        { label: 'Profile output type', value: executionProfile.output_type || '—' },
+      ]),
+    );
+    fragments.push(renderJsonDetails('Execution profile payload', executionProfile));
+  }
+
+  fragments.push(renderJsonDetails('Validator payload', validatorResult, { summaryDetail: 'Full rule-based validation envelope' }));
+  fragments.push(renderJsonDetails('Request context payload', requestContext, { summaryDetail: 'Run, testcase, target, and execution profile context' }));
 
   if (Array.isArray(item.io_logs) && item.io_logs.length) {
     fragments.push(renderIoLogList(item.io_logs));
   }
 
   if (item.executor_log) {
-    fragments.push(`
-      <section class="detail-stack">
-        <h4 class="subsection-title">Executor log</h4>
-        <pre class="json-block">${escapeHtml(item.executor_log)}</pre>
-      </section>
-    `);
+    fragments.push(renderTextLog('Executor log', item.executor_log));
   }
 
   dom.plc.runItemDetail.className = 'detail-stack';
   dom.plc.runItemDetail.innerHTML = fragments.join('');
 }
 
+async function fetchPlcDashboardSummary() {
+  return fetchJson(buildUrl('/plc-dashboard/summary', { suite_id: currentPlcDashboardSuiteId() }));
+}
+
 async function refreshPlcDashboard() {
-  state.plc.summary = await fetchJson('/plc-dashboard/summary');
+  state.plc.summary = await fetchPlcDashboardSummary();
   renderPlcDashboard();
 }
 
@@ -1250,12 +1704,45 @@ async function ensurePlcInitialized({ force = false } = {}) {
 }
 
 async function fetchPlcRuns() {
-  return fetchJson(buildUrl('/plc-test-runs', { suite_id: state.plc.selectedSuiteId }));
+  return fetchJson(
+    buildUrl('/plc-test-runs', {
+      suite_id: state.plc.selectedSuiteId,
+      target_key: state.plc.filters.runTargetKey,
+      status: state.plc.filters.runStatus,
+      failed_only: state.plc.filters.runProblemsOnly,
+    }),
+  );
+}
+
+async function refreshPlcSuiteSuggestionContext() {
+  if (!state.plc.selectedSuiteId) {
+    state.plc.suiteSuggestions = [];
+    renderPlcSuiteDetail();
+    renderPlcTestcaseFilters();
+    renderPlcTestcaseList();
+    renderPlcTestcaseDetail();
+    return;
+  }
+
+  const suiteId = state.plc.selectedSuiteId;
+  const requestToken = ++state.plc.requestTokens.suiteSuggestions;
+  const suggestions = await fetchJson(buildUrl('/plc-llm/suggestions', { suite_id: suiteId }));
+  if (requestToken !== state.plc.requestTokens.suiteSuggestions || state.plc.selectedSuiteId !== suiteId) {
+    return;
+  }
+  state.plc.suiteSuggestions = Array.isArray(suggestions) ? suggestions : [];
+  renderPlcSuiteDetail();
+  renderPlcTestcaseFilters();
+  renderPlcTestcaseList();
+  renderPlcTestcaseDetail();
 }
 
 function clearPlcSelections() {
+  state.plc.selectedSuiteId = null;
   state.plc.selectedSuite = null;
+  state.plc.summary = null;
   state.plc.testcases = [];
+  state.plc.suiteSuggestions = [];
   state.plc.selectedTestcaseId = null;
   state.plc.normalization = null;
   state.plc.suggestions = [];
@@ -1267,7 +1754,9 @@ function clearPlcSelections() {
   state.plc.runItems = [];
   state.plc.selectedRunItemId = null;
   stopPlcRunPolling();
+  renderPlcDashboard();
   renderPlcSuiteDetail();
+  renderPlcTestcaseFilters();
   renderPlcTestcaseList();
   renderPlcTestcaseDetail();
   renderPlcNormalizationPanel();
@@ -1322,9 +1811,10 @@ async function loadPlcSuite(suiteId, { preserveTestcase = false } = {}) {
 
   renderPlcSuites();
   renderPlcSuiteDetail();
+  renderPlcTestcaseFilters();
   renderPlcTestcaseList();
   renderPlcTestcaseDetail();
-  await Promise.all([refreshPlcNormalizationPreview(), refreshPlcSuggestions(), refreshPlcRuns()]);
+  await Promise.all([refreshPlcDashboard(), refreshPlcSuiteSuggestionContext(), refreshPlcNormalizationPreview(), refreshPlcSuggestions(), refreshPlcRuns()]);
 }
 
 function testcaseToNormalizationRow(testcase) {
@@ -1450,10 +1940,10 @@ async function reviewPlcSuggestion(status) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     });
-    state.plc.selectedSuggestion = reviewed;
-    state.plc.suggestions = state.plc.suggestions.map((item) => (item.id === reviewed.id ? reviewed : item));
-    renderPlcSuggestionList();
-    renderPlcSuggestionDetail();
+    await Promise.all([
+      refreshPlcSuiteSuggestionContext(),
+      refreshPlcSuggestions({ preferredSuggestionId: reviewed.id }),
+    ]);
     setPlcRunHint(`Suggestion ${reviewed.id} marked ${reviewed.status}.`);
   } catch (error) {
     setPlcRunHint(error.message);
@@ -1526,12 +2016,12 @@ function beginPlcRunPolling(runId) {
   state.plc.pollRunId = runId;
   state.plc.pollHandle = window.setInterval(async () => {
     try {
-      const [run, items, runs, summary] = await Promise.all([
-        fetchJson(`/plc-test-runs/${encodeURIComponent(runId)}`),
-        fetchJson(`/plc-test-runs/${encodeURIComponent(runId)}/items`),
-        fetchPlcRuns(),
-        fetchJson('/plc-dashboard/summary'),
-      ]);
+    const [run, items, runs, summary] = await Promise.all([
+      fetchJson(`/plc-test-runs/${encodeURIComponent(runId)}`),
+      fetchJson(`/plc-test-runs/${encodeURIComponent(runId)}/items`),
+      fetchPlcRuns(),
+      fetchPlcDashboardSummary(),
+    ]);
 
       state.plc.selectedRun = run;
       state.plc.runItems = Array.isArray(items) ? items : [];
@@ -1631,7 +2121,19 @@ dom.plc.summaryRefresh.addEventListener('click', async () => {
   try {
     await ensurePlcInitialized();
     await Promise.all([refreshPlcDashboard(), refreshPlcTargets()]);
-    setPlcRunHint('PLC dashboard refreshed.');
+    setPlcRunHint(`PLC dashboard refreshed for ${dashboardScopeSummary().label}.`);
+  } catch (error) {
+    setPlcRunHint(error.message);
+  }
+});
+
+dom.plc.summaryScopeSelect.addEventListener('change', async (event) => {
+  state.plc.dashboardScope = event.target.value;
+  renderPlcDashboard();
+  try {
+    await ensurePlcInitialized();
+    await refreshPlcDashboard();
+    setPlcRunHint(`PLC dashboard scope switched to ${dashboardScopeSummary().label}.`);
   } catch (error) {
     setPlcRunHint(error.message);
   }
@@ -1649,8 +2151,23 @@ dom.plc.testcaseFilterInput.addEventListener('input', (event) => {
   renderPlcTestcaseList();
 });
 
+dom.plc.testcaseInstructionFilter.addEventListener('change', (event) => {
+  state.plc.filters.testcaseInstruction = event.target.value;
+  renderPlcTestcaseList();
+});
+
+dom.plc.testcaseInputTypeFilter.addEventListener('change', (event) => {
+  state.plc.filters.testcaseInputType = event.target.value;
+  renderPlcTestcaseList();
+});
+
 dom.plc.testcaseOutcomeFilter.addEventListener('change', (event) => {
   state.plc.filters.testcaseOutcome = event.target.value;
+  renderPlcTestcaseList();
+});
+
+dom.plc.testcaseSuggestionFilter.addEventListener('change', (event) => {
+  state.plc.filters.testcaseSuggestionStatus = event.target.value;
   renderPlcTestcaseList();
 });
 
@@ -1732,7 +2249,10 @@ dom.plc.normalizationPersistButton.addEventListener('click', async () => {
     });
     state.plc.normalization = normalization;
     renderPlcNormalizationPanel();
-    await refreshPlcSuggestions({ preferredSuggestionId: normalization.persisted_suggestion?.id || null });
+    await Promise.all([
+      refreshPlcSuiteSuggestionContext(),
+      refreshPlcSuggestions({ preferredSuggestionId: normalization.persisted_suggestion?.id || null }),
+    ]);
     setPlcRunHint(`Persisted suggestion ${normalization.persisted_suggestion?.id || ''} for ${testcase.case_key}.`.trim());
   } catch (error) {
     setPlcRunHint(error.message);
@@ -1743,7 +2263,10 @@ dom.plc.normalizationPersistButton.addEventListener('click', async () => {
 dom.plc.suggestionsRefresh.addEventListener('click', async () => {
   try {
     await ensurePlcInitialized();
-    await refreshPlcSuggestions({ preferredSuggestionId: state.plc.selectedSuggestionId });
+    await Promise.all([
+      refreshPlcSuiteSuggestionContext(),
+      refreshPlcSuggestions({ preferredSuggestionId: state.plc.selectedSuggestionId }),
+    ]);
     setPlcRunHint('Saved suggestions refreshed.');
   } catch (error) {
     setPlcRunHint(error.message);
@@ -1755,14 +2278,31 @@ dom.plc.runFilterInput.addEventListener('input', (event) => {
   renderPlcRuns();
 });
 
-dom.plc.runStatusFilter.addEventListener('change', (event) => {
-  state.plc.filters.runStatus = event.target.value;
-  renderPlcRuns();
+dom.plc.runTargetFilter.addEventListener('change', async (event) => {
+  state.plc.filters.runTargetKey = event.target.value;
+  try {
+    await refreshPlcRuns();
+  } catch (error) {
+    setPlcRunHint(error.message);
+  }
 });
 
-dom.plc.runProblemsOnly.addEventListener('change', (event) => {
+dom.plc.runStatusFilter.addEventListener('change', async (event) => {
+  state.plc.filters.runStatus = event.target.value;
+  try {
+    await refreshPlcRuns();
+  } catch (error) {
+    setPlcRunHint(error.message);
+  }
+});
+
+dom.plc.runProblemsOnly.addEventListener('change', async (event) => {
   state.plc.filters.runProblemsOnly = event.target.checked;
-  renderPlcRuns();
+  try {
+    await refreshPlcRuns();
+  } catch (error) {
+    setPlcRunHint(error.message);
+  }
 });
 
 dom.plc.runButton.addEventListener('click', async () => {

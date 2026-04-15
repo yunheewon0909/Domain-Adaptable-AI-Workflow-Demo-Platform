@@ -74,8 +74,18 @@
               </div>
               <button id="plc-summary-refresh" type="button" class="secondary-button">Refresh</button>
             </div>
+            <div class="filter-toolbar plc-toolbar compact-toolbar">
+              <div class="field">
+                <label for="plc-dashboard-scope">Dashboard scope</label>
+                <select id="plc-dashboard-scope">
+                  <option value="selected">Selected suite only</option>
+                  <option value="all">All suites</option>
+                </select>
+              </div>
+            </div>
+            <p id="plc-summary-scope" class="muted-line">Dashboard refresh follows the selected suite scope.</p>
             <div id="plc-summary-cards" class="stat-grid empty">PLC dashboard metrics will appear here.</div>
-            <div class="grid nested-grid">
+            <div class="grid nested-grid plc-summary-grid">
               <div class="detail-stack">
                 <h3 class="subsection-title">Recent runs</h3>
                 <div id="plc-recent-runs" class="stack-list empty">No PLC runs yet.</div>
@@ -83,6 +93,14 @@
               <div class="detail-stack">
                 <h3 class="subsection-title">Failure hotspots</h3>
                 <div id="plc-failure-hotspots" class="stack-list empty">No failures captured yet.</div>
+              </div>
+              <div class="detail-stack">
+                <h3 class="subsection-title">Target status</h3>
+                <div id="plc-target-statuses" class="stack-list empty">Target status snapshots will appear here.</div>
+              </div>
+              <div class="detail-stack">
+                <h3 class="subsection-title">Instruction failure profile</h3>
+                <div id="plc-instruction-failure-stats" class="stack-list empty">Instruction failure trends will appear here.</div>
               </div>
             </div>
           </article>
@@ -135,11 +153,34 @@
                 <input id="plc-testcase-filter" type="search" placeholder="Search case key, instruction, tag, or description." />
               </div>
               <div class="field">
+                <label for="plc-testcase-instruction-filter">Instruction</label>
+                <select id="plc-testcase-instruction-filter">
+                  <option value="">All instructions</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="plc-testcase-input-type-filter">Input type</label>
+                <select id="plc-testcase-input-type-filter">
+                  <option value="">All input types</option>
+                </select>
+              </div>
+              <div class="field">
                 <label for="plc-testcase-outcome-filter">Expected outcome</label>
                 <select id="plc-testcase-outcome-filter">
                   <option value="">All expected outcomes</option>
                   <option value="pass">Expected pass</option>
                   <option value="fail">Expected fail</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="plc-testcase-suggestion-filter">Suggestion status</label>
+                <select id="plc-testcase-suggestion-filter">
+                  <option value="">All suggestion states</option>
+                  <option value="pending">Pending review</option>
+                  <option value="accepted">Accepted</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="review-required">Review required</option>
+                  <option value="none">No saved suggestion</option>
                 </select>
               </div>
             </div>
@@ -198,6 +239,12 @@
               <div class="field">
                 <label for="plc-run-filter">Filter runs</label>
                 <input id="plc-run-filter" type="search" placeholder="Search run id, suite, or target." />
+              </div>
+              <div class="field">
+                <label for="plc-run-target-filter">Target</label>
+                <select id="plc-run-target-filter">
+                  <option value="">All targets</option>
+                </select>
               </div>
               <div class="field">
                 <label for="plc-run-status-filter">Run status</label>

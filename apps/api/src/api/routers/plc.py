@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
-from api.models import JobRecord, PLCTestRunRecord
+from api.models import JobRecord, PLCTestRunItemRecord, PLCTestRunRecord
 from api.services.jobs import (
     apply_job_filters,
     create_job,
@@ -116,15 +116,19 @@ def get_plc_testcases(
     input_type: str | None = Query(default=None),
     suite_id: str | None = Query(default=None),
     tag: str | None = Query(default=None),
+    expected_outcome: str | None = Query(default=None),
 ) -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
-        return flatten_cases(
+        items = flatten_cases(
             session,
             instruction_name=instruction,
             input_type=input_type,
             suite_id=suite_id,
             tag=tag,
         )
+    if expected_outcome is None:
+        return items
+    return [item for item in items if item.get("expected_outcome") == expected_outcome]
 
 
 @router.get("/plc-testcases/{testcase_id}")
@@ -196,6 +200,7 @@ def _serialize_plc_run(
 ) -> dict[str, Any]:
     detail = serialize_job_detail(job)
     if run is not None:
+        detail["status"] = run.status
         detail["summary"] = {
             "total_count": run.total_count,
             "passed_count": run.passed_count,
@@ -225,6 +230,9 @@ def _serialize_plc_run(
 @router.get("/plc-test-runs")
 def list_plc_test_runs(
     suite_id: str | None = Query(default=None),
+    target_key: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    failed_only: bool = Query(default=False),
 ) -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
         stmt = apply_job_filters(
@@ -243,7 +251,20 @@ def list_plc_test_runs(
                 )
             ).all()
         }
-        return [_serialize_plc_run(job, runs.get(job.id)) for job in jobs]
+        items = [_serialize_plc_run(job, runs.get(job.id)) for job in jobs]
+    if target_key is not None:
+        items = [item for item in items if item.get("target_key") == target_key]
+    if status is not None:
+        items = [item for item in items if item.get("status") == status]
+    if failed_only:
+        items = [
+            item
+            for item in items
+            if item.get("status") == "failed"
+            or int((item.get("summary") or {}).get("failed_count", 0)) > 0
+            or int((item.get("summary") or {}).get("error_count", 0)) > 0
+        ]
+    return items
 
 
 @router.get("/plc-test-runs/{run_id}")
@@ -292,14 +313,18 @@ def get_plc_test_run_io_logs(run_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("/plc-dashboard/summary")
-def get_plc_dashboard_summary() -> dict[str, Any]:
+def get_plc_dashboard_summary(
+    suite_id: str | None = Query(default=None),
+) -> dict[str, Any]:
     with Session(get_engine()) as session:
         jobs = session.scalars(
-            apply_job_filters(select(JobRecord), job_type="plc_test_run").order_by(
-                JobRecord.created_at.desc(), JobRecord.id.desc()
-            )
+            apply_job_filters(
+                select(JobRecord), job_type="plc_test_run", plc_suite_id=suite_id
+            ).order_by(JobRecord.created_at.desc(), JobRecord.id.desc())
         ).all()
         suites = list_plc_suites(session)
+        if suite_id is not None:
+            suites = [suite for suite in suites if suite.id == suite_id]
         runs = {
             run.backing_job_id: run
             for run in session.scalars(
@@ -308,31 +333,61 @@ def get_plc_dashboard_summary() -> dict[str, Any]:
                 )
             ).all()
         }
+        run_ids = [job.id for job in jobs]
+        run_items = session.scalars(
+            select(PLCTestRunItemRecord).where(PLCTestRunItemRecord.run_id.in_(run_ids))
+        ).all()
     status_counts = Counter(job.status for job in jobs)
     failure_hotspots: Counter[str] = Counter()
+    failure_hotspot_meta: dict[str, dict[str, Any]] = {}
+    instruction_failures: Counter[str] = Counter()
     recent_runs: list[dict[str, Any]] = []
-    for job in jobs[:5]:
+    target_statuses: list[dict[str, Any]] = []
+    target_seen: set[str] = set()
+    for item in run_items:
+        if item.status not in {"failed", "error"}:
+            continue
+        case_key = str(item.case_key)
+        failure_hotspots[case_key] += 1
+        instruction_failures[str(item.instruction_name)] += 1
+        failure_hotspot_meta.setdefault(
+            case_key,
+            {
+                "case_key": case_key,
+                "instruction_name": item.instruction_name,
+                "latest_failure_reason": item.failure_reason,
+            },
+        )
+
+    for job in jobs[:8]:
         detail = _serialize_plc_run(job, runs.get(job.id))
+        payload_json = detail.get("payload_json") or {}
         recent_runs.append(
             {
                 "id": detail["id"],
                 "status": detail["status"],
                 "plc_suite_id": detail["plc_suite_id"],
+                "suite_title": payload_json.get("suite_title"),
+                "target_key": detail.get("target_key"),
                 "summary": detail.get("summary", {}),
                 "created_at": detail.get("created_at"),
+                "started_at": detail.get("started_at"),
+                "finished_at": detail.get("finished_at"),
             }
         )
-        items = list_plc_run_items(session, run_id=job.id)
-        if items:
-            for item in items:
-                if item.get("status") in {"failed", "error"}:
-                    failure_hotspots[str(item.get("case_key"))] += 1
-        else:
-            result_json = detail.get("result_json") or {}
-            if isinstance(result_json, dict):
-                for item in result_json.get("items", []):
-                    if item.get("status") in {"failed", "error"}:
-                        failure_hotspots[str(item.get("case_key"))] += 1
+        run = runs.get(job.id)
+        if run is None or run.target_key in target_seen:
+            continue
+        target_seen.add(run.target_key)
+        target_statuses.append(
+            {
+                "target_key": run.target_key,
+                "status": detail["status"],
+                "suite_id": run.suite_id,
+                "created_at": detail.get("created_at"),
+                "summary": detail.get("summary", {}),
+            }
+        )
     return {
         "suite_count": len(suites),
         "run_count": len(jobs),
@@ -344,8 +399,16 @@ def get_plc_dashboard_summary() -> dict[str, Any]:
         },
         "recent_runs": recent_runs,
         "failure_hotspots": [
-            {"case_key": case_key, "count": count}
+            {
+                **failure_hotspot_meta.get(case_key, {"case_key": case_key}),
+                "count": count,
+            }
             for case_key, count in failure_hotspots.most_common(5)
+        ],
+        "target_statuses": target_statuses,
+        "instruction_failure_stats": [
+            {"instruction_name": instruction_name, "count": count}
+            for instruction_name, count in instruction_failures.most_common(5)
         ],
     }
 
