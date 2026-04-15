@@ -142,7 +142,7 @@ def get_plc_testcase(testcase_id: str) -> dict[str, Any]:
 def enqueue_plc_test_run(request: PLCTestRunRequest) -> dict[str, Any]:
     with Session(get_engine()) as session:
         try:
-            validate_plc_target(session, target_key=request.target_key)
+            target = validate_plc_target(session, target_key=request.target_key)
             suite, payload, selected_cases = create_plc_job_payload(
                 session,
                 suite_id=request.suite_id,
@@ -160,6 +160,7 @@ def enqueue_plc_test_run(request: PLCTestRunRequest) -> dict[str, Any]:
         )
         payload["backing_job_id"] = job.id
         payload["run_id"] = job.id
+        payload["target_snapshot"] = target
         job.payload_json = payload
         ensure_plc_testcase_records(
             session,
@@ -170,7 +171,9 @@ def enqueue_plc_test_run(request: PLCTestRunRequest) -> dict[str, Any]:
             session,
             run_id=job.id,
             suite_id=suite.id,
+            suite_title=suite.title,
             target_key=request.target_key,
+            target_snapshot=target,
             backing_job_id=job.id,
             cases=selected_cases,
         )

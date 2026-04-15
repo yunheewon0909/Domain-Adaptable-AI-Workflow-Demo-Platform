@@ -21,6 +21,7 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
 
     assert "datasets" in inspector.get_table_names()
     assert "plc_test_suites" in inspector.get_table_names()
+    assert "plc_execution_profiles" in inspector.get_table_names()
     assert "plc_testcases" in inspector.get_table_names()
     assert "plc_test_runs" in inspector.get_table_names()
     assert "plc_test_run_items" in inspector.get_table_names()
@@ -54,6 +55,20 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "definition_json",
     }.issubset(plc_suite_columns)
 
+    plc_execution_profile_columns = {
+        column["name"] for column in inspector.get_columns("plc_execution_profiles")
+    }
+    assert {
+        "key",
+        "memory_profile_key",
+        "instruction_name",
+        "input_type",
+        "output_type",
+        "timeout_policy_json",
+        "setup_requirements_json",
+        "address_contract_json",
+    }.issubset(plc_execution_profile_columns)
+
     plc_testcase_columns = {
         column["name"] for column in inspector.get_columns("plc_testcases")
     }
@@ -67,6 +82,7 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "expected_output_json",
         "expected_outputs_json",
         "tags_json",
+        "execution_profile_key",
         "is_active",
     }.issubset(plc_testcase_columns)
 
@@ -78,6 +94,10 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "suite_id",
         "target_key",
         "backing_job_id",
+        "request_schema_version",
+        "executor_mode",
+        "validator_version",
+        "target_snapshot_json",
         "status",
         "total_count",
         "queued_count",
@@ -95,6 +115,14 @@ def test_alembic_upgrade_adds_datasets_workflow_and_plc_domain_tables(
         "run_id",
         "testcase_id",
         "case_key",
+        "input_type",
+        "output_type",
+        "timeout_ms",
+        "expected_outcome",
+        "memory_profile_key",
+        "execution_profile_key",
+        "inputs_json",
+        "request_context_json",
         "status",
         "validator_result_json",
         "executor_log",

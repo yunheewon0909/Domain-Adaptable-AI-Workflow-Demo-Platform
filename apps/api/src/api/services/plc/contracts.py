@@ -17,6 +17,8 @@ class PLCTestCaseModel(BaseModel):
     expected_output_json: Any
     expected_outputs_json: list[Any]
     memory_profile_key: str | None = None
+    execution_profile_key: str | None = None
+    execution_profile: PLCExecutionProfileModel | None = None
     description: str | None = None
     tags: list[str] = Field(default_factory=list)
     timeout_ms: int = Field(default=3000, ge=1)
@@ -31,6 +33,70 @@ class PLCTestSuiteDefinitionModel(BaseModel):
     schema_version: Literal["plc-suite.v1"] = "plc-suite.v1"
     cases: list[PLCTestCaseModel]
     warnings: list[str] = Field(default_factory=list)
+
+
+class PLCExecutionTimeoutPolicyModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_timeout_ms: int = Field(default=3000, ge=1)
+    hard_timeout_ms: int | None = Field(default=None, ge=1)
+
+
+class PLCExecutionSetupRequirementsModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requires_setup: bool = False
+    requires_reset: bool = False
+    setup_notes: str | None = None
+    reset_notes: str | None = None
+
+
+class PLCExecutionProfileModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    memory_profile_key: str | None = None
+    instruction_name: str
+    input_type: str
+    output_type: str
+    profile_version: str | None = None
+    timeout_policy: PLCExecutionTimeoutPolicyModel = Field(
+        default_factory=PLCExecutionTimeoutPolicyModel
+    )
+    setup_requirements: PLCExecutionSetupRequirementsModel = Field(
+        default_factory=PLCExecutionSetupRequirementsModel
+    )
+    notes: str | None = None
+    address_contract_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class PLCTestcaseContextModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_key: str
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    source_row_number: int = Field(ge=1)
+    source_case_index: int = Field(ge=0)
+
+
+class PLCRunContextModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str | None = None
+    suite_id: str
+    suite_title: str | None = None
+
+
+class PLCTargetContextModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    display_name: str | None = None
+    executor_mode: str | None = None
+    environment_label: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class PLCTestSuiteSummaryModel(BaseModel):
@@ -52,7 +118,7 @@ class PLCTestSuiteDetailModel(PLCTestSuiteSummaryModel):
 class PLCExecutionRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["plc-execution-request.v1"] = "plc-execution-request.v1"
+    schema_version: Literal["plc-execution-request.v2"] = "plc-execution-request.v2"
     testcase_id: str
     instruction: str
     input_type: str
@@ -61,10 +127,14 @@ class PLCExecutionRequestModel(BaseModel):
     expected: Any
     expected_outcome: Literal["pass", "fail"] = "pass"
     memory_profile_key: str | None = None
+    execution_profile_key: str | None = None
+    execution_profile: PLCExecutionProfileModel | None = None
     timeout_ms: int = Field(default=3000, ge=1)
     target_key: str | None = None
-    testcase_metadata: dict[str, Any] = Field(default_factory=dict)
-    execution_context: dict[str, Any] = Field(default_factory=dict)
+    testcase_context: PLCTestcaseContextModel | None = None
+    run_context: PLCRunContextModel | None = None
+    target_context: PLCTargetContextModel | None = None
+    extension_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class PLCIOMemoryValueModel(BaseModel):
@@ -112,6 +182,14 @@ class PLCTestRunItemModel(BaseModel):
     case_key: str
     instruction_name: str
     status: Literal["passed", "failed", "error"]
+    input_type: str | None = None
+    output_type: str | None = None
+    timeout_ms: int = Field(default=3000, ge=1)
+    expected_outcome: Literal["pass", "fail"] = "pass"
+    memory_profile_key: str | None = None
+    execution_profile_key: str | None = None
+    inputs_json: list[Any] = Field(default_factory=list)
+    request_context_json: dict[str, Any] = Field(default_factory=dict)
     expected_output_json: Any = None
     actual_output_json: Any = None
     validator_result_json: dict[str, Any]
@@ -135,3 +213,6 @@ class PLCTestRunResultModel(BaseModel):
     error_count: int
     items: list[PLCTestRunItemModel]
     warnings: list[str] = Field(default_factory=list)
+
+
+PLCTestCaseModel.model_rebuild()

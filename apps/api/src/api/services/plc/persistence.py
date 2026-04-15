@@ -16,6 +16,7 @@ from api.models import (
 )
 from api.services.jobs import to_iso
 from api.services.plc.contracts import PLCTestCaseModel, PLCTestRunResultModel
+from api.services.plc.profiles import list_execution_profile_models
 
 
 STUB_LOCAL_TARGET = {
@@ -23,7 +24,12 @@ STUB_LOCAL_TARGET = {
     "display_name": "Stub Local",
     "description": "Deterministic in-repo stub executor target for PLC test reviews.",
     "executor_mode": "stub",
-    "metadata_json": {},
+    "metadata_json": {
+        "environment_label": "stub-lab",
+        "tags": ["stub", "local", "demo"],
+        "line": "simulation",
+        "bench": "virtual",
+    },
     "is_active": True,
     "created_at": None,
     "updated_at": None,
@@ -48,7 +54,9 @@ def create_plc_run(
     *,
     run_id: str,
     suite_id: str,
+    suite_title: str,
     target_key: str,
+    target_snapshot: dict[str, Any],
     backing_job_id: str,
     cases: list[PLCTestCaseModel],
 ) -> PLCTestRunRecord:
@@ -57,6 +65,10 @@ def create_plc_run(
         suite_id=suite_id,
         target_key=target_key,
         backing_job_id=backing_job_id,
+        request_schema_version="plc-execution-request.v2",
+        executor_mode=str(target_snapshot.get("executor_mode") or ""),
+        validator_version="exact-match.v1",
+        target_snapshot_json=target_snapshot,
         status="queued",
         total_count=len(cases),
         queued_count=len(cases),
@@ -75,6 +87,45 @@ def create_plc_run(
                 case_key=case.case_key,
                 instruction_name=case.instruction_name,
                 status="queued",
+                input_type=case.input_type,
+                output_type=case.output_type,
+                timeout_ms=case.timeout_ms,
+                expected_outcome=case.expected_outcome,
+                memory_profile_key=case.memory_profile_key,
+                execution_profile_key=case.execution_profile_key,
+                inputs_json=case.input_vector_json,
+                request_context_json={
+                    "run_context": {
+                        "run_id": run_id,
+                        "suite_id": suite_id,
+                        "suite_title": suite_title,
+                    },
+                    "testcase_context": {
+                        "case_key": case.case_key,
+                        "description": case.description,
+                        "tags": case.tags,
+                        "source_row_number": case.source_row_number,
+                        "source_case_index": case.source_case_index,
+                    },
+                    "target_context": {
+                        "key": target_snapshot.get("key", target_key),
+                        "display_name": target_snapshot.get("display_name"),
+                        "executor_mode": target_snapshot.get("executor_mode"),
+                        "environment_label": (
+                            target_snapshot.get("metadata_json") or {}
+                        ).get("environment_label"),
+                        "tags": (
+                            (target_snapshot.get("metadata_json") or {}).get("tags")
+                            or []
+                        ),
+                        "metadata_json": target_snapshot.get("metadata_json") or {},
+                    },
+                    "execution_profile": (
+                        case.execution_profile.model_dump(mode="json")
+                        if case.execution_profile is not None
+                        else None
+                    ),
+                },
                 expected_output_json=case.expected_output_json,
                 actual_output_json=None,
                 validator_result_json={},
@@ -149,9 +200,12 @@ def persist_plc_run_result(
     finished_at = datetime.now(timezone.utc)
     run.started_at = run.started_at or finished_at
     run.finished_at = finished_at
+    run.request_schema_version = "plc-execution-request.v2"
     run.total_count = result.total_count
     run.queued_count = 0
     run.running_count = 0
+    run.executor_mode = result.executor_mode
+    run.validator_version = result.validator_version
     run.passed_count = result.passed_count
     run.failed_count = result.failed_count
     run.error_count = result.error_count
@@ -173,6 +227,14 @@ def persist_plc_run_result(
                 case_key=result_item.case_key,
                 instruction_name=result_item.instruction_name,
                 status=result_item.status,
+                input_type=result_item.input_type,
+                output_type=result_item.output_type,
+                timeout_ms=result_item.timeout_ms,
+                expected_outcome=result_item.expected_outcome,
+                memory_profile_key=result_item.memory_profile_key,
+                execution_profile_key=result_item.execution_profile_key,
+                inputs_json=result_item.inputs_json,
+                request_context_json=result_item.request_context_json,
                 expected_output_json=result_item.expected_output_json,
                 actual_output_json=result_item.actual_output_json,
                 validator_result_json=result_item.validator_result_json,
@@ -184,6 +246,14 @@ def persist_plc_run_result(
             )
             session.add(item)
         else:
+            item.input_type = result_item.input_type
+            item.output_type = result_item.output_type
+            item.timeout_ms = result_item.timeout_ms
+            item.expected_outcome = result_item.expected_outcome
+            item.memory_profile_key = result_item.memory_profile_key
+            item.execution_profile_key = result_item.execution_profile_key
+            item.inputs_json = result_item.inputs_json
+            item.request_context_json = result_item.request_context_json
             item.status = result_item.status
             item.expected_output_json = result_item.expected_output_json
             item.actual_output_json = result_item.actual_output_json
@@ -264,6 +334,14 @@ def list_plc_run_items(session: Session, *, run_id: str) -> list[dict[str, Any]]
             "case_key": item.case_key,
             "instruction_name": item.instruction_name,
             "status": item.status,
+            "input_type": item.input_type,
+            "output_type": item.output_type,
+            "timeout_ms": item.timeout_ms,
+            "expected_outcome": item.expected_outcome,
+            "memory_profile_key": item.memory_profile_key,
+            "execution_profile_key": item.execution_profile_key,
+            "inputs_json": item.inputs_json or [],
+            "request_context_json": item.request_context_json,
             "expected_output_json": item.expected_output_json,
             "actual_output_json": item.actual_output_json,
             "validator_result_json": item.validator_result_json,
@@ -446,6 +524,10 @@ def get_testcase_models_for_suite(
             PLCTestCaseRecord.id.asc(),
         )
     ).all()
+    execution_profiles = list_execution_profile_models(
+        session,
+        keys=[record.execution_profile_key or "" for record in records],
+    )
     return [
         PLCTestCaseModel(
             id=record.id,
@@ -457,6 +539,12 @@ def get_testcase_models_for_suite(
             expected_output_json=record.expected_output_json,
             expected_outputs_json=record.expected_outputs_json,
             memory_profile_key=record.memory_profile_key,
+            execution_profile_key=record.execution_profile_key,
+            execution_profile=(
+                execution_profiles.get(record.execution_profile_key)
+                if record.execution_profile_key is not None
+                else None
+            ),
             description=record.description,
             tags=record.tags_json,
             timeout_ms=record.timeout_ms,

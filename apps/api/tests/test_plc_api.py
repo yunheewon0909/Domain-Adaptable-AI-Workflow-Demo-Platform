@@ -63,6 +63,8 @@ def test_plc_import_and_query_happy_path(client) -> None:
     assert testcases[0]["testcase_key"] == testcases[0]["id"]
     assert testcases[0]["instruction_name"] == "add"
     assert testcases[0]["is_active"] is True
+    assert testcases[0]["execution_profile_key"] == "ls-add-lword-v1"
+    assert testcases[0]["execution_profile"]["memory_profile_key"] == "ls_add_lword_v1"
 
 
 def test_plc_import_supports_xlsx(client) -> None:
@@ -130,6 +132,11 @@ def test_plc_run_and_detail_endpoints(client) -> None:
     assert run_items_response.status_code == 200
     assert len(run_items_response.json()) == 2
     assert run_items_response.json()[0]["status"] == "queued"
+    assert run_items_response.json()[0]["execution_profile_key"] == "ls-add-lword-v1"
+    assert (
+        run_items_response.json()[0]["request_context_json"]["run_context"]["suite_id"]
+        == suite_id
+    )
 
     run_item_detail_response = client.get(
         f"/plc-test-runs/{run_id}/items/{run_items_response.json()[0]['id']}"
@@ -162,6 +169,7 @@ def test_plc_run_and_detail_endpoints(client) -> None:
 
     single_case_response = client.get(f"/plc-testcases/{cases[0]['id']}")
     assert single_case_response.status_code == 200
+    assert single_case_response.json()["execution_profile"]["key"] == "ls-add-lword-v1"
 
 
 def test_plc_dashboard_summary_endpoint(client) -> None:

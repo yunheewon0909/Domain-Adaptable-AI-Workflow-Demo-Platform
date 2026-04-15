@@ -141,6 +141,41 @@ class PLCTestSuiteRecord(Base):
     )
 
 
+class PLCTestExecutionProfileRecord(Base):
+    __tablename__ = "plc_execution_profiles"
+    __table_args__ = (
+        Index("ix_plc_execution_profiles_memory_profile_key", "memory_profile_key"),
+        Index("ix_plc_execution_profiles_instruction_name", "instruction_name"),
+        Index("ix_plc_execution_profiles_is_active", "is_active"),
+    )
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    memory_profile_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    instruction_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    input_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    profile_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    timeout_policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    setup_requirements_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address_contract_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class PLCTestCaseRecord(Base):
     __tablename__ = "plc_testcases"
     __table_args__ = (
@@ -172,6 +207,9 @@ class PLCTestCaseRecord(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     memory_profile_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    execution_profile_key: Mapped[str | None] = mapped_column(
+        String(255), ForeignKey("plc_execution_profiles.key"), nullable=True
+    )
     timeout_ms: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("3000")
     )
@@ -269,6 +307,14 @@ class PLCTestRunRecord(Base):
     backing_job_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("jobs.id"), nullable=False
     )
+    request_schema_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    executor_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    validator_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     total_count: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
@@ -323,6 +369,20 @@ class PLCTestRunItemRecord(Base):
     case_key: Mapped[str] = mapped_column(String(128), nullable=False)
     instruction_name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    timeout_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3000")
+    )
+    expected_outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pass'")
+    )
+    memory_profile_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    execution_profile_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    inputs_json: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    request_context_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     expected_output_json: Mapped[Any] = mapped_column(JSON, nullable=False)
     actual_output_json: Mapped[Any] = mapped_column(JSON, nullable=True)
     validator_result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

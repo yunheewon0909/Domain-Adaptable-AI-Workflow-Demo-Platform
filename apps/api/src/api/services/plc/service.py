@@ -24,6 +24,11 @@ from api.services.plc.persistence import (
     get_testcase_models_for_suite,
     resolve_plc_target,
 )
+from api.services.plc.profiles import (
+    attach_execution_profile,
+    ensure_execution_profiles,
+    list_execution_profile_models,
+)
 
 
 class PLCImportError(RuntimeError):
@@ -276,9 +281,11 @@ def _suite_definition_with_ids(
     suite_id: str, cases: list[dict[str, Any]], warnings: list[str]
 ) -> PLCTestSuiteDefinitionModel:
     materialized_cases = [
-        PLCTestCaseModel(
-            id=f"{suite_id}::{case['case_key']}",
-            **case,
+        attach_execution_profile(
+            PLCTestCaseModel(
+                id=f"{suite_id}::{case['case_key']}",
+                **case,
+            )
         )
         for case in cases
     ]
@@ -315,6 +322,7 @@ def _case_model_to_record(
         description=case.description,
         tags_json=case.tags,
         memory_profile_key=case.memory_profile_key,
+        execution_profile_key=case.execution_profile_key,
         timeout_ms=case.timeout_ms,
         source_row_number=case.source_row_number,
         source_case_index=case.source_case_index,
@@ -324,7 +332,10 @@ def _case_model_to_record(
 
 
 def _serialize_testcase_record(
-    record: PLCTestCaseRecord, *, suite_title: str | None = None
+    record: PLCTestCaseRecord,
+    *,
+    suite_title: str | None = None,
+    execution_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": record.id,
@@ -339,6 +350,8 @@ def _serialize_testcase_record(
         "expected_output_json": record.expected_output_json,
         "expected_outputs_json": record.expected_outputs_json,
         "memory_profile_key": record.memory_profile_key,
+        "execution_profile_key": record.execution_profile_key,
+        "execution_profile": execution_profile,
         "description": record.description,
         "tags": record.tags_json,
         "timeout_ms": record.timeout_ms,
@@ -365,6 +378,7 @@ def _record_to_case_model(record: PLCTestCaseRecord) -> PLCTestCaseModel:
         expected_output_json=record.expected_output_json,
         expected_outputs_json=record.expected_outputs_json,
         memory_profile_key=record.memory_profile_key,
+        execution_profile_key=record.execution_profile_key,
         description=record.description,
         tags=record.tags_json,
         timeout_ms=record.timeout_ms,
@@ -380,6 +394,7 @@ def ensure_plc_testcase_records(
     suite_id: str,
     cases: list[PLCTestCaseModel],
 ) -> None:
+    ensure_execution_profiles(session, cases=cases)
     existing_case_ids = set(
         session.scalars(
             select(PLCTestCaseRecord.id).where(PLCTestCaseRecord.suite_id == suite_id)
@@ -430,6 +445,7 @@ def import_plc_suite(
         updated_at=datetime.now(timezone.utc),
     )
     session.add(suite)
+    ensure_execution_profiles(session, cases=suite_definition.cases)
     session.add_all(
         [_case_model_to_record(suite.id, case) for case in suite_definition.cases]
     )
@@ -501,6 +517,10 @@ def flatten_cases(
     ).all()
     if cases:
         suite_ids = sorted({case.suite_id for case in cases})
+        execution_profiles = list_execution_profile_models(
+            session,
+            keys=[case.execution_profile_key or "" for case in cases],
+        )
         suite_map = {
             suite.id: suite
             for suite in session.scalars(
@@ -516,6 +536,13 @@ def flatten_cases(
                 _serialize_testcase_record(
                     case,
                     suite_title=suite.title if suite is not None else None,
+                    execution_profile=(
+                        execution_profiles[case.execution_profile_key].model_dump(
+                            mode="json"
+                        )
+                        if case.execution_profile_key in execution_profiles
+                        else None
+                    ),
                 )
             )
         return items

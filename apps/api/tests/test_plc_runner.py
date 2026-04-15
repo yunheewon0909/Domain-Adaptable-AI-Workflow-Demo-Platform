@@ -228,5 +228,9 @@ def test_execute_plc_job_marks_executor_failed_status_as_item_error(
     assert result["failed_count"] == 0
     assert result["items"][0]["status"] == "error"
     assert (
+        result["items"][0]["request_context_json"]["target_context"]["key"]
+        == "stub-local"
+    )
+    assert (
         result["items"][0]["validator_result_json"]["validator"] == "executor-status.v1"
     )

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from api.db import get_engine
 from api.models import (
     PLCTestCaseRecord,
+    PLCTestExecutionProfileRecord,
     PLCTestRunIOLogRecord,
     PLCTestRunItemRecord,
     PLCTestRunRecord,
@@ -46,10 +47,13 @@ def test_import_plc_suite_expands_multiple_cases_from_single_csv_row(client) -> 
         "ADD_003",
     ]
     assert suite.definition_json.cases[0].memory_profile_key == "ls_add_lword_v1"
+    assert suite.definition_json.cases[0].execution_profile_key == "ls-add-lword-v1"
+    assert suite.definition_json.cases[0].execution_profile is not None
     assert suite.definition_json.cases[0].tags == ["smoke", "math"]
 
     with Session(get_engine()) as session:
         persisted_cases = session.query(PLCTestCaseRecord).all()
+        persisted_profiles = session.query(PLCTestExecutionProfileRecord).all()
 
     assert [case.id for case in persisted_cases] == [
         "plc-suite-1::ADD_001",
@@ -58,6 +62,10 @@ def test_import_plc_suite_expands_multiple_cases_from_single_csv_row(client) -> 
     ]
     assert persisted_cases[0].suite_id == suite.id
     assert persisted_cases[0].tags_json == ["smoke", "math"]
+    assert persisted_cases[0].execution_profile_key == "ls-add-lword-v1"
+    assert len(persisted_profiles) == 1
+    assert persisted_profiles[0].key == "ls-add-lword-v1"
+    assert persisted_profiles[0].timeout_policy_json["default_timeout_ms"] == 3000
 
 
 def test_import_plc_suite_reads_xlsx(tmp_path: Path, client) -> None:
@@ -194,7 +202,14 @@ def test_execute_plc_job_persists_relational_run_results(client) -> None:
             session,
             run_id="7",
             suite_id=suite.id,
+            suite_title=suite.title,
             target_key="stub-local",
+            target_snapshot={
+                "key": "stub-local",
+                "display_name": "Stub Local",
+                "executor_mode": "stub",
+                "metadata_json": {"environment_label": "stub-lab", "tags": ["stub"]},
+            },
             backing_job_id="7",
             cases=suite.definition_json.cases,
         )
@@ -232,8 +247,14 @@ def test_execute_plc_job_persists_relational_run_results(client) -> None:
     assert run.total_count == 2
     assert run.passed_count == 1
     assert run.failed_count == 1
+    assert run.request_schema_version == "plc-execution-request.v2"
+    assert run.executor_mode == "stub"
+    assert run.target_snapshot_json["key"] == "stub-local"
     assert len(run_items) == 2
     assert {item.status for item in run_items} == {"passed", "failed"}
+    assert run_items[0].execution_profile_key == "ls-add-lword-v1"
+    assert run_items[0].input_type == "LWORD"
+    assert run_items[0].request_context_json["run_context"]["suite_id"] == suite.id
     assert io_logs
 
 
@@ -264,6 +285,8 @@ def test_flatten_cases_prefers_relational_rows_over_definition_json(client) -> N
         )
 
     assert flattened[0]["expected_output_json"] == 99
+    assert flattened[0]["execution_profile_key"] == "add--lword--lword"
+    assert flattened[0]["execution_profile"]["instruction_name"] == "add"
     assert selected_cases[0].expected_output_json == 99
     assert payload["testcases"][0]["expected_output_json"] == 99
 
