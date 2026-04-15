@@ -2,6 +2,32 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.5.0] - 2026-04-15
+
+### Added
+
+- `plc_execution_profiles` plus testcase linkage so execution metadata is explicit before any real native adapter work
+- PLC run and run-item request snapshots covering execution profile, target context, and reviewable request metadata
+- normalized target metadata with environment, line, bench, and tags surfaced through `/plc-targets`
+- richer PLC dashboard summary data for target status and instruction failure concentration
+- `payload_schema_version` on persisted PLC LLM suggestions plus `suggestion_type` filtering
+- explicit `case_source` and `testcase_source` markers so relational vs fallback review paths are visible
+
+### Changed
+
+- PLC execution request envelopes moved from loose metadata dicts toward typed run/testcase/target context fields
+- PLC reviewer UI now supports suite-scoped dashboard refresh, richer testcase filters, target-aware run filters, stronger run drill-down, and sequence-oriented I/O review without leaving the static co-hosted shell
+- PLC target validation now rejects non-object target metadata before queue rows are written
+- persisted PLC suggestion reviews are now immutable once they leave `pending`, keeping accepted/rejected artifacts reviewable instead of silently mutable
+- README, architecture docs, skeleton/service notes, and package versions now describe the new execution profile scaffolding, target normalization, fallback markers, and reviewer hardening
+- workspace and app versions bumped from `0.4.0` to `0.5.0`
+
+### Notes
+
+- deterministic validation remains the only final pass/fail authority
+- native PLC execution is still not implemented in-repo; this milestone hardens the model, review UX, and fallback boundaries before any private adapter work
+- persisted LLM suggestions remain review artifacts only and are not auto-applied to testcase masters
+
 ## [0.4.0] - 2026-04-12
 
 ### Added

@@ -4,6 +4,8 @@
 
 This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, and it now also includes a **DB-centered PLC test automation platform slice** that imports Excel/CSV test suites, materializes testcase masters into relational tables, validates targets before queueing runs, hardens a future CLI executor seam, persists reviewable LLM suggestions, records run items plus raw I/O, and exposes results through API plus a co-hosted reviewer UI.
 
+The current milestone is best understood as **v0.5.0: an operational preparation release before any real native PLC adapter integration**. The repo still does not include private C++ assets or live PLC bindings, but it now makes execution metadata, target metadata, reviewer drill-down, and fallback boundaries much more explicit and reviewable.
+
 The key message of the repo is now twofold:
 
 - **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
@@ -28,6 +30,12 @@ Included in the current milestone:
 - persisted reviewable PLC normalization suggestions
 - dashboard summary API for recent runs, queue stats, and failure hotspots
 - expanded `/demo` reviewer surface for PLC import, run, filter, suggestion review, and drill-down
+- execution profile registry scaffolding linked from testcase masters
+- persisted request/run snapshots on PLC runs and run items for reviewability
+- normalized target metadata for environment/line/bench/tag review without storing secrets
+- reviewer dashboard summaries for recent runs, target status, and instruction failure concentration
+- suggestion payload schema versioning plus `suggestion_type` filtering for persisted review artifacts
+- explicit `case_source` / `testcase_source` markers so definition-json fallback is visible instead of implicit
 
 Out of scope for this milestone:
 
@@ -99,6 +107,7 @@ This repo intentionally uses **directory separation instead of long-lived branch
 ## PLC Relational Model
 
 - `plc_test_suites`: import header and provenance snapshot (`definition_json` retained for provenance, compatibility fallback, and rollback)
+- `plc_execution_profiles`: execution profile registry that keeps future adapter-facing metadata non-secret but explicit
 - `plc_testcases`: relational testcase master rows expanded from spreadsheet input
 - `plc_test_runs`: PLC domain run header linked 1:1 to the backing queue job
 - `plc_test_run_items`: testcase-level execution and validation records
@@ -243,6 +252,8 @@ Dashboard summary:
 
 ```bash
 curl -sS http://127.0.0.1:8000/plc-dashboard/summary
+curl -sS "http://127.0.0.1:8000/plc-dashboard/summary?suite_id=plc-suite-1"
+curl -sS "http://127.0.0.1:8000/plc-test-runs?suite_id=plc-suite-1&target_key=stub-local&status=succeeded&failed_only=true"
 ```
 
 ## Reviewer UI
@@ -286,10 +297,14 @@ Current request envelope fields:
 - `expected`
 - `expected_outcome`
 - `memory_profile_key`
+- `execution_profile_key`
+- `execution_profile`
 - `timeout_ms`
 - `target_key`
-- `testcase_metadata`
-- `execution_context`
+- `testcase_context`
+- `run_context`
+- `target_context`
+- `extension_json`
 
 Current result envelope fields:
 
@@ -308,10 +323,23 @@ Current result envelope fields:
 
 This is the compatibility point for reusing existing C++ PLC execution assets without rewriting the surrounding platform.
 
+### Execution metadata and memory profile preparation
+
+The repo still does **not** contain private PLC addresses, commands, or native execution scripts. Instead, it now exposes the structure those contracts will eventually attach to:
+
+- testcase masters retain `memory_profile_key`
+- testcase masters link to `plc_execution_profiles`
+- execution profiles make `instruction_name`, `input_type`, `output_type`, timeout policy, setup/reset placeholders, notes, and future address-contract placeholders explicit
+- queued PLC runs snapshot the normalized target metadata and request schema version
+- run items persist enough request context to explain what was executed without making the fallback JSON or the LLM layer the source of truth
+
+That means the repo is now prepared for future adapter binding work while still staying fully deterministic and non-secret today.
+
 ### Target registry rules
 
 - `/plc-targets` always exposes a runnable `stub-local` target for the deterministic in-repo executor
 - `POST /plc-test-runs` now validates that the requested target exists, is active, and matches the configured executor mode before queue rows are created
+- target metadata is normalized into a review-friendly shape (`environment_label`, `line`, `bench`, `tags`, extra non-secret attributes)
 - target metadata remains non-secret and mock-friendly in this repo; credentials and live PLC connection details are still out of scope
 
 ## LLM Assist Boundary
@@ -363,6 +391,7 @@ Review persisted suggestions:
 
 ```bash
 curl -sS http://127.0.0.1:8000/plc-llm/suggestions
+curl -sS "http://127.0.0.1:8000/plc-llm/suggestions?suite_id=plc-suite-1&status=pending&suggestion_type=normalization"
 curl -sS http://127.0.0.1:8000/plc-llm/suggestions/<id>
 curl -sS -X POST http://127.0.0.1:8000/plc-llm/suggestions/<id>/review \
   -H "Content-Type: application/json" \
@@ -370,6 +399,14 @@ curl -sS -X POST http://127.0.0.1:8000/plc-llm/suggestions/<id>/review \
 ```
 
 This remains a reviewable artifact flow, not a production LLM decision-maker and not an automatic testcase mutation path.
+
+Persisted suggestions now also carry a payload schema version, keep canonical `suggestion_type` values, and support list filtering by `suite_id`, `testcase_id`, `status`, and `suggestion_type`.
+
+Review flow is intentionally narrow:
+
+- `pending -> accepted`
+- `pending -> rejected`
+- once a suggestion leaves `pending`, it remains a review artifact and is not auto-applied to testcase masters
 
 ## Testing
 
@@ -410,9 +447,21 @@ uv run --project apps/worker pytest -q \
   apps/worker/tests/test_plc_job_processing.py
 ```
 
+## Reviewer UI
+
+The co-hosted `/demo` surface still stays inside the existing static shell, but the PLC mode is now much closer to an operational reviewer:
+
+- suite-scoped or all-suite dashboard refresh
+- target status and instruction failure profile panels
+- testcase filters for instruction, input type, expected outcome, and saved suggestion state
+- target-aware run filters with failed/problem-only drill-down
+- richer run detail panels with target context, request payloads, validator payloads, executor logs, and sequence-oriented I/O timelines
+
+The original workflow reviewer mode is still preserved.
+
 ## Current Limitations
 
-- suite provenance still remains duplicated in `plc_test_suites.definition_json`, but relational testcase rows now drive normal list and run selection flows; partial relational drift is treated as an error during run enqueue instead of silently falling back
+- suite provenance still remains duplicated in `plc_test_suites.definition_json`, but relational testcase rows now drive normal list and run selection flows; fallback now stays explicit through `case_source` / `testcase_source`, and partial relational drift is treated as an error during run enqueue instead of silently falling back
 - target registry is still intentionally lightweight, even though queue-time validation now enforces active and executor-compatible targets
 - no auth or multi-user review flow
 - no browser-side spreadsheet mapping wizard
@@ -428,6 +477,7 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.2.0`: PLC suite import + queue-backed deterministic run MVP
 - `v0.3.0`: relational PLC testcase/run persistence + stronger reviewer drill-down
 - `v0.4.0`: versioned CLI contract, active target validation, relational-first suite review boundaries, persisted suggestion review flow, and richer PLC reviewer filters/drill-down
-- next likely milestone: `v0.4.x` for narrower hardening work or `v0.5.0` once a real native adapter and broader operational controls land
+- `v0.5.0`: execution profile scaffolding, normalized target metadata, reviewer/dashboard hardening, typed suggestion review artifacts, and explicit fallback markers before native adapter work
+- next likely milestone: `v0.5.x` for narrower hardening work or `v0.6.0` once a real native adapter and broader operational controls land
 
 See `CHANGELOG.md` for the current milestone notes.

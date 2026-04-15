@@ -35,6 +35,7 @@ The worker claims queued rows from Postgres, then dispatches runner modules via 
 The PLC slice now adds:
 
 - `plc_test_suites` for suite headers and import provenance snapshots
+- `plc_execution_profiles` for execution profile registry scaffolding
 - `plc_testcases` for relational testcase master rows
 - `plc_test_runs` for PLC run headers linked to queue jobs
 - `plc_test_run_items` for testcase-level execution results
@@ -45,17 +46,17 @@ The PLC slice now adds:
 - deterministic executor seam under `api.services.plc`, with a versioned future CLI contract
 - exact-match validator logic inside the PLC runner path
 
-The current architecture is intentionally hybrid: relational tables now hold the primary PLC review data, while `plc_test_suites.definition_json` and `jobs.result_json` remain as compatibility/provenance snapshots during the migration away from the compact JSON-only MVP. `definition_json` is now explicitly narrower: it remains suite provenance plus a compatibility fallback only when relational testcase rows are missing. Partial relational drift is treated as an operational error during run creation rather than a silent fallback case.
+The current architecture is intentionally hybrid: relational tables now hold the primary PLC review data, while `plc_test_suites.definition_json` and `jobs.result_json` remain as compatibility/provenance snapshots during the migration away from the compact JSON-only MVP. `definition_json` is now explicitly narrower: it remains suite provenance plus a compatibility fallback only when relational testcase rows are missing. Partial relational drift is treated as an operational error during run creation rather than a silent fallback case, and the fallback path is now surfaced explicitly through `case_source` / `testcase_source` markers instead of being hidden.
 
 ## PLC Flow
 
 1. User uploads CSV/XLSX suite
-2. Import service normalizes rows into suite JSON, stores suite provenance in `plc_test_suites`, and writes relational testcase rows into `plc_testcases`
+2. Import service normalizes rows into suite JSON, stores suite provenance in `plc_test_suites`, materializes execution profile scaffolding in `plc_execution_profiles`, and writes relational testcase rows into `plc_testcases`
 3. User creates a PLC run for a suite or testcase subset
 4. API inserts a `plc_test_run` row into `jobs` and materializes matching `plc_test_runs` plus queued `plc_test_run_items`
 5. API validates that the selected target exists, is active, and matches the configured executor mode before queue rows are created
 6. Worker claims the job and dispatches `api.services.plc.job_runner`
-7. Runner loads payload, executes the stub or CLI-backed executor, validates expected vs actual outputs, and persists testcase/item results plus I/O logs into relational PLC tables
+7. Runner loads payload, executes the stub or CLI-backed executor, validates expected vs actual outputs, and persists testcase/item results plus I/O logs into relational PLC tables, including request snapshots needed for later review
 8. Preview-only or persisted LLM suggestions remain sidecar review artifacts in `plc_llm_suggestions` and do not mutate testcase masters automatically
 9. Worker keeps queue lifecycle in sync and stores a compact compatibility summary back into `jobs.result_json`
 10. `/demo` and PLC APIs read relational review records first, with compatibility fallback still available only for suites whose relational testcase rows are missing
@@ -88,10 +89,14 @@ Request envelope fields:
 - `expected`
 - `expected_outcome`
 - `memory_profile_key`
+- `execution_profile_key`
+- `execution_profile`
 - `timeout_ms`
 - `target_key`
-- `testcase_metadata`
-- `execution_context`
+- `testcase_context`
+- `run_context`
+- `target_context`
+- `extension_json`
 
 Result envelope fields:
 
@@ -110,6 +115,18 @@ Result envelope fields:
 
 The adapter treats timeout, empty stdout, invalid JSON, schema-invalid payloads, and non-zero process exits as infrastructure failures. Final testcase verdicts still belong to deterministic validator logic, not the native executor.
 
+## Execution Metadata and Target Modeling
+
+The repo still avoids private PLC adapter details, but it now models their future attachment points more clearly:
+
+- `plc_execution_profiles` keeps non-secret execution metadata such as instruction name, input/output type, timeout policy, setup/reset placeholders, notes, and future address-contract placeholders
+- testcase masters keep the familiar `memory_profile_key` while linking to an execution profile key
+- PLC run headers snapshot request schema version, executor mode, validator version, and normalized target metadata
+- PLC run items snapshot request context, input/output typing, expected outcome, and execution profile linkage
+- normalized target metadata exposes `environment_label`, `line`, `bench`, `tags`, and extra non-secret attributes while still avoiding credentials and live connection details
+
+That combination preserves the deterministic execution path while making future adapter integration much less implicit.
+
 ## LLM Assist Placement
 
 LLMs remain a sidecar capability, not a PLC control plane.
@@ -124,7 +141,7 @@ Allowed future roles:
 
 Current implemented role:
 
-- persisted normalization suggestions with explicit `pending` / `accepted` / `rejected` review state
+- persisted normalization suggestions with explicit `pending` / `accepted` / `rejected` review state, payload schema versioning, and `suggestion_type` filtering
 
 Forbidden roles:
 
