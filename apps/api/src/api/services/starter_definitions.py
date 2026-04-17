@@ -66,7 +66,7 @@ DEFAULT_STARTER = StarterDefinition(
         enabled=True,
         eyebrow="Demo-first reviewer experience",
         subtitle=(
-            "Switch between retrieval-first reviewer workflows and a PLC testing MVP that imports suites, queues deterministic runs, and exposes testcase-level results."
+            "Switch between retrieval-first workflow review, PLC testing, fine-tuning datasets and jobs, model-selectable inference, and separate RAG data management from one co-hosted reviewer shell."
         ),
     ),
     datasets=(

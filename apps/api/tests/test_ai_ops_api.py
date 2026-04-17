@@ -109,6 +109,28 @@ def test_ft_dataset_version_and_rows_flow(client: TestClient) -> None:
     assert rows_list.json()[1]["validation_status"] == "invalid"
 
 
+def test_ft_dataset_version_cannot_validate_without_rows(client: TestClient) -> None:
+    dataset_id = client.post(
+        "/ft-datasets",
+        json={
+            "name": "Empty validation demo",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+        },
+    ).json()["id"]
+    version_id = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={"version_label": "v1"},
+    ).json()["id"]
+
+    response = client.post(
+        f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+    )
+
+    assert response.status_code == 400
+    assert "at least one row" in response.json()["detail"]
+
+
 def test_training_job_model_registry_and_inference_flow(client: TestClient) -> None:
     app.dependency_overrides[get_llm_client] = lambda: FakeLLMClient()
     try:
@@ -171,6 +193,13 @@ def test_training_job_model_registry_and_inference_flow(client: TestClient) -> N
         assert len(training_detail.json()["artifacts"]) == 1
         assert len(training_detail.json()["registered_models"]) == 1
         model_id = training_detail.json()["registered_models"][0]["id"]
+        assert training_detail.json()["registered_models"][0][
+            "ollama_model_name"
+        ].startswith("placeholder::")
+        assert (
+            training_detail.json()["registered_models"][0]["serving_model_name"]
+            == "qwen2.5:7b-instruct-q4_K_M"
+        )
 
         models_response = client.get("/models")
         assert models_response.status_code == 200
@@ -185,6 +214,16 @@ def test_training_job_model_registry_and_inference_flow(client: TestClient) -> N
         assert inference_response.json()["answer"].startswith(
             "answer::generate summary"
         )
+
+        ambiguous_inference_response = client.post(
+            "/inference/run",
+            json={
+                "prompt": "generate summary",
+                "model_id": model_id,
+                "ollama_model_name": "qwen2.5:3b-instruct-q4_K_M",
+            },
+        )
+        assert ambiguous_inference_response.status_code == 400
     finally:
         app.dependency_overrides.clear()
 

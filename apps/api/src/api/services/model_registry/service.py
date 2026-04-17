@@ -55,12 +55,18 @@ def _serialize_artifact(
 def _serialize_model(
     model: ModelRegistryRecord, artifact: FTModelArtifactRecord | None
 ) -> dict[str, Any]:
+    serving_model_name = (
+        model.base_model_name
+        if model.source_type == "fine_tuned"
+        else model.ollama_model_name
+    )
     return {
         "id": model.id,
         "display_name": model.display_name,
         "source_type": model.source_type,
         "base_model_name": model.base_model_name,
         "ollama_model_name": model.ollama_model_name,
+        "serving_model_name": serving_model_name,
         "artifact_id": model.artifact_id,
         "status": model.status,
         "tags_json": model.tags_json,
@@ -366,6 +372,8 @@ def resolve_model_selection(
     ollama_model_name: str | None = None,
 ) -> dict[str, Any]:
     ensure_default_models(session)
+    if model_id and ollama_model_name:
+        raise ValueError("provide either model_id or ollama_model_name, not both")
     if model_id:
         model = session.get(ModelRegistryRecord, model_id)
         if model is None:
@@ -493,13 +501,13 @@ def complete_training_job(
         display_name=f"{dataset.name} {dataset_version.version_label}",
         source_type="fine_tuned",
         base_model_name=training_job.base_model_name,
-        ollama_model_name=training_job.base_model_name,
+        ollama_model_name=f"placeholder::{training_job.id}",
         artifact_id=artifact.id,
         status="registered",
         tags_json=["fine_tuned", dataset.task_type, training_job.training_method],
         description=(
             f"Stub fine-tuned registry entry for {dataset.name} {dataset_version.version_label}. "
-            "Inference currently routes to the configured Ollama serving model name until a real artifact import step is added."
+            "Inference currently routes to the base serving model until a real artifact import step is added."
         ),
         updated_at=now,
     )

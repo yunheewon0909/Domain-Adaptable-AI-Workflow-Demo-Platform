@@ -322,6 +322,10 @@ def set_dataset_version_status(
             FTDatasetRowRecord.dataset_version_id == version_id
         )
     ).all()
+    if normalized_status == "validated" and not rows:
+        raise ValueError(
+            "dataset version must contain at least one row before validation"
+        )
     if normalized_status == "validated" and any(
         row.validation_status != "valid" for row in rows
     ):

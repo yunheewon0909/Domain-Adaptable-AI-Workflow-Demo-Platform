@@ -110,6 +110,8 @@ def post_inference_run(
                 model_id=request.model_id,
                 ollama_model_name=request.ollama_model_name,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="model not found") from exc
         except LookupError as exc:
@@ -143,7 +145,7 @@ def post_inference_run(
         result = llm_client.generate_answer(
             question=prompt,
             context=context,
-            model=request.ollama_model_name or model["ollama_model_name"],
+            model=str(model["serving_model_name"]),
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )

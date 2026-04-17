@@ -75,7 +75,7 @@ Current limitations of the AI ops slice:
 
 - Ollama is still the serving target, not the trainer itself
 - the training path is a lightweight scaffold that produces a reviewable artifact manifest and registry entry rather than a real adapter/merged model
-- fine-tuned registry entries currently point back to the configured Ollama serving model name until a future import/publish seam is added
+- fine-tuned registry entries currently stay as reviewable placeholders and route inference back through the selected base serving model until a future import/publish seam is added
 - RAG collection management is separate from the legacy dataset-backed retrieval flow and currently emphasizes metadata/text preview plus retrieval preview rather than full collection embedding lifecycle management
 
 ## Architecture Summary
@@ -390,7 +390,7 @@ curl -sS -X POST http://127.0.0.1:8000/rag-collections \
   -d '{"name":"Maintenance docs","description":"Grounding material for local reviewer runs"}'
 
 curl -sS -X POST http://127.0.0.1:8000/rag-collections/rag-collection-1/documents \
-  -F "file=@./examples/ls-add-demo.csv;type=text/plain"
+  -F "file=@./README.md;type=text/markdown"
 
 curl -sS -X POST http://127.0.0.1:8000/rag-retrieval/preview \
   -H "Content-Type: application/json" \

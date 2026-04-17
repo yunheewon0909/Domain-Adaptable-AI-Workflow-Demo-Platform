@@ -324,7 +324,12 @@ def _sync_ft_training_job_status(
             """
             UPDATE ft_training_jobs
             SET status = CAST(:status AS VARCHAR),
+                started_at = CASE
+                    WHEN CAST(:status AS VARCHAR) = 'queued' THEN NULL
+                    ELSE started_at
+                END,
                 finished_at = CASE
+                    WHEN CAST(:status AS VARCHAR) = 'queued' THEN NULL
                     WHEN CAST(:status AS VARCHAR) IN ('succeeded', 'failed') THEN CURRENT_TIMESTAMP
                     ELSE finished_at
                 END,

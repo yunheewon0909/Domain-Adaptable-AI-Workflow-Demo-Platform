@@ -314,6 +314,62 @@ def test_worker_claims_and_processes_ft_training_job(tmp_path) -> None:
     assert training_row[2] is not None
 
 
+def test_worker_requeues_ft_training_job_and_clears_timestamps(tmp_path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'worker-ft-requeue.db'}")
+    _create_schema(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO jobs (id, type, status, payload_json, attempts, max_attempts)
+                VALUES ('9', 'ft_train_model', 'queued', '{"training_job_id":"ft-job-9"}', 0, 2)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO ft_training_jobs (
+                    id, dataset_version_id, base_model_name, training_method,
+                    hyperparams_json, status, backing_job_id, log_text
+                )
+                VALUES (
+                    'ft-job-9', 'ft-version-1', 'qwen2.5:7b-instruct-q4_K_M', 'stub_adapter',
+                    '{}', 'queued', '9', 'queued'
+                )
+                """
+            )
+        )
+
+    job = _claim_next_job(engine, job_types=("ft_train_model",))
+    assert job is not None
+    _process_claimed_job(
+        engine,
+        job,
+        runner=lambda _: (_ for _ in ()).throw(RuntimeError("training failed once")),
+    )
+
+    with engine.connect() as connection:
+        job_row = connection.execute(
+            text("SELECT status, attempts FROM jobs WHERE id = '9'")
+        ).fetchone()
+        training_row = connection.execute(
+            text(
+                "SELECT status, started_at, finished_at, log_text FROM ft_training_jobs WHERE id = 'ft-job-9'"
+            )
+        ).fetchone()
+
+    assert job_row is not None
+    assert job_row[0] == "queued"
+    assert job_row[1] == 1
+    assert training_row is not None
+    assert training_row[0] == "queued"
+    assert training_row[1] is None
+    assert training_row[2] is None
+    assert "training failed once" in str(training_row[3])
+
+
 def test_run_job_subprocess_uses_workspace_root_from_api_project_dir(
     monkeypatch, tmp_path
 ) -> None:

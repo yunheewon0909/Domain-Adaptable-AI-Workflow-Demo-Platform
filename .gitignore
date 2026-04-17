@@ -27,3 +27,5 @@ __pycache__/
 # Local RAG artifacts
 data/rag_index/
 data/chroma/
+data/model_artifacts/
+data/rag_collections/
