@@ -165,7 +165,7 @@ def get_collection(session: Session, collection_id: str) -> dict[str, Any] | Non
         .where(RAGDocumentRecord.collection_id == collection_id)
         .order_by(RAGDocumentRecord.created_at.desc(), RAGDocumentRecord.id.desc())
     ).all()
-    return _serialize_collection(collection, documents)
+    return _serialize_collection(collection, list(documents))
 
 
 def add_collection_document(

@@ -33,6 +33,7 @@ It exists to make the repository explorable and reviewable without introducing a
 - retrieval-first workflow review
 - PLC suite/run/result review
 - fine-tuning dataset and version review
+- real local training job, artifact, and publish-readiness review
 - model registry plus model-selectable inference review
 - RAG collection/document/retrieval preview review
 
@@ -55,7 +56,7 @@ The PLC service is no longer just an import-and-JSON demo. It now demonstrates a
 - review-oriented APIs and demo panels layered on top of those records
 - persisted LLM suggestion review artifacts that stay outside the deterministic execution path
 - explicit relational-first review boundaries, with `definition_json` fallback surfaced as compatibility rather than hidden primary behavior
-- separate fine-tuning dataset/version/row review, training orchestration, artifact registration, and model selection flows for local AI ops
+- separate fine-tuning dataset/version/row review, real training orchestration, artifact registration, publish-ready serving seams, and model selection flows for local AI ops
 - separate RAG collection/document management so grounding data can evolve independently from fine-tuning corpora
 
 ### Shared Core
@@ -79,7 +80,7 @@ This repository now demonstrates that the same underlying skeleton can support:
 
 - knowledge/reviewer workflows
 - deterministic industrial test automation workflows
-- local AI ops workflows such as fine-tuning data review, training job orchestration, model selection, and RAG collection management
+- local AI ops workflows such as fine-tuning data review, real local training execution, artifact/publish-readiness review, model selection, and RAG collection management
 
 without changing deployment shape, abandoning the queue model, or introducing a second frontend stack.
 

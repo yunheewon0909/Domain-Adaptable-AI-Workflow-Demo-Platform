@@ -280,7 +280,11 @@ def list_models(session: Session) -> list[dict[str, Any]]:
         else {}
     )
     return [
-        _serialize_model(model, artifacts.get(model.artifact_id)) for model in models
+        _serialize_model(
+            model,
+            artifacts.get(model.artifact_id) if model.artifact_id is not None else None,
+        )
+        for model in models
     ]
 
 
@@ -433,7 +437,7 @@ def get_training_job(session: Session, training_job_id: str) -> dict[str, Any] |
         else []
     )
     return _serialize_training_job(
-        training_job, dataset, dataset_version, artifacts, models
+        training_job, dataset, dataset_version, list(artifacts), list(models)
     )
 
 
@@ -551,7 +555,7 @@ def complete_training_job(
     export_result = export_dataset_version_for_training(
         dataset,
         dataset_version,
-        rows,
+        list(rows),
         export_root=export_dir,
         require_locked=training_job.training_method == "sft_lora",
     )

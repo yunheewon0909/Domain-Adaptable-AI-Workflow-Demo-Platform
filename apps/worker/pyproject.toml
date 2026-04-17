@@ -1,6 +1,6 @@
 [project]
 name = "industrial-ai-worker"
-version = "0.6.0"
+version = "0.7.0"
 description = "Background worker for Industrial AI Harness Platform with PLC automation and local AI ops job orchestration"
 requires-python = "==3.11.*"
 dependencies = [

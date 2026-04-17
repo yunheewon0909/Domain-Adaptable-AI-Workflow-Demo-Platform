@@ -2,15 +2,15 @@
 
 ## Overview
 
-This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed training scaffolding, model registration, model-selectable inference, and separate RAG collection/document review.
+This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registration, model-selectable inference, and separate RAG collection/document review.
 
-The current milestone is best understood as **v0.6.0: a reviewer-first local AI ops expansion on top of the existing PLC and workflow skeleton**. The repo still does not include private C++ assets or live PLC bindings, and it still does not ship a heavy in-repo fine-tuning backend. What it now does provide is an end-to-end review flow for training data management, training job orchestration, artifact registration, model selection, and separate RAG data operations.
+The current milestone is best understood as **v0.7.0: a reviewer-first local AI ops expansion with a real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, publish-ready serving seams, truthful model readiness, and separate RAG data operations.
 
 The key message of the repo is now threefold:
 
 - **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
 - **domain service**: a concrete PLC testing slice that shows how Excel-based industrial test assets can be turned into a DB + queue + dashboard workflow without overhauling the skeleton
-- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, model registry entries, model-selectable inference, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
+- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, real adapter artifacts, model registry entries, publish-ready serving seams, model-selectable inference, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
 
 ## What the PLC Testing Slice Adds
 
@@ -49,23 +49,26 @@ Out of scope for this milestone:
 
 ## What the AI Ops Slice Adds
 
-The local AI ops slice focuses on reviewer-visible orchestration rather than pretending heavy training is already complete. In this milestone the important flow is:
+The local AI ops slice focuses on reviewer-visible orchestration with a narrow but real local training path. In this milestone the important flow is:
 
 1. register fine-tuning datasets and versioned rows
 2. validate and lock a dataset version
-3. enqueue a queue-backed training job scaffold
-4. let the worker create a lightweight artifact manifest and model registry entry
-5. pick a registered model during inference
+3. lock a dataset version into an immutable training snapshot
+4. enqueue a queue-backed `sft_lora` training job
+5. let the worker export trainer-ready JSONL, run a local PEFT/Transformers LoRA path, and persist real artifacts
+6. register the resulting model as `artifact_ready` until a publish/import step succeeds
+7. optionally mark the model `published` through the serving seam and only then allow model-selectable inference
 6. manage RAG collections and documents separately from fine-tuning corpora
 
 Included in the current milestone:
 
 - `ft_datasets`, `ft_dataset_versions`, and `ft_dataset_rows` with row-level validation status
 - dataset version status transitions (`draft -> validated -> locked`)
-- `ft_train_model` queue jobs plus `ft_training_jobs` domain status tracking
-- lightweight artifact manifests in `data/model_artifacts/` for training scaffold output
-- `model_registry` entries for base models and fine-tuned placeholders
+- `ft_train_model` queue jobs plus richer `ft_training_jobs` domain status tracking (`queued -> preparing_data -> training -> packaging -> registering -> succeeded/failed`)
+- real dataset export, adapter bundle, training report, and publish-manifest artifacts under `data/model_artifacts/`
+- `model_registry` entries for base models and fine-tuned artifact-ready or published models
 - `/models` and `/inference/run` so inference can choose a model source explicitly
+- `/ft-training-jobs/{job_id}/publish`, `/ft-model-artifacts/{artifact_id}`, `/ft-dataset-versions/{version_id}/summary`, `/models/{model_id}/lineage`, and `/ft-training-jobs/{job_id}/logs`
 - `rag_collections` and `rag_documents` tables for collection/document review
 - txt/md/pdf upload support with parse preview or metadata preview
 - retrieval preview over collection-managed document text previews
@@ -74,8 +77,9 @@ Included in the current milestone:
 Current limitations of the AI ops slice:
 
 - Ollama is still the serving target, not the trainer itself
-- the training path is a lightweight scaffold that produces a reviewable artifact manifest and registry entry rather than a real adapter/merged model
-- fine-tuned registry entries currently stay as reviewable placeholders and route inference back through the selected base serving model until a future import/publish seam is added
+- the built-in trainer path is intentionally narrow: one supervised `sft_lora` route, one local backend, and explicit local environment guards
+- training can produce real adapter artifacts when the local environment supports it, but a fine-tuned model remains non-selectable until the serving seam marks it `published`
+- the current publish step is a truthful seam, not a claim of direct fine-tuning inside Ollama; automatic end-to-end Ollama packaging/import is still intentionally modest
 - RAG collection management is separate from the legacy dataset-backed retrieval flow and currently emphasizes metadata/text preview plus retrieval preview rather than full collection embedding lifecycle management
 
 ## Architecture Summary
@@ -95,9 +99,10 @@ Current limitations of the AI ops slice:
 4. Mark the version `validated` and optionally `locked`
 5. Enqueue `POST /ft-training-jobs`
 6. Worker claims the backing `ft_train_model` job from `jobs`
-7. Runner writes a lightweight artifact manifest and registers a model entry
-8. `/models` and `/inference/run` expose the resulting model selection flow
-9. `POST /rag-collections` plus collection document upload/retrieval preview stay separate from fine-tuning data management
+7. Runner exports a trainer-ready dataset snapshot, trains an adapter, writes a training report, and creates a publish-ready manifest
+8. Registry rows stay `artifact_ready` until a serving seam marks them `published`
+9. `/models` and `/inference/run` expose the resulting model selection flow with readiness gating
+10. `POST /rag-collections` plus collection document upload/retrieval preview stay separate from fine-tuning data management
 
 ### PLC execution path
 
@@ -207,6 +212,15 @@ API:
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
 export OLLAMA_TIMEOUT_SECONDS=120
 export PLC_EXECUTOR_MODE=stub
+export TRAINING_DEVICE=auto
+export TRAINING_ALLOW_CPU=false
+export MODEL_ARTIFACT_DIR="$(pwd)/data/model_artifacts"
+export FT_DEFAULT_TRAINING_METHOD=sft_lora
+export FT_TRAINER_BACKEND=local_peft
+export FT_MAX_SEQ_LENGTH=1024
+export FT_TRAINER_MODEL_MAP_JSON='{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+export OLLAMA_PUBLISH_ENABLED=false
+export OLLAMA_MODEL_NAMESPACE=demo
 
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
@@ -222,6 +236,15 @@ export WORKER_POLL_SECONDS=5
 export JOB_MAX_ATTEMPTS=3
 export WORKER_API_PROJECT_DIR="$(pwd)/apps/api"
 export PLC_EXECUTOR_MODE=stub
+export TRAINING_DEVICE=auto
+export TRAINING_ALLOW_CPU=false
+export MODEL_ARTIFACT_DIR="$(pwd)/data/model_artifacts"
+export FT_DEFAULT_TRAINING_METHOD=sft_lora
+export FT_TRAINER_BACKEND=local_peft
+export FT_MAX_SEQ_LENGTH=1024
+export FT_TRAINER_MODEL_MAP_JSON='{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+export OLLAMA_PUBLISH_ENABLED=false
+export OLLAMA_MODEL_NAMESPACE=demo
 
 uv run --project apps/worker python -m worker.main
 ```
@@ -354,9 +377,13 @@ curl -sS -X POST http://127.0.0.1:8000/ft-dataset-versions/ft-version-1/rows \
 curl -sS -X POST http://127.0.0.1:8000/ft-dataset-versions/ft-version-1/status \
   -H "Content-Type: application/json" \
   -d '{"status":"validated"}'
+
+curl -sS -X POST http://127.0.0.1:8000/ft-dataset-versions/ft-version-1/status \
+  -H "Content-Type: application/json" \
+  -d '{"status":"locked"}'
 ```
 
-Enqueue a training scaffold job:
+Enqueue a real local SFT + LoRA job:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/ft-training-jobs \
@@ -364,15 +391,38 @@ curl -sS -X POST http://127.0.0.1:8000/ft-training-jobs \
   -d '{
     "dataset_version_id": "ft-version-1",
     "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
-    "training_method": "stub_adapter",
-    "hyperparams_json": {"epochs": 1}
+    "training_method": "sft_lora",
+    "hyperparams_json": {
+      "epochs": 1,
+      "learning_rate": 0.0002,
+      "batch_size": 1,
+      "gradient_accumulation_steps": 1,
+      "max_seq_length": 512,
+      "lora_r": 8,
+      "lora_alpha": 16,
+      "lora_dropout": 0.05,
+      "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
+    }
   }'
 ```
 
-Inspect registered models and run inference:
+Inspect jobs, artifacts, logs, and model readiness:
 
 ```bash
+curl -sS http://127.0.0.1:8000/ft-training-jobs
+curl -sS http://127.0.0.1:8000/ft-training-jobs/ft-job-1
+curl -sS http://127.0.0.1:8000/ft-training-jobs/ft-job-1/logs
+curl -sS http://127.0.0.1:8000/ft-dataset-versions/ft-version-1/summary
 curl -sS http://127.0.0.1:8000/models
+curl -sS http://127.0.0.1:8000/models/model-1/lineage
+curl -sS http://127.0.0.1:8000/ft-model-artifacts/artifact-1
+
+curl -sS -X POST http://127.0.0.1:8000/ft-training-jobs/ft-job-1/publish
+```
+
+Run inference only with a serving-ready model:
+
+```bash
 
 curl -sS -X POST http://127.0.0.1:8000/inference/run \
   -H "Content-Type: application/json" \
@@ -580,11 +630,21 @@ Targeted AI ops verification:
 ```bash
 uv run --project apps/api pytest -q \
   apps/api/tests/test_ai_ops_api.py \
+  apps/api/tests/test_ft_dataset_export.py \
+  apps/api/tests/test_ft_training_runner.py \
   apps/api/tests/test_demo_ui.py
 
 uv run --project apps/worker pytest -q \
   apps/worker/tests/test_job_processing.py
 ```
+
+Training environment defaults are documented in `.env.example`. The most important variables are:
+
+- `TRAINING_DEVICE`: `auto`, `cuda`, `mps`, or `cpu`
+- `TRAINING_ALLOW_CPU`: keep `false` unless you are intentionally running a tiny smoke-test model on CPU
+- `MODEL_ARTIFACT_DIR`: local root for exported datasets, adapters, reports, and publish manifests
+- `FT_TRAINER_MODEL_MAP_JSON`: maps serving lineage names to actual trainer model identifiers
+- `OLLAMA_PUBLISH_ENABLED` and `OLLAMA_MODEL_NAMESPACE`: control the publish/import seam without claiming in-place Ollama fine-tuning
 
 ## Reviewer UI
 
@@ -610,8 +670,9 @@ The original workflow reviewer mode is still preserved, and the new AI ops modes
 - no real C++ or live PLC binding in this repo yet
 - persisted LLM suggestions remain review-only and are not auto-applied to testcase masters
 - `/demo` remains a static page, so richer charts/filters are still intentionally modest compared with a dedicated frontend
-- fine-tuning still uses a lightweight training scaffold rather than a real trainer backend
-- fine-tuned registry entries are reviewable placeholders and not yet published/imported as standalone Ollama artifacts
+- the repo now supports one real local `sft_lora` path, but it still expects a compatible local Python training stack and does not pretend all environments can train large models
+- fine-tuned registry entries are no longer silently routed through the base model; they stay `artifact_ready` until a serving seam marks them `published`
+- the publish/import path is still intentionally modest and reviewer-oriented; it creates a publish-ready seam and model readiness state rather than claiming a full automatic Ollama packaging pipeline
 - RAG collection previews use extracted text and retrieval preview, not a full per-collection embedding/index lifecycle yet
 
 ## Versioning and Milestones
@@ -624,6 +685,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.4.0`: versioned CLI contract, active target validation, relational-first suite review boundaries, persisted suggestion review flow, and richer PLC reviewer filters/drill-down
 - `v0.5.0`: execution profile scaffolding, normalized target metadata, reviewer/dashboard hardening, typed suggestion review artifacts, and explicit fallback markers before native adapter work
 - `v0.6.0`: fine-tuning dataset management, queue-backed training scaffolding, model registry plus model-selectable inference, separate RAG collection management, and expanded reviewer modes
-- next likely milestone: `v0.6.x` for hardening or `v0.7.0` once real trainer/publish flows and broader operational controls land
+- `v0.7.0`: real local SFT + LoRA runner, dataset export formatting, artifact-ready vs published model readiness, publish-ready serving seam, richer FT/model APIs, and reviewer/UI hardening
 
 See `CHANGELOG.md` for the current milestone notes.

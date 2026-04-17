@@ -28,9 +28,19 @@ class FakeWorkflowLLM:
     def __init__(self, response_text: str) -> None:
         self.response_text = response_text
 
-    def generate_answer(self, *, question: str, context: str) -> ChatResult:
+    def generate_answer(
+        self,
+        *,
+        question: str,
+        context: str,
+        model: str | None = None,
+        temperature: float = 0,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
         return ChatResult(
-            answer=self.response_text, model="fake-workflow-model", used_fallback=False
+            answer=self.response_text,
+            model=model or "fake-workflow-model",
+            used_fallback=False,
         )
 
 

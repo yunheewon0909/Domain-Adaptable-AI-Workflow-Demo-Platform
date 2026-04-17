@@ -178,7 +178,7 @@ def get_dataset(session: Session, dataset_id: str) -> dict[str, Any] | None:
     rows_by_version: dict[str, list[FTDatasetRowRecord]] = {}
     for row in rows:
         rows_by_version.setdefault(row.dataset_version_id, []).append(row)
-    return _serialize_dataset(dataset, versions, rows_by_version)
+    return _serialize_dataset(dataset, list(versions), rows_by_version)
 
 
 def create_dataset(
@@ -243,7 +243,7 @@ def get_dataset_version(session: Session, version_id: str) -> dict[str, Any] | N
         .where(FTDatasetRowRecord.dataset_version_id == version_id)
         .order_by(FTDatasetRowRecord.id.asc())
     ).all()
-    payload = _serialize_version(version, rows)
+    payload = _serialize_version(version, list(rows))
     payload["rows"] = [_serialize_row(row) for row in rows]
     return payload
 

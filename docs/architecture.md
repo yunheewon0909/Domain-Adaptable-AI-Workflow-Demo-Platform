@@ -17,8 +17,8 @@ The FastAPI app assembles small routers under `apps/api/src/api/routers/` and in
 
 - datasets/workflows/jobs/rag from the original reviewer flow
 - plc routes for suite import, testcase listing, target-aware run enqueueing, run review, dashboard summary, normalization preview, and persisted suggestion review
-- fine-tuning routes for dataset registries, versioned rows, status transitions, and training enqueueing
-- model routes for training job inspection, model registry inspection, and model-selectable inference
+- fine-tuning routes for dataset registries, versioned rows, status transitions, training summaries, and training enqueueing
+- model routes for training job inspection, artifact/log inspection, publish seam control, model lineage inspection, and model-selectable inference
 - rag collection/document routes for collection management, upload/preview, and retrieval preview
 - `/demo` for the co-hosted static reviewer UI
 
@@ -31,7 +31,7 @@ The `jobs` table is still the queue. Jobs move through:
 - `succeeded`
 - `failed`
 
-The worker claims queued rows from Postgres, then dispatches runner modules via subprocess. That pattern is shared by reviewer workflows, PLC runs, and the new `ft_train_model` training scaffold.
+The worker claims queued rows from Postgres, then dispatches runner modules via subprocess. That pattern is shared by reviewer workflows, PLC runs, and the new `ft_train_model` real training path.
 
 ### PLC Domain Slice
 
@@ -56,15 +56,28 @@ The current architecture is intentionally hybrid: relational tables now hold the
 The AI ops expansion adds three deliberately separated surfaces:
 
 - `ft_datasets`, `ft_dataset_versions`, and `ft_dataset_rows` for fine-tuning dataset management
-- `ft_training_jobs`, `ft_model_artifacts`, and `model_registry` for queue-backed training scaffolding and model registration
+- `ft_training_jobs`, `ft_model_artifacts`, and `model_registry` for queue-backed real training runs, artifact registration, publish-ready seams, and model readiness
 - `rag_collections` and `rag_documents` for collection/document management that stays distinct from fine-tuning data and from the legacy dataset registry
 
 Important boundaries in this milestone:
 
 - Ollama remains the serving target for inference requests
-- training is a queue + worker scaffold, not a heavy in-repo trainer backend
+- training now supports one real queue + worker path: local `sft_lora` with a PEFT/Transformers backend and explicit environment guards
 - fine-tuning rows and RAG documents are stored and reviewed separately rather than merged into one generic dataset table
+- fine-tuned models are visible in the registry immediately after artifact creation, but inference stays blocked until a serving seam marks them `published`
 - the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
+
+## AI Ops Flow
+
+1. User creates a fine-tuning dataset and version.
+2. Rows are validated and the version is moved from `draft` to `validated` to `locked`.
+3. API inserts an `ft_training_jobs` row and a backing `ft_train_model` queue job.
+4. Worker claims the job and dispatches `api.services.model_registry.job_runner`.
+5. Runner exports trainer-ready JSONL snapshots under `data/model_artifacts/<job_id>/dataset_export/`.
+6. Runner executes the real local `sft_lora` backend, which produces an adapter bundle plus a training report.
+7. Artifact rows are written for dataset export, adapter bundle, training report, and publish manifest.
+8. A `model_registry` row is created as `artifact_ready` with `publish_status=publish_ready`.
+9. The optional publish seam can move that row to `published`; only then is the fine-tuned model selectable for `/inference/run`.
 
 ## PLC Flow
 

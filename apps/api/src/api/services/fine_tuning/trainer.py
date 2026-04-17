@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from api.config import Settings
 from api.services.fine_tuning.dataset_formatters import DatasetExportResult
@@ -282,7 +282,7 @@ def _run_local_peft_training(
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.per_device_eval_batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        evaluation_strategy=(
+        eval_strategy=(
             config.eval_strategy
             if tokenized_val is not None and config.eval_strategy != "no"
             else "no"
@@ -303,12 +303,14 @@ def _run_local_peft_training(
         train_dataset=tokenized_train,
         eval_dataset=tokenized_val,
         data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
     train_output = trainer.train()
 
     adapter_dir.mkdir(parents=True, exist_ok=True)
-    trainer.model.save_pretrained(str(adapter_dir))
+    model_for_save = cast(Any, trainer.model)
+    assert model_for_save is not None
+    model_for_save.save_pretrained(str(adapter_dir))
     tokenizer.save_pretrained(str(adapter_dir))
 
     metrics: dict[str, Any] = dict(train_output.metrics)
@@ -327,7 +329,9 @@ def _run_local_peft_training(
 
     merged_output_path: str | None = None
     if config.export_merged_model:
-        merged_model = trainer.model.merge_and_unload()
+        merge_source = cast(Any, trainer.model)
+        assert merge_source is not None
+        merged_model = merge_source.merge_and_unload()
         merged_model_dir.mkdir(parents=True, exist_ok=True)
         merged_model.save_pretrained(str(merged_model_dir))
         tokenizer.save_pretrained(str(merged_model_dir))

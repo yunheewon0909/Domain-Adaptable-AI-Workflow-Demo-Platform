@@ -1,6 +1,6 @@
 [project]
 name = "industrial-ai-api"
-version = "0.6.0"
+version = "0.7.0"
 description = "FastAPI service for Industrial AI Harness Platform with PLC automation and local AI ops reviewer domains"
 requires-python = "==3.11.*"
 dependencies = [

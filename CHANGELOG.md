@@ -2,6 +2,31 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.0] - 2026-04-17
+
+### Added
+
+- real `sft_lora` training execution behind the existing `ft_train_model` queue and worker path
+- trainer-ready dataset export formatting for `instruction_sft`, `chat_sft`, and `prompt_completion`
+- richer `ft_training_jobs` metadata including trainer backend, split counts, format summary, metrics, evaluation seam, error payloads, and output directory tracking
+- real fine-tuning artifact rows for dataset export, adapter bundles, training reports, and publish manifests
+- model readiness metadata including published model names, publish status, and lineage payloads
+- new AI ops endpoints for dataset version summaries, artifact detail, model lineage, training logs, and publish-step control
+- `.env.example` entries for local training and publish-seam configuration
+
+### Changed
+
+- fine-tuning no longer stops at a placeholder manifest; successful runs now create real local artifacts and register tuned models as `artifact_ready`
+- inference no longer silently routes fine-tuned registry entries back through the base model; artifact-only rows are visible but blocked until `published`
+- the `/demo` Fine-tuning and Models surfaces now distinguish training phases, artifact counts, base lineage, publish status, and selection eligibility
+- workspace, API, and worker package versions bumped from `0.6.0` to `0.7.0`
+
+### Notes
+
+- Ollama remains a serving target, not the trainer itself
+- the built-in trainer path is intentionally narrow: one local `sft_lora` route with explicit device/dependency guards
+- the publish/import flow is still a truthful seam rather than a claim of full automatic Ollama packaging for every artifact shape
+
 ## [0.6.0] - 2026-04-17
 
 ### Added
