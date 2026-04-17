@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
@@ -9,12 +11,14 @@ from sqlalchemy.orm import Session
 from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.main import app
+from api.config import get_settings
 from api.models import (
     FTTrainingJobRecord,
     JobRecord,
     ModelRegistryRecord,
     RAGDocumentRecord,
 )
+from api.services.fine_tuning.trainer import TrainingArtifacts
 from api.services.model_registry.service import complete_training_job
 
 
@@ -44,6 +48,28 @@ def _create_pdf_bytes(text: str) -> bytes:
     buffer = BytesIO()
     writer.write(buffer)
     return buffer.getvalue()
+
+
+def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    (adapter_dir / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (adapter_dir / "adapter_model.safetensors").write_text("stub", encoding="utf-8")
+    report_path = tmp_path / "training_report.json"
+    report_path.write_text(json.dumps({"ok": True}), encoding="utf-8")
+    logs_path = tmp_path / "training.log"
+    logs_path.write_text("training complete\n", encoding="utf-8")
+    return TrainingArtifacts(
+        adapter_dir=str(adapter_dir),
+        report_path=str(report_path),
+        merged_model_dir=None,
+        logs_path=str(logs_path),
+        metrics={"train_runtime": 0.1, "train_loss": 0.01},
+        evaluation={"status": "not_run", "baseline_comparison": "not_implemented"},
+        trainer_backend="local_peft",
+        trainer_model_name="hf-internal/testing-tiny-random-gpt2",
+        device="cpu",
+    )
 
 
 def test_ft_dataset_version_and_rows_flow(client: TestClient) -> None:
@@ -131,9 +157,100 @@ def test_ft_dataset_version_cannot_validate_without_rows(client: TestClient) -> 
     assert "at least one row" in response.json()["detail"]
 
 
-def test_training_job_model_registry_and_inference_flow(client: TestClient) -> None:
+def test_ft_dataset_version_summary_endpoint(client: TestClient) -> None:
+    dataset_id = client.post(
+        "/ft-datasets",
+        json={
+            "name": "Summary demo",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+        },
+    ).json()["id"]
+    version_id = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={"version_label": "v1"},
+    ).json()["id"]
+    client.post(
+        f"/ft-dataset-versions/{version_id}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {"instruction": "summarize", "input": "alpha"},
+                    "target_json": {"output": "beta"},
+                }
+            ]
+        },
+    )
+
+    response = client.get(f"/ft-dataset-versions/{version_id}/summary")
+    assert response.status_code == 200
+    assert response.json()["id"] == version_id
+    assert "rows" not in response.json()
+
+
+def test_real_training_requires_locked_dataset_version(client: TestClient) -> None:
+    dataset_id = client.post(
+        "/ft-datasets",
+        json={
+            "name": "Locked demo",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+        },
+    ).json()["id"]
+    version_id = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={"version_label": "v1"},
+    ).json()["id"]
+    client.post(
+        f"/ft-dataset-versions/{version_id}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {"instruction": "summarize", "input": "alpha"},
+                    "target_json": {"output": "beta"},
+                }
+            ]
+        },
+    )
+    client.post(
+        f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+    )
+
+    response = client.post(
+        "/ft-training-jobs",
+        json={
+            "dataset_version_id": version_id,
+            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "training_method": "sft_lora",
+            "hyperparams_json": {
+                "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "locked dataset version" in response.json()["detail"]
+
+
+def test_training_job_model_registry_and_inference_flow(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
     app.dependency_overrides[get_llm_client] = lambda: FakeLLMClient()
     try:
+        monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
+        monkeypatch.setenv("OLLAMA_PUBLISH_ENABLED", "true")
+        monkeypatch.setenv("OLLAMA_MODEL_NAMESPACE", "demo")
+        get_settings.cache_clear()
+
+        def _fake_run_training_backend(*args, **kwargs):
+            return _build_fake_training_artifacts(tmp_path / "trainer_output")
+
+        monkeypatch.setattr(
+            "api.services.model_registry.service.run_training_backend",
+            _fake_run_training_backend,
+        )
+
         dataset_id = client.post(
             "/ft-datasets",
             json={
@@ -164,14 +281,21 @@ def test_training_job_model_registry_and_inference_flow(client: TestClient) -> N
             f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
         )
         assert validated.status_code == 200
+        locked = client.post(
+            f"/ft-dataset-versions/{version_id}/status", json={"status": "locked"}
+        )
+        assert locked.status_code == 200
 
         training_response = client.post(
             "/ft-training-jobs",
             json={
                 "dataset_version_id": version_id,
                 "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
-                "training_method": "stub_adapter",
-                "hyperparams_json": {"epochs": 1},
+                "training_method": "sft_lora",
+                "hyperparams_json": {
+                    "epochs": 1,
+                    "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
+                },
             },
         )
         assert training_response.status_code == 202
@@ -190,20 +314,52 @@ def test_training_job_model_registry_and_inference_flow(client: TestClient) -> N
         training_detail = client.get(f"/ft-training-jobs/{training_job_id}")
         assert training_detail.status_code == 200
         assert training_detail.json()["status"] == "succeeded"
-        assert len(training_detail.json()["artifacts"]) == 1
+        assert training_detail.json()["trainer_backend"] == "local_peft"
+        assert len(training_detail.json()["artifacts"]) >= 4
         assert len(training_detail.json()["registered_models"]) == 1
         model_id = training_detail.json()["registered_models"][0]["id"]
-        assert training_detail.json()["registered_models"][0][
-            "ollama_model_name"
-        ].startswith("placeholder::")
         assert (
-            training_detail.json()["registered_models"][0]["serving_model_name"]
-            == "qwen2.5:7b-instruct-q4_K_M"
+            training_detail.json()["registered_models"][0]["status"] == "artifact_ready"
+        )
+        assert (
+            training_detail.json()["registered_models"][0]["publish_status"]
+            == "publish_ready"
+        )
+        assert (
+            training_detail.json()["registered_models"][0]["serving_model_name"] is None
+        )
+        assert (
+            training_detail.json()["registered_models"][0]["readiness"]["selectable"]
+            is False
         )
 
         models_response = client.get("/models")
         assert models_response.status_code == 200
         assert any(item["id"] == model_id for item in models_response.json())
+
+        blocked_inference_response = client.post(
+            "/inference/run",
+            json={"prompt": "generate summary", "model_id": model_id},
+        )
+        assert blocked_inference_response.status_code == 404
+
+        publish_response = client.post(f"/ft-training-jobs/{training_job_id}/publish")
+        assert publish_response.status_code == 200
+        assert publish_response.json()["publish_status"] == "published"
+        assert publish_response.json()["serving_model_name"] == "demo/trainer_output"
+
+        lineage_response = client.get(f"/models/{model_id}/lineage")
+        assert lineage_response.status_code == 200
+        assert (
+            lineage_response.json()["lineage_json"]["dataset_version_id"] == version_id
+        )
+
+        artifact_id = training_detail.json()["artifacts"][0]["id"]
+        artifact_response = client.get(f"/ft-model-artifacts/{artifact_id}")
+        assert artifact_response.status_code == 200
+
+        logs_response = client.get(f"/ft-training-jobs/{training_job_id}/logs")
+        assert logs_response.status_code == 200
 
         inference_response = client.post(
             "/inference/run",

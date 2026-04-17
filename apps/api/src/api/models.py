@@ -243,6 +243,17 @@ class FTTrainingJobRecord(Base):
     backing_job_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("jobs.id"), nullable=True
     )
+    trainer_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    train_rows: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    val_rows: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    test_rows: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    format_summary_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    metrics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    evaluation_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    output_dir: Mapped[str | None] = mapped_column(String(512), nullable=True)
     log_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -291,13 +302,18 @@ class ModelRegistryRecord(Base):
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     base_model_name: Mapped[str] = mapped_column(String(255), nullable=False)
     ollama_model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    published_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     artifact_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("ft_model_artifacts.id"), nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'registered'")
     )
+    publish_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'not_requested'")
+    )
     tags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    lineage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

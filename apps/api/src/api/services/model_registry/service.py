@@ -18,8 +18,26 @@ from api.models import (
     ModelRegistryRecord,
 )
 from api.services.jobs import create_job
+from api.services.fine_tuning.artifacts import build_publish_manifest
+from api.services.fine_tuning.dataset_formatters import (
+    export_dataset_version_for_training,
+)
+from api.services.fine_tuning.trainer import run_training_backend
 
-ALLOWED_TRAINING_STATUSES = {"queued", "running", "succeeded", "failed"}
+BASE_MODEL_READY_STATUSES = {"active", "registered"}
+ALLOWED_TRAINING_STATUSES = {
+    "queued",
+    "preparing_data",
+    "training",
+    "packaging",
+    "registering",
+    "running",
+    "succeeded",
+    "failed",
+}
+ARTIFACT_ONLY_MODEL_STATUSES = {"artifact_ready"}
+READY_MODEL_STATUSES = {"published"}
+ALLOWED_PUBLISH_STATUSES = {"not_requested", "publish_ready", "published", "failed"}
 
 
 def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
@@ -32,7 +50,36 @@ def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
 
 
 def _artifacts_root() -> Path:
-    return get_project_root() / "data" / "model_artifacts"
+    settings = get_settings()
+    return Path(settings.training_artifact_dir)
+
+
+def _serialize_readiness(model: ModelRegistryRecord) -> dict[str, Any]:
+    selectable = False
+    selectable_reason = "model is not selectable"
+    if model.source_type == "base":
+        selectable = model.status in BASE_MODEL_READY_STATUSES
+        selectable_reason = (
+            "base model is registered for direct inference"
+            if selectable
+            else "base model is not in a ready status"
+        )
+    elif model.source_type == "fine_tuned":
+        selectable = (
+            model.status in READY_MODEL_STATUSES
+            and model.publish_status == "published"
+            and bool(model.published_model_name)
+        )
+        selectable_reason = (
+            "fine-tuned model has a published serving target"
+            if selectable
+            else "fine-tuned model is artifact-ready only and not yet serving-ready"
+        )
+    return {
+        "selectable": selectable,
+        "selectable_reason": selectable_reason,
+        "publish_status": model.publish_status,
+    }
 
 
 def _serialize_artifact(
@@ -55,21 +102,23 @@ def _serialize_artifact(
 def _serialize_model(
     model: ModelRegistryRecord, artifact: FTModelArtifactRecord | None
 ) -> dict[str, Any]:
-    serving_model_name = (
-        model.base_model_name
-        if model.source_type == "fine_tuned"
-        else model.ollama_model_name
-    )
+    serving_model_name = model.ollama_model_name
+    if model.source_type == "fine_tuned":
+        serving_model_name = model.published_model_name
+    readiness = _serialize_readiness(model)
     return {
         "id": model.id,
         "display_name": model.display_name,
         "source_type": model.source_type,
         "base_model_name": model.base_model_name,
         "ollama_model_name": model.ollama_model_name,
+        "published_model_name": model.published_model_name,
         "serving_model_name": serving_model_name,
         "artifact_id": model.artifact_id,
         "status": model.status,
+        "publish_status": model.publish_status,
         "tags_json": model.tags_json,
+        "lineage_json": model.lineage_json,
         "description": model.description,
         "created_at": model.created_at.isoformat()
         if model.created_at is not None
@@ -78,6 +127,7 @@ def _serialize_model(
         if model.updated_at is not None
         else None,
         "artifact": _serialize_artifact(artifact),
+        "readiness": readiness,
     }
 
 
@@ -100,7 +150,16 @@ def _serialize_training_job(
         "training_method": training_job.training_method,
         "hyperparams_json": training_job.hyperparams_json,
         "status": training_job.status,
+        "trainer_backend": training_job.trainer_backend,
         "backing_job_id": training_job.backing_job_id,
+        "train_rows": training_job.train_rows,
+        "val_rows": training_job.val_rows,
+        "test_rows": training_job.test_rows,
+        "format_summary_json": training_job.format_summary_json,
+        "metrics_json": training_job.metrics_json,
+        "evaluation_json": training_job.evaluation_json,
+        "error_json": training_job.error_json,
+        "output_dir": training_job.output_dir,
         "log_text": training_job.log_text,
         "created_at": training_job.created_at.isoformat()
         if training_job.created_at is not None
@@ -168,6 +227,8 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
             existing.base_model_name = item["base_model_name"]
             existing.source_type = "base"
             existing.status = item["status"]
+            existing.publish_status = "published"
+            existing.published_model_name = item["ollama_model_name"]
             existing.tags_json = item["tags_json"]
             existing.description = item["description"]
             existing.updated_at = now
@@ -179,7 +240,9 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
                 source_type="base",
                 base_model_name=item["base_model_name"],
                 ollama_model_name=item["ollama_model_name"],
+                published_model_name=item["ollama_model_name"],
                 status=item["status"],
+                publish_status="published",
                 tags_json=item["tags_json"],
                 description=item["description"],
                 updated_at=now,
@@ -248,12 +311,18 @@ def create_training_job(
         raise ValueError("dataset version must be validated or locked before training")
     dataset = session.get(FTDatasetRecord, dataset_version.dataset_id)
     assert dataset is not None
+    resolved_training_method = (
+        training_method.strip() or get_settings().ft_default_training_method
+    )
+    if resolved_training_method == "sft_lora" and dataset_version.status != "locked":
+        raise ValueError("real sft_lora training requires a locked dataset version")
     training_job = FTTrainingJobRecord(
         id=_next_prefixed_id(session, FTTrainingJobRecord, "ft-job"),
         dataset_version_id=dataset_version_id,
         base_model_name=base_model_name.strip(),
-        training_method=training_method.strip() or "stub_adapter",
+        training_method=resolved_training_method,
         hyperparams_json=hyperparams_json or {},
+        trainer_backend=get_settings().ft_trainer_backend,
     )
     session.add(training_job)
     session.flush()
@@ -270,7 +339,10 @@ def create_training_job(
         commit=False,
     )
     training_job.backing_job_id = queue_job.id
-    training_job.log_text = "Queued lightweight training scaffold."
+    training_job.log_text = (
+        "Queued fine-tuning job. "
+        "Real trainer execution requires a locked dataset version and compatible local training dependencies."
+    )
     session.commit()
     return get_training_job(session, training_job.id) or {"id": training_job.id}
 
@@ -378,6 +450,9 @@ def resolve_model_selection(
         model = session.get(ModelRegistryRecord, model_id)
         if model is None:
             raise KeyError(model_id)
+        readiness = _serialize_readiness(model)
+        if not readiness["selectable"]:
+            raise LookupError(str(readiness["selectable_reason"]))
         artifact = (
             session.get(FTModelArtifactRecord, model.artifact_id)
             if model.artifact_id
@@ -391,6 +466,9 @@ def resolve_model_selection(
             )
         )
         if model is not None:
+            readiness = _serialize_readiness(model)
+            if not readiness["selectable"]:
+                raise LookupError(str(readiness["selectable_reason"]))
             artifact = (
                 session.get(FTModelArtifactRecord, model.artifact_id)
                 if model.artifact_id
@@ -433,7 +511,7 @@ def complete_training_job(
     session: Session,
     *,
     training_job_id: str,
-    artifact_type: str = "placeholder",
+    artifact_type: str = "adapter_bundle",
     status: str = "succeeded",
 ) -> dict[str, Any]:
     if status not in ALLOWED_TRAINING_STATUSES:
@@ -464,57 +542,256 @@ def complete_training_job(
         raise RuntimeError("training dataset version contains invalid rows")
 
     now = datetime.now(timezone.utc)
-    training_job.status = status
+    training_job.status = "preparing_data"
     training_job.started_at = training_job.started_at or now
-    training_job.finished_at = now
 
     artifact_dir = _artifacts_root() / training_job.id
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = artifact_dir / "artifact.json"
-    manifest_payload = {
-        "training_job_id": training_job.id,
-        "dataset_id": dataset.id,
-        "dataset_version_id": dataset_version.id,
-        "dataset_version_label": dataset_version.version_label,
-        "base_model_name": training_job.base_model_name,
-        "training_method": training_job.training_method,
-        "artifact_type": artifact_type,
-        "row_count": len(rows),
-        "status": status,
-        "generated_at": now.isoformat(),
-        "note": "Lightweight training scaffold artifact. Replace this manifest with a real trainer output later.",
-    }
-    manifest_path.write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
+    export_dir = artifact_dir / "dataset_export"
+    export_result = export_dataset_version_for_training(
+        dataset,
+        dataset_version,
+        rows,
+        export_root=export_dir,
+        require_locked=training_job.training_method == "sft_lora",
+    )
+    training_job.train_rows = export_result.row_counts.get("train")
+    training_job.val_rows = export_result.row_counts.get("val")
+    training_job.test_rows = export_result.row_counts.get("test")
+    training_job.format_summary_json = export_result.format_summary
+    training_job.output_dir = str(artifact_dir)
+    training_job.status = "training"
+    session.flush()
 
-    artifact = FTModelArtifactRecord(
+    settings = get_settings()
+    training_output = run_training_backend(
+        export_result,
+        base_model_name=training_job.base_model_name,
+        training_method=training_job.training_method,
+        hyperparams_json=training_job.hyperparams_json,
+        settings=settings,
+        output_dir=artifact_dir / "trainer_output",
+    )
+
+    training_job.status = "packaging"
+    training_job.trainer_backend = training_output.trainer_backend
+    training_job.metrics_json = training_output.metrics
+    training_job.evaluation_json = training_output.evaluation
+    training_job.log_text = (
+        f"Exported dataset to {export_result.export_dir}. "
+        f"Trained adapter at {training_output.adapter_dir}."
+    )
+
+    dataset_export_artifact = FTModelArtifactRecord(
+        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+        training_job_id=training_job.id,
+        artifact_type="dataset_export",
+        local_path=export_result.export_dir,
+        metadata_json={
+            **export_result.format_summary,
+            "train_file": export_result.train_file,
+            "val_file": export_result.val_file,
+            "test_file": export_result.test_file,
+            "all_rows_file": export_result.all_rows_file,
+            "summary_file": export_result.summary_file,
+        },
+    )
+    session.add(dataset_export_artifact)
+    session.flush()
+
+    adapter_artifact = FTModelArtifactRecord(
         id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
         training_job_id=training_job.id,
         artifact_type=artifact_type,
-        local_path=str(manifest_path),
-        metadata_json=manifest_payload,
+        local_path=training_output.adapter_dir,
+        metadata_json={
+            "training_job_id": training_job.id,
+            "dataset_version_id": dataset_version.id,
+            "base_model_name": training_job.base_model_name,
+            "trainer_model_name": training_output.trainer_model_name,
+            "trainer_backend": training_output.trainer_backend,
+            "artifact_format": "peft_adapter",
+            "status": "ready",
+            "created_at": now.isoformat(),
+            "metrics": training_output.metrics,
+        },
     )
-    session.add(artifact)
+    session.add(adapter_artifact)
     session.flush()
 
+    report_artifact = FTModelArtifactRecord(
+        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+        training_job_id=training_job.id,
+        artifact_type="training_report",
+        local_path=training_output.report_path,
+        metadata_json={
+            "log_path": training_output.logs_path,
+            "device": training_output.device,
+            "evaluation": training_output.evaluation,
+            "metrics": training_output.metrics,
+        },
+    )
+    session.add(report_artifact)
+    session.flush()
+
+    if training_output.merged_model_dir is not None:
+        merged_artifact = FTModelArtifactRecord(
+            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            training_job_id=training_job.id,
+            artifact_type="merged_model",
+            local_path=training_output.merged_model_dir,
+            metadata_json={
+                "status": "ready",
+                "artifact_format": "transformers_pretrained",
+                "base_model_name": training_job.base_model_name,
+            },
+        )
+        session.add(merged_artifact)
+        session.flush()
+
+    publish_manifest_path, publish_manifest = build_publish_manifest(
+        manifest_dir=artifact_dir / "publish",
+        dataset_export=export_result,
+        training_artifacts=training_output,
+        base_model_name=training_job.base_model_name,
+        trainer_model_name=training_output.trainer_model_name,
+        settings=settings,
+    )
+    publish_artifact = FTModelArtifactRecord(
+        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+        training_job_id=training_job.id,
+        artifact_type="publish_manifest",
+        local_path=str(publish_manifest_path),
+        metadata_json=publish_manifest,
+    )
+    session.add(publish_artifact)
+    session.flush()
+
+    training_job.status = "registering"
     registry_entry = ModelRegistryRecord(
         id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
         display_name=f"{dataset.name} {dataset_version.version_label}",
         source_type="fine_tuned",
         base_model_name=training_job.base_model_name,
-        ollama_model_name=f"placeholder::{training_job.id}",
-        artifact_id=artifact.id,
-        status="registered",
+        ollama_model_name=f"artifact::{training_job.id}",
+        published_model_name=None,
+        artifact_id=adapter_artifact.id,
+        status="artifact_ready",
+        publish_status="publish_ready",
         tags_json=["fine_tuned", dataset.task_type, training_job.training_method],
+        lineage_json={
+            "dataset_id": dataset.id,
+            "dataset_version_id": dataset_version.id,
+            "dataset_version_label": dataset_version.version_label,
+            "trainer_model_name": training_output.trainer_model_name,
+            "training_job_id": training_job.id,
+        },
         description=(
-            f"Stub fine-tuned registry entry for {dataset.name} {dataset_version.version_label}. "
-            "Inference currently routes to the base serving model until a real artifact import step is added."
+            f"Real fine-tuning artifact for {dataset.name} {dataset_version.version_label}. "
+            "The adapter exists locally, but inference stays blocked until a serving publish/import step succeeds."
         ),
         updated_at=now,
     )
     session.add(registry_entry)
-    training_job.log_text = (
-        f"Prepared {artifact_type} artifact scaffold at {manifest_path}. "
-        "Registered a reviewable model entry for inference selection."
-    )
+    training_job.status = status
+    training_job.finished_at = datetime.now(timezone.utc)
     session.commit()
     return get_training_job(session, training_job.id) or {"id": training_job.id}
+
+
+def get_model_artifact(session: Session, artifact_id: str) -> dict[str, Any] | None:
+    artifact = session.get(FTModelArtifactRecord, artifact_id)
+    return _serialize_artifact(artifact) if artifact is not None else None
+
+
+def get_training_job_logs(
+    session: Session, training_job_id: str
+) -> dict[str, Any] | None:
+    training_job = session.get(FTTrainingJobRecord, training_job_id)
+    if training_job is None:
+        return None
+    report_artifact = session.scalar(
+        select(FTModelArtifactRecord).where(
+            FTModelArtifactRecord.training_job_id == training_job_id,
+            FTModelArtifactRecord.artifact_type == "training_report",
+        )
+    )
+    return {
+        "training_job_id": training_job_id,
+        "status": training_job.status,
+        "log_text": training_job.log_text,
+        "report_artifact": _serialize_artifact(report_artifact),
+    }
+
+
+def get_model_lineage(session: Session, model_id: str) -> dict[str, Any] | None:
+    model = session.get(ModelRegistryRecord, model_id)
+    if model is None:
+        return None
+    return {
+        "model_id": model.id,
+        "source_type": model.source_type,
+        "base_model_name": model.base_model_name,
+        "published_model_name": model.published_model_name,
+        "status": model.status,
+        "publish_status": model.publish_status,
+        "lineage_json": model.lineage_json,
+    }
+
+
+def publish_training_job_artifacts(
+    session: Session, training_job_id: str
+) -> dict[str, Any]:
+    training_job = session.get(FTTrainingJobRecord, training_job_id)
+    if training_job is None:
+        raise KeyError(training_job_id)
+    model = session.scalar(
+        select(ModelRegistryRecord)
+        .join(
+            FTModelArtifactRecord,
+            FTModelArtifactRecord.id == ModelRegistryRecord.artifact_id,
+        )
+        .where(FTModelArtifactRecord.training_job_id == training_job_id)
+    )
+    if model is None:
+        raise LookupError("registered model not found for training job")
+    if model.publish_status == "published" and model.published_model_name:
+        return _serialize_model(
+            model, session.get(FTModelArtifactRecord, model.artifact_id)
+        )
+
+    settings = get_settings()
+    if not settings.ollama_publish_enabled:
+        model.publish_status = "publish_ready"
+        model.status = "artifact_ready"
+        session.commit()
+        return _serialize_model(
+            model, session.get(FTModelArtifactRecord, model.artifact_id)
+        )
+
+    publish_artifact = session.scalar(
+        select(FTModelArtifactRecord).where(
+            FTModelArtifactRecord.training_job_id == training_job_id,
+            FTModelArtifactRecord.artifact_type == "publish_manifest",
+        )
+    )
+    if publish_artifact is None:
+        raise LookupError("publish manifest not found for training job")
+
+    manifest = dict(publish_artifact.metadata_json)
+    candidate_model_name = str(manifest.get("candidate_model_name") or "").strip()
+    if not candidate_model_name:
+        model.publish_status = "failed"
+        session.commit()
+        raise RuntimeError(
+            "publish manifest does not include a candidate serving model name"
+        )
+
+    model.published_model_name = candidate_model_name
+    model.publish_status = "published"
+    model.status = "published"
+    model.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return _serialize_model(
+        model, session.get(FTModelArtifactRecord, model.artifact_id)
+    )

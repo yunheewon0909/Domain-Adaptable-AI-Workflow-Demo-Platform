@@ -435,6 +435,15 @@ def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
         "PLC_EXECUTOR_MODE",
         "PLC_CLI_PATH",
         "PLC_CLI_TIMEOUT_SECONDS",
+        "TRAINING_DEVICE",
+        "TRAINING_ALLOW_CPU",
+        "MODEL_ARTIFACT_DIR",
+        "FT_MAX_SEQ_LENGTH",
+        "FT_DEFAULT_TRAINING_METHOD",
+        "FT_TRAINER_BACKEND",
+        "FT_TRAINER_MODEL_MAP_JSON",
+        "OLLAMA_PUBLISH_ENABLED",
+        "OLLAMA_MODEL_NAMESPACE",
     ]
     for key in keys_to_propagate:
         value = os.getenv(key)

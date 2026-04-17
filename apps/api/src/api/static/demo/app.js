@@ -2567,13 +2567,22 @@ function renderFtTrainingJobDetail() {
       { label: 'Dataset version', value: job.dataset_version_label || job.dataset_version_id || '—' },
       { label: 'Backing job ID', value: job.backing_job_id || '—' },
       { label: 'Base model', value: job.base_model_name || '—' },
+      { label: 'Trainer backend', value: job.trainer_backend || '—' },
       { label: 'Training method', value: job.training_method || '—' },
+      { label: 'Train rows', value: job.train_rows ?? '—' },
+      { label: 'Validation rows', value: job.val_rows ?? '—' },
+      { label: 'Test rows', value: job.test_rows ?? '—' },
+      { label: 'Output directory', value: job.output_dir || '—' },
       { label: 'Created', value: formatDateTime(job.created_at) },
       { label: 'Started', value: formatDateTime(job.started_at) },
       { label: 'Finished', value: formatDateTime(job.finished_at) },
     ])}
     ${job.log_text ? `<section class="callout"><p class="callout-title">Training log</p><p>${escapeHtml(job.log_text)}</p></section>` : ''}
     ${renderJsonDetails('Training hyperparameters', job.hyperparams_json || {}, { summaryDetail: 'Submitted hyperparameter payload' })}
+    ${job.format_summary_json ? renderJsonDetails('Dataset formatting summary', job.format_summary_json, { summaryDetail: 'Prepared training snapshot' }) : ''}
+    ${job.metrics_json ? renderJsonDetails('Training metrics', job.metrics_json, { summaryDetail: 'Captured trainer metrics' }) : ''}
+    ${job.evaluation_json ? renderJsonDetails('Evaluation summary', job.evaluation_json, { summaryDetail: 'Current evaluation seam' }) : ''}
+    ${job.error_json ? renderJsonDetails('Training error', job.error_json, { summaryDetail: 'Structured failure context' }) : ''}
     ${safeArray(job.artifacts).length ? renderJsonDetails('Artifacts', job.artifacts, { summaryDetail: `${job.artifacts.length} persisted artifact entries` }) : ''}
     ${safeArray(job.registered_models).length ? renderJsonDetails('Registered models', job.registered_models, { summaryDetail: `${job.registered_models.length} model registry entries` }) : ''}
   `;
@@ -2739,6 +2748,7 @@ async function ensureFtInitialized({ force = false } = {}) {
 
 function renderModelsRegistry() {
   const items = state.models.items;
+  const selectableItems = items.filter((item) => item.readiness?.selectable);
   if (!items.length) {
     dom.models.list.className = 'stack-list empty';
     dom.models.list.textContent = 'Registered models will appear here.';
@@ -2747,11 +2757,11 @@ function renderModelsRegistry() {
     return;
   }
 
-  dom.models.modelSelect.disabled = false;
-  populateMappedSelectOptions(dom.models.modelSelect, items, {
+  dom.models.modelSelect.disabled = !selectableItems.length;
+  populateMappedSelectOptions(dom.models.modelSelect, selectableItems, {
     selectedValue: state.models.selectedModelId,
     valueKey: 'id',
-    labelBuilder: (item) => `${item.display_name || item.serving_model_name || item.ollama_model_name || item.id} · ${item.status || 'unknown'}`,
+    labelBuilder: (item) => `${item.display_name || item.serving_model_name || item.ollama_model_name || item.id} · ${item.status || 'unknown'} · ${item.publish_status || 'n/a'}`,
   });
 
   dom.models.list.className = 'stack-list';
@@ -2761,6 +2771,8 @@ function renderModelsRegistry() {
         <div class="inline-meta">
           ${renderStatusBadge(model.status || 'registered')}
           ${renderBadge(model.source_type || 'unknown source')}
+          ${renderBadge(model.publish_status || 'publish n/a')}
+          ${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}
         </div>
         <h3>${escapeHtml(model.display_name || model.serving_model_name || model.id)}</h3>
         <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.serving_model_name || model.base_model_name || 'model name unavailable')}</p>
@@ -2795,19 +2807,23 @@ function renderModelDetail() {
 
   dom.models.detail.className = 'detail-stack';
   dom.models.detail.innerHTML = `
-    <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.serving_model_name || model.base_model_name || 'model')}</div>
+    <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.publish_status || 'publish n/a')}${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}</div>
     ${renderDetailGrid([
       { label: 'Model ID', value: model.id || '—' },
       { label: 'Display name', value: model.display_name || '—' },
       { label: 'Source type', value: model.source_type || '—' },
       { label: 'Base model', value: model.base_model_name || '—' },
+      { label: 'Published model', value: model.published_model_name || '—' },
       { label: 'Serving model', value: model.serving_model_name || '—' },
       { label: 'Artifact ID', value: model.artifact_id || '—' },
+      { label: 'Selectable', value: model.readiness?.selectable ? 'true' : 'false' },
+      { label: 'Selectable reason', value: model.readiness?.selectable_reason || '—' },
       { label: 'Created', value: formatDateTime(model.created_at) },
       { label: 'Updated', value: formatDateTime(model.updated_at) },
     ])}
     ${safeArray(model.tags_json).length ? `<section class="callout"><p class="callout-title">Tags</p><div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div></section>` : ''}
     ${model.description ? `<section class="callout success"><p class="callout-title">Description</p><p>${escapeHtml(model.description)}</p></section>` : ''}
+    ${model.lineage_json ? renderJsonDetails('Model lineage', model.lineage_json, { summaryDetail: 'Base lineage and training source' }) : ''}
     ${model.artifact ? renderJsonDetails('Artifact detail', model.artifact, { summaryDetail: 'Backing fine-tuning artifact' }) : ''}
   `;
 }
@@ -2830,6 +2846,9 @@ function renderInferenceResult() {
     ${renderDetailGrid([
       { label: 'Selected model', value: result.model?.display_name || result.model?.serving_model_name || result.model?.ollama_model_name || '—' },
       { label: 'Model ID', value: result.model?.id || '—' },
+      { label: 'Model source', value: result.model?.source_type || '—' },
+      { label: 'Base lineage', value: result.model?.base_model_name || '—' },
+      { label: 'Publish status', value: result.model?.publish_status || '—' },
       { label: 'Provider', value: result.meta?.provider || '—' },
       { label: 'Serving model', value: result.meta?.model || '—' },
       { label: 'RAG collection', value: result.meta?.rag_collection_id || 'none' },
@@ -2844,11 +2863,12 @@ function renderInferenceResult() {
 
 async function refreshModelsRegistry({ preferredModelId = null } = {}) {
   state.models.items = await fetchJson('/models');
-  state.models.selectedModelId = preferredModelId && state.models.items.some((item) => item.id === preferredModelId)
+  const selectableIds = state.models.items.filter((item) => item.readiness?.selectable).map((item) => item.id);
+  state.models.selectedModelId = preferredModelId && selectableIds.includes(preferredModelId)
     ? preferredModelId
-    : state.models.items.some((item) => item.id === state.models.selectedModelId)
+    : selectableIds.includes(state.models.selectedModelId)
       ? state.models.selectedModelId
-      : state.models.items[0]?.id || null;
+      : selectableIds[0] || state.models.items[0]?.id || null;
 
   renderModelsRegistry();
 

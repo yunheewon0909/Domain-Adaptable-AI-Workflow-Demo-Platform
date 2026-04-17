@@ -123,6 +123,17 @@ def get_ft_dataset_version(version_id: str) -> dict[str, Any]:
     return version
 
 
+@router.get("/ft-dataset-versions/{version_id}/summary")
+def get_ft_dataset_version_summary(version_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        version = get_dataset_version(session, version_id)
+    if version is None:
+        raise HTTPException(
+            status_code=404, detail="fine-tuning dataset version not found"
+        )
+    return {key: value for key, value in version.items() if key != "rows"}
+
+
 @router.post("/ft-dataset-versions/{version_id}/rows", status_code=201)
 def post_ft_dataset_rows(version_id: str, request: AddFTRowsRequest) -> dict[str, Any]:
     with Session(get_engine()) as session:

@@ -12,9 +12,13 @@ from api.llm import LLMClient, LLMClientError
 from api.services.model_registry import (
     create_training_job,
     get_model,
+    get_model_artifact,
+    get_model_lineage,
     get_training_job,
+    get_training_job_logs,
     list_models,
     list_training_jobs,
+    publish_training_job_artifacts,
     resolve_model_selection,
 )
 from api.services.rag.collections import preview_collection_retrieval
@@ -79,6 +83,32 @@ def get_ft_training_job(training_job_id: str) -> dict[str, Any]:
     return training_job
 
 
+@router.get("/ft-training-jobs/{training_job_id}/logs")
+def get_ft_training_job_logs(training_job_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        payload = get_training_job_logs(session, training_job_id)
+    if payload is None:
+        raise HTTPException(
+            status_code=404, detail="fine-tuning training job not found"
+        )
+    return payload
+
+
+@router.post("/ft-training-jobs/{training_job_id}/publish")
+def post_ft_training_job_publish(training_job_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return publish_training_job_artifacts(session, training_job_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="fine-tuning training job not found"
+            ) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/models")
 def get_models() -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
@@ -92,6 +122,26 @@ def get_model_detail(model_id: str) -> dict[str, Any]:
     if model is None:
         raise HTTPException(status_code=404, detail="model not found")
     return model
+
+
+@router.get("/models/{model_id}/lineage")
+def get_model_detail_lineage(model_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        lineage = get_model_lineage(session, model_id)
+    if lineage is None:
+        raise HTTPException(status_code=404, detail="model not found")
+    return lineage
+
+
+@router.get("/ft-model-artifacts/{artifact_id}")
+def get_ft_model_artifact_detail(artifact_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        artifact = get_model_artifact(session, artifact_id)
+    if artifact is None:
+        raise HTTPException(
+            status_code=404, detail="fine-tuning model artifact not found"
+        )
+    return artifact
 
 
 @router.post("/inference/run")

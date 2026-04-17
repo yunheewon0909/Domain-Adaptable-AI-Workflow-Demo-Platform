@@ -39,7 +39,7 @@ def execute_training_job(
     training_job = session.get(FTTrainingJobRecord, training_job_id)
     if training_job is None:
         raise RuntimeError("training job not found")
-    training_job.status = "running"
+    training_job.status = "preparing_data"
     session.commit()
     result = complete_training_job(session, training_job_id=training_job_id)
     return {

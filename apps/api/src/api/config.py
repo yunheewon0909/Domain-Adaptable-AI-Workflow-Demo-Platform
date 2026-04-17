@@ -53,6 +53,15 @@ class Settings:
     plc_executor_mode: str
     plc_cli_path: str | None
     plc_cli_timeout_seconds: int
+    training_device: str
+    training_allow_cpu: bool
+    training_artifact_dir: str
+    ft_max_seq_length: int
+    ft_default_training_method: str
+    ft_trainer_backend: str
+    ft_trainer_model_map_json: str
+    ollama_publish_enabled: bool
+    ollama_model_namespace: str | None
 
 
 @lru_cache
@@ -103,4 +112,23 @@ def get_settings() -> Settings:
             default=30,
             minimum=1,
         ),
+        training_device=os.getenv("TRAINING_DEVICE", "auto").strip().lower() or "auto",
+        training_allow_cpu=_to_bool(os.getenv("TRAINING_ALLOW_CPU"), default=False),
+        training_artifact_dir=os.getenv(
+            "MODEL_ARTIFACT_DIR", str(PROJECT_ROOT / "data" / "model_artifacts")
+        ),
+        ft_max_seq_length=_to_int(
+            os.getenv("FT_MAX_SEQ_LENGTH"), default=1024, minimum=128
+        ),
+        ft_default_training_method=os.getenv(
+            "FT_DEFAULT_TRAINING_METHOD", "sft_lora"
+        ).strip()
+        or "sft_lora",
+        ft_trainer_backend=os.getenv("FT_TRAINER_BACKEND", "local_peft").strip()
+        or "local_peft",
+        ft_trainer_model_map_json=os.getenv("FT_TRAINER_MODEL_MAP_JSON", "{}"),
+        ollama_publish_enabled=_to_bool(
+            os.getenv("OLLAMA_PUBLISH_ENABLED"), default=False
+        ),
+        ollama_model_namespace=os.getenv("OLLAMA_MODEL_NAMESPACE"),
     )
