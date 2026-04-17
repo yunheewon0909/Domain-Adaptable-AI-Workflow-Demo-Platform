@@ -2751,7 +2751,7 @@ function renderModelsRegistry() {
   populateMappedSelectOptions(dom.models.modelSelect, items, {
     selectedValue: state.models.selectedModelId,
     valueKey: 'id',
-    labelBuilder: (item) => `${item.display_name || item.ollama_model_name || item.id} · ${item.status || 'unknown'}`,
+    labelBuilder: (item) => `${item.display_name || item.serving_model_name || item.ollama_model_name || item.id} · ${item.status || 'unknown'}`,
   });
 
   dom.models.list.className = 'stack-list';
@@ -2762,8 +2762,8 @@ function renderModelsRegistry() {
           ${renderStatusBadge(model.status || 'registered')}
           ${renderBadge(model.source_type || 'unknown source')}
         </div>
-        <h3>${escapeHtml(model.display_name || model.ollama_model_name || model.id)}</h3>
-        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.ollama_model_name || model.base_model_name || 'model name unavailable')}</p>
+        <h3>${escapeHtml(model.display_name || model.serving_model_name || model.id)}</h3>
+        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.serving_model_name || model.base_model_name || 'model name unavailable')}</p>
         <div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div>
       </button>
     `)
@@ -2795,13 +2795,13 @@ function renderModelDetail() {
 
   dom.models.detail.className = 'detail-stack';
   dom.models.detail.innerHTML = `
-    <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.ollama_model_name || model.base_model_name || 'model')}</div>
+    <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.serving_model_name || model.base_model_name || 'model')}</div>
     ${renderDetailGrid([
       { label: 'Model ID', value: model.id || '—' },
       { label: 'Display name', value: model.display_name || '—' },
       { label: 'Source type', value: model.source_type || '—' },
       { label: 'Base model', value: model.base_model_name || '—' },
-      { label: 'Serving model', value: model.ollama_model_name || '—' },
+      { label: 'Serving model', value: model.serving_model_name || '—' },
       { label: 'Artifact ID', value: model.artifact_id || '—' },
       { label: 'Created', value: formatDateTime(model.created_at) },
       { label: 'Updated', value: formatDateTime(model.updated_at) },
@@ -2828,7 +2828,7 @@ function renderInferenceResult() {
       <p>${escapeHtml(result.answer || 'No answer returned.')}</p>
     </section>
     ${renderDetailGrid([
-      { label: 'Selected model', value: result.model?.display_name || result.model?.ollama_model_name || '—' },
+      { label: 'Selected model', value: result.model?.display_name || result.model?.serving_model_name || result.model?.ollama_model_name || '—' },
       { label: 'Model ID', value: result.model?.id || '—' },
       { label: 'Provider', value: result.meta?.provider || '—' },
       { label: 'Serving model', value: result.meta?.model || '—' },
