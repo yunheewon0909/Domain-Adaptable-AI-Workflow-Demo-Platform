@@ -20,9 +20,12 @@
           <div class="mode-switch" role="tablist" aria-label="Reviewer demo modes">
             <button id="mode-workflow" type="button" class="mode-button active" data-mode="workflow" aria-selected="true">Workflow reviewer</button>
             <button id="mode-plc" type="button" class="mode-button" data-mode="plc" aria-selected="false">PLC testing MVP</button>
+            <button id="mode-ft" type="button" class="mode-button" data-mode="ft" aria-selected="false">Fine-tuning</button>
+            <button id="mode-models" type="button" class="mode-button" data-mode="models" aria-selected="false">Models</button>
+            <button id="mode-rag" type="button" class="mode-button" data-mode="rag" aria-selected="false">RAG</button>
           </div>
         </div>
-        <p class="hint">Keep the existing workflow review path, or switch into the PLC tester surface to import suites, queue runs, and inspect testcase-level execution detail.</p>
+        <p class="hint">Keep the existing workflow review path, switch into the PLC tester surface, manage fine-tuning datasets and jobs, inspect registered models and inference runs, or manage RAG collections and retrieval previews from the shared reviewer shell.</p>
       </section>
 
       <section id="workflow-mode" class="demo-mode">
@@ -302,6 +305,371 @@
             <div id="plc-run-item-list" class="stack-list empty">Run items will appear here after a PLC run starts.</div>
             <div id="plc-run-item-detail" class="detail-stack empty">Select a testcase result to inspect expected vs actual output, failure reason, raw I/O snippets, and executor logs.</div>
           </div>
+        </section>
+      </section>
+
+      <section id="ft-mode" class="demo-mode" hidden>
+        <section class="grid ft-overview-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Create fine-tuning dataset</h2>
+                <p class="section-copy">Manage training data here before you validate a version or enqueue a training job.</p>
+              </div>
+              <button id="ft-datasets-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div class="controls compact-controls">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="ft-dataset-name">Dataset name</label>
+                  <input id="ft-dataset-name" type="text" placeholder="Instruction tuning demo" />
+                </div>
+                <div class="field">
+                  <label for="ft-dataset-task-type">Task type</label>
+                  <select id="ft-dataset-task-type">
+                    <option value="instruction_sft">instruction_sft</option>
+                    <option value="chat_sft">chat_sft</option>
+                    <option value="prompt_completion">prompt_completion</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="ft-dataset-schema-type">Schema type</label>
+                  <input id="ft-dataset-schema-type" type="text" value="json" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="ft-dataset-description">Description</label>
+                <textarea id="ft-dataset-description" rows="3" placeholder="Short reviewer-facing note about what this dataset trains."></textarea>
+              </div>
+              <button id="ft-create-dataset-button" type="button" class="run-button">Create dataset</button>
+              <p id="ft-dataset-hint" class="hint">Create a dataset or refresh the fine-tuning catalog to review existing assets.</p>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Fine-tuning datasets</h2>
+                <p class="section-copy">Select a dataset to inspect versions, row quality, and the current reviewer-ready training candidate.</p>
+              </div>
+            </div>
+            <div id="ft-dataset-list" class="stack-list empty">Fine-tuning datasets will appear here.</div>
+          </article>
+        </section>
+
+        <section class="grid ft-browser-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Dataset detail</h2>
+                <p class="section-copy">The selected dataset keeps all versions together so the reviewer can see which one is current.</p>
+              </div>
+            </div>
+            <div id="ft-dataset-detail" class="detail-stack empty">Select a dataset to inspect versions and reviewer notes.</div>
+            <div class="section-heading minor-section-heading">
+              <div>
+                <h3 class="subsection-title">Dataset versions</h3>
+                <p class="section-copy">Create a version, review its row counts, and transition status from draft to validated to locked.</p>
+              </div>
+            </div>
+            <div class="controls compact-controls">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="ft-version-label">Version label</label>
+                  <input id="ft-version-label" type="text" placeholder="v1" />
+                </div>
+                <div class="field">
+                  <label for="ft-train-ratio">Train split</label>
+                  <input id="ft-train-ratio" type="number" step="0.1" value="0.8" />
+                </div>
+                <div class="field">
+                  <label for="ft-val-ratio">Validation split</label>
+                  <input id="ft-val-ratio" type="number" step="0.1" value="0.1" />
+                </div>
+                <div class="field">
+                  <label for="ft-test-ratio">Test split</label>
+                  <input id="ft-test-ratio" type="number" step="0.1" value="0.1" />
+                </div>
+              </div>
+              <button id="ft-create-version-button" type="button" class="secondary-button">Create version</button>
+            </div>
+            <div id="ft-version-list" class="stack-list empty">Dataset versions will appear here after you select a dataset.</div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Version detail and rows</h2>
+                <p class="section-copy">Manage row payloads here, apply status transitions, and keep row-level validity visible before training.</p>
+              </div>
+            </div>
+            <div id="ft-version-detail" class="detail-stack empty">Select a dataset version to inspect row summary and training readiness.</div>
+            <div class="filter-toolbar ft-toolbar compact-toolbar">
+              <div class="field">
+                <label for="ft-version-status-select">Apply version status</label>
+                <select id="ft-version-status-select">
+                  <option value="draft">draft</option>
+                  <option value="validated">validated</option>
+                  <option value="locked">locked</option>
+                </select>
+              </div>
+              <div class="button-row">
+                <button id="ft-apply-version-status-button" type="button" class="secondary-button">Apply status</button>
+                <button id="ft-version-refresh" type="button" class="secondary-button">Refresh version</button>
+              </div>
+            </div>
+            <div class="controls compact-controls">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="ft-row-split">Row split</label>
+                  <select id="ft-row-split">
+                    <option value="train">train</option>
+                    <option value="val">val</option>
+                    <option value="test">test</option>
+                    <option value="unlabeled">unlabeled</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="ft-row-input-json">Input JSON or text</label>
+                <textarea id="ft-row-input-json" class="textarea-compact" rows="4" placeholder='{"instruction":"summarize","input":"plant outage note"}'></textarea>
+              </div>
+              <div class="field">
+                <label for="ft-row-target-json">Target JSON or text</label>
+                <textarea id="ft-row-target-json" class="textarea-compact" rows="4" placeholder='{"output":"summary"}'></textarea>
+              </div>
+              <div class="field">
+                <label for="ft-row-metadata-json">Metadata JSON</label>
+                <textarea id="ft-row-metadata-json" class="textarea-compact" rows="3" placeholder='{"source":"reviewer-ui"}'>{}</textarea>
+              </div>
+              <button id="ft-add-row-button" type="button" class="secondary-button">Add row</button>
+              <p id="ft-version-hint" class="hint">Select a version to review row summaries, add rows, or transition status.</p>
+            </div>
+            <div class="grid ft-row-grid nested-grid">
+              <div>
+                <p id="ft-row-summary" class="muted-line">Version rows will appear here.</p>
+                <div id="ft-row-list" class="stack-list empty">Version rows will appear here.</div>
+              </div>
+              <div id="ft-row-detail" class="detail-stack empty">Select a row to inspect its input, target, and validation state.</div>
+            </div>
+          </article>
+        </section>
+
+        <section class="grid ft-training-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Training enqueue</h2>
+                <p class="section-copy">Training jobs run here after a dataset version is reviewer-approved for validation or lock state.</p>
+              </div>
+            </div>
+            <div class="controls compact-controls">
+              <div class="field">
+                <label for="ft-base-model-name">Base model name</label>
+                <input id="ft-base-model-name" type="text" placeholder="qwen2.5:7b-instruct-q4_K_M" />
+              </div>
+              <div class="field">
+                <label for="ft-training-method">Training method</label>
+                <input id="ft-training-method" type="text" value="stub_adapter" />
+              </div>
+              <div class="field">
+                <label for="ft-training-hyperparams-json">Hyperparameters JSON</label>
+                <textarea id="ft-training-hyperparams-json" rows="4" placeholder='{"epochs":1}'>{}</textarea>
+              </div>
+              <button id="ft-enqueue-training-button" type="button" class="run-button">Enqueue training job</button>
+              <p id="ft-training-hint" class="hint">Select a dataset version, then enqueue a training job with the base model you want to register against.</p>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Training jobs</h2>
+                <p class="section-copy">Review queued, running, succeeded, and failed fine-tuning jobs with registered model outputs.</p>
+              </div>
+              <button id="ft-training-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div class="grid ft-training-detail-grid nested-grid">
+              <div id="ft-training-list" class="stack-list empty">Fine-tuning training jobs will appear here.</div>
+              <div id="ft-training-detail" class="detail-stack empty">Select a training job to inspect artifacts and registered models.</div>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <section id="models-mode" class="demo-mode" hidden>
+        <section class="grid models-browser-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Model registry</h2>
+                <p class="section-copy">View registered base and fine-tuned models, then choose which one should answer the current reviewer prompt.</p>
+              </div>
+              <button id="models-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div id="models-list" class="stack-list empty">Registered models will appear here.</div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Model detail</h2>
+                <p class="section-copy">Inspect the selected model source, backing artifact, serving name, and reviewer-facing description.</p>
+              </div>
+            </div>
+            <div id="model-detail" class="detail-stack empty">Select a model to inspect registry metadata and artifact detail.</div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Inference run</h2>
+              <p class="section-copy">Run inference with the selected model, optionally layering in RAG collection context before reviewing the answer.</p>
+            </div>
+          </div>
+          <div class="controls compact-controls">
+            <div class="form-grid">
+              <div class="field">
+                <label for="inference-model-select">Model selector</label>
+                <select id="inference-model-select"></select>
+              </div>
+              <div class="field">
+                <label for="inference-rag-collection-select">Optional RAG collection selector</label>
+                <select id="inference-rag-collection-select"></select>
+              </div>
+              <div class="field">
+                <label for="inference-temperature">Temperature</label>
+                <input id="inference-temperature" type="number" step="0.1" value="0" />
+              </div>
+              <div class="field">
+                <label for="inference-max-tokens">Max tokens</label>
+                <input id="inference-max-tokens" type="number" step="1" placeholder="Optional" />
+              </div>
+              <div class="field">
+                <label for="inference-top-k">RAG top k</label>
+                <input id="inference-top-k" type="number" step="1" value="3" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="inference-prompt">Prompt</label>
+              <textarea id="inference-prompt" rows="5" placeholder="Ask the selected model to summarize, classify, or reason over the current reviewer context."></textarea>
+            </div>
+            <button id="inference-run-button" type="button" class="run-button">Run inference</button>
+            <p id="inference-run-hint" class="hint">Choose a model, optionally attach a RAG collection, and run inference here.</p>
+          </div>
+          <div id="inference-result" class="detail-stack empty">Inference answers, model metadata, and retrieval preview will appear here.</div>
+        </section>
+      </section>
+
+      <section id="rag-mode" class="demo-mode" hidden>
+        <section class="grid rag-browser-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Create RAG collection</h2>
+                <p class="section-copy">Manage retrieval data separately here so the reviewer can tell which documents are grounding inference.</p>
+              </div>
+              <button id="rag-collections-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div class="controls compact-controls">
+              <div class="field">
+                <label for="rag-collection-name">Collection name</label>
+                <input id="rag-collection-name" type="text" placeholder="Maintenance docs" />
+              </div>
+              <div class="field">
+                <label for="rag-collection-description">Description</label>
+                <textarea id="rag-collection-description" rows="3" placeholder="Short reviewer-facing note about the collection contents."></textarea>
+              </div>
+              <div class="field">
+                <label for="rag-embedding-model">Embedding model</label>
+                <input id="rag-embedding-model" type="text" placeholder="Optional override" />
+              </div>
+              <div class="field">
+                <label for="rag-chunking-policy-json">Chunking policy JSON</label>
+                <textarea id="rag-chunking-policy-json" rows="3" placeholder='{"chunk_size":800,"chunk_overlap":120}'>{}</textarea>
+              </div>
+              <button id="rag-create-collection-button" type="button" class="run-button">Create collection</button>
+              <p id="rag-collection-hint" class="hint">Create or refresh a collection to manage document-level grounding data.</p>
+            </div>
+            <div id="rag-collection-list" class="stack-list empty">RAG collections will appear here.</div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Collection detail</h2>
+                <p class="section-copy">Inspect the selected collection before uploading documents or previewing retrieval behavior.</p>
+              </div>
+            </div>
+            <div id="rag-collection-detail" class="detail-stack empty">Select a collection to inspect document counts, embedding settings, and chunking policy.</div>
+          </article>
+        </section>
+
+        <section class="grid rag-doc-grid">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Collection documents</h2>
+                <p class="section-copy">Upload documents here, then inspect stored previews and parsing status separately from the model registry.</p>
+              </div>
+              <button id="rag-documents-refresh" type="button" class="secondary-button">Refresh</button>
+            </div>
+            <div class="controls compact-controls">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="rag-document-source-type">Source type</label>
+                  <select id="rag-document-source-type">
+                    <option value="upload">upload</option>
+                    <option value="reviewer">reviewer</option>
+                    <option value="seed">seed</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="rag-document-file">Document file</label>
+                  <input id="rag-document-file" type="file" accept=".txt,.md,.pdf" />
+                </div>
+              </div>
+              <button id="rag-upload-document-button" type="button" class="secondary-button">Upload document</button>
+              <p id="rag-document-hint" class="hint">Select a collection and upload TXT, Markdown, or PDF files to manage RAG grounding data.</p>
+            </div>
+            <p id="rag-document-summary" class="muted-line">Collection documents will appear here.</p>
+            <div id="rag-document-list" class="stack-list empty">Collection documents will appear here.</div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>Document detail</h2>
+                <p class="section-copy">Inspect upload status, preview text, and parse metadata for the selected document.</p>
+              </div>
+            </div>
+            <div id="rag-document-detail" class="detail-stack empty">Select a document to inspect filename, source type, and preview detail.</div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Retrieval preview</h2>
+              <p class="section-copy">Preview how the selected collection retrieves evidence before you use it from the Models inference surface.</p>
+            </div>
+          </div>
+          <div class="controls compact-controls">
+            <div class="form-grid">
+              <div class="field">
+                <label for="rag-preview-query">Preview query</label>
+                <input id="rag-preview-query" type="text" placeholder="maintenance automation" />
+              </div>
+              <div class="field">
+                <label for="rag-preview-top-k">Top k</label>
+                <input id="rag-preview-top-k" type="number" step="1" value="3" />
+              </div>
+            </div>
+            <button id="rag-preview-button" type="button" class="run-button">Preview retrieval</button>
+            <p id="rag-preview-hint" class="hint">Select a collection and run a retrieval preview to inspect document-level context before inference.</p>
+          </div>
+          <div id="rag-preview-result" class="detail-stack empty">Retrieval preview results will appear here.</div>
         </section>
       </section>
     </main>

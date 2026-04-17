@@ -1,6 +1,9 @@
 const MODES = {
   WORKFLOW: 'workflow',
   PLC: 'plc',
+  FT: 'ft',
+  MODELS: 'models',
+  RAG: 'rag',
 };
 
 const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed']);
@@ -62,12 +65,59 @@ const state = {
       run: 0,
     },
   },
+  ft: {
+    hasLoadedInitialData: false,
+    datasets: [],
+    selectedDatasetId: null,
+    selectedDataset: null,
+    selectedVersionId: null,
+    selectedVersion: null,
+    rows: [],
+    selectedRowId: null,
+    trainingJobs: [],
+    selectedTrainingJobId: null,
+    selectedTrainingJob: null,
+    requestTokens: {
+      dataset: 0,
+      version: 0,
+      trainingJob: 0,
+    },
+  },
+  models: {
+    hasLoadedInitialData: false,
+    items: [],
+    selectedModelId: null,
+    selectedModel: null,
+    ragCollections: [],
+    selectedRagCollectionId: '',
+    inferenceResult: null,
+    requestTokens: {
+      detail: 0,
+    },
+  },
+  rag: {
+    hasLoadedInitialData: false,
+    collections: [],
+    selectedCollectionId: null,
+    selectedCollection: null,
+    documents: [],
+    selectedDocumentId: null,
+    selectedDocument: null,
+    retrievalPreview: null,
+    requestTokens: {
+      collection: 0,
+      document: 0,
+    },
+  },
 };
 
 const dom = {
   modeButtons: Array.from(document.querySelectorAll('[data-mode]')),
   workflowMode: document.querySelector('#workflow-mode'),
   plcMode: document.querySelector('#plc-mode'),
+  ftMode: document.querySelector('#ft-mode'),
+  modelsMode: document.querySelector('#models-mode'),
+  ragMode: document.querySelector('#rag-mode'),
   workflow: {
     datasetSelect: document.querySelector('#dataset-select'),
     workflowList: document.querySelector('#workflow-list'),
@@ -129,6 +179,82 @@ const dom = {
     runItemFilterSummary: document.querySelector('#plc-run-item-filter-summary'),
     runItemList: document.querySelector('#plc-run-item-list'),
     runItemDetail: document.querySelector('#plc-run-item-detail'),
+  },
+  ft: {
+    datasetsRefresh: document.querySelector('#ft-datasets-refresh'),
+    datasetName: document.querySelector('#ft-dataset-name'),
+    datasetTaskType: document.querySelector('#ft-dataset-task-type'),
+    datasetSchemaType: document.querySelector('#ft-dataset-schema-type'),
+    datasetDescription: document.querySelector('#ft-dataset-description'),
+    createDatasetButton: document.querySelector('#ft-create-dataset-button'),
+    datasetHint: document.querySelector('#ft-dataset-hint'),
+    datasetList: document.querySelector('#ft-dataset-list'),
+    datasetDetail: document.querySelector('#ft-dataset-detail'),
+    versionLabel: document.querySelector('#ft-version-label'),
+    trainRatio: document.querySelector('#ft-train-ratio'),
+    valRatio: document.querySelector('#ft-val-ratio'),
+    testRatio: document.querySelector('#ft-test-ratio'),
+    createVersionButton: document.querySelector('#ft-create-version-button'),
+    versionList: document.querySelector('#ft-version-list'),
+    versionDetail: document.querySelector('#ft-version-detail'),
+    versionStatusSelect: document.querySelector('#ft-version-status-select'),
+    applyVersionStatusButton: document.querySelector('#ft-apply-version-status-button'),
+    versionRefresh: document.querySelector('#ft-version-refresh'),
+    rowSplit: document.querySelector('#ft-row-split'),
+    rowInputJson: document.querySelector('#ft-row-input-json'),
+    rowTargetJson: document.querySelector('#ft-row-target-json'),
+    rowMetadataJson: document.querySelector('#ft-row-metadata-json'),
+    addRowButton: document.querySelector('#ft-add-row-button'),
+    versionHint: document.querySelector('#ft-version-hint'),
+    rowSummary: document.querySelector('#ft-row-summary'),
+    rowList: document.querySelector('#ft-row-list'),
+    rowDetail: document.querySelector('#ft-row-detail'),
+    baseModelName: document.querySelector('#ft-base-model-name'),
+    trainingMethod: document.querySelector('#ft-training-method'),
+    trainingHyperparamsJson: document.querySelector('#ft-training-hyperparams-json'),
+    enqueueTrainingButton: document.querySelector('#ft-enqueue-training-button'),
+    trainingHint: document.querySelector('#ft-training-hint'),
+    trainingRefresh: document.querySelector('#ft-training-refresh'),
+    trainingList: document.querySelector('#ft-training-list'),
+    trainingDetail: document.querySelector('#ft-training-detail'),
+  },
+  models: {
+    refresh: document.querySelector('#models-refresh'),
+    list: document.querySelector('#models-list'),
+    detail: document.querySelector('#model-detail'),
+    modelSelect: document.querySelector('#inference-model-select'),
+    ragCollectionSelect: document.querySelector('#inference-rag-collection-select'),
+    temperature: document.querySelector('#inference-temperature'),
+    maxTokens: document.querySelector('#inference-max-tokens'),
+    topK: document.querySelector('#inference-top-k'),
+    prompt: document.querySelector('#inference-prompt'),
+    runButton: document.querySelector('#inference-run-button'),
+    runHint: document.querySelector('#inference-run-hint'),
+    result: document.querySelector('#inference-result'),
+  },
+  rag: {
+    collectionsRefresh: document.querySelector('#rag-collections-refresh'),
+    collectionName: document.querySelector('#rag-collection-name'),
+    collectionDescription: document.querySelector('#rag-collection-description'),
+    embeddingModel: document.querySelector('#rag-embedding-model'),
+    chunkingPolicyJson: document.querySelector('#rag-chunking-policy-json'),
+    createCollectionButton: document.querySelector('#rag-create-collection-button'),
+    collectionHint: document.querySelector('#rag-collection-hint'),
+    collectionList: document.querySelector('#rag-collection-list'),
+    collectionDetail: document.querySelector('#rag-collection-detail'),
+    documentsRefresh: document.querySelector('#rag-documents-refresh'),
+    documentSourceType: document.querySelector('#rag-document-source-type'),
+    documentFile: document.querySelector('#rag-document-file'),
+    uploadDocumentButton: document.querySelector('#rag-upload-document-button'),
+    documentHint: document.querySelector('#rag-document-hint'),
+    documentSummary: document.querySelector('#rag-document-summary'),
+    documentList: document.querySelector('#rag-document-list'),
+    documentDetail: document.querySelector('#rag-document-detail'),
+    previewQuery: document.querySelector('#rag-preview-query'),
+    previewTopK: document.querySelector('#rag-preview-top-k'),
+    previewButton: document.querySelector('#rag-preview-button'),
+    previewHint: document.querySelector('#rag-preview-hint'),
+    previewResult: document.querySelector('#rag-preview-result'),
   },
 };
 
@@ -253,10 +379,52 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function isPlainObject(value) {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}
+
 function uniqueSortedValues(values) {
   return Array.from(new Set(safeArray(values).filter(Boolean).map((value) => String(value).trim()).filter(Boolean))).sort((left, right) =>
     left.localeCompare(right),
   );
+}
+
+function parseOptionalJsonValue(rawValue, { allowStringFallback = true, fallbackValue = null, requireObject = false, fieldLabel = 'value' } = {}) {
+  const trimmed = String(rawValue || '').trim();
+  if (!trimmed) {
+    return fallbackValue;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (requireObject && !isPlainObject(parsed)) {
+      throw new Error(`${fieldLabel} must be a JSON object.`);
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith('must be a JSON object.')) {
+      throw error;
+    }
+    if (requireObject || !allowStringFallback) {
+      throw new Error(`${fieldLabel} must be valid JSON.`);
+    }
+    return trimmed;
+  }
+}
+
+function parseNumberInput(rawValue, { fallback = null, minimum = null, fieldLabel = 'value', integer = false } = {}) {
+  const trimmed = String(rawValue ?? '').trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const parsed = integer ? Number.parseInt(trimmed, 10) : Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${fieldLabel} must be a valid number.`);
+  }
+  if (minimum !== null && parsed < minimum) {
+    throw new Error(`${fieldLabel} must be at least ${minimum}.`);
+  }
+  return parsed;
 }
 
 function populateSelectOptions(select, options, { placeholderLabel, selectedValue } = {}) {
@@ -273,6 +441,26 @@ function populateSelectOptions(select, options, { placeholderLabel, selectedValu
         (option) =>
           `<option value="${escapeHtml(option)}" ${String(option) === String(selectedValue || '') ? 'selected' : ''}>${escapeHtml(option)}</option>`,
       )
+      .join(''),
+  );
+  select.innerHTML = fragments.join('');
+}
+
+function populateMappedSelectOptions(select, items, { placeholderLabel, selectedValue, valueKey = 'id', labelBuilder = null } = {}) {
+  if (!select) {
+    return;
+  }
+  const fragments = [];
+  if (placeholderLabel) {
+    fragments.push(`<option value="">${escapeHtml(placeholderLabel)}</option>`);
+  }
+  fragments.push(
+    safeArray(items)
+      .map((item) => {
+        const value = item?.[valueKey] ?? '';
+        const label = labelBuilder ? labelBuilder(item) : value;
+        return `<option value="${escapeHtml(value)}" ${String(value) === String(selectedValue || '') ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+      })
       .join(''),
   );
   select.innerHTML = fragments.join('');
@@ -565,6 +753,34 @@ function selectedPlcRunItem() {
   return state.plc.runItems.find((item) => item.id === state.plc.selectedRunItemId) || null;
 }
 
+function selectedFtDataset() {
+  return state.ft.selectedDataset;
+}
+
+function selectedFtVersion() {
+  return state.ft.selectedVersion;
+}
+
+function selectedFtRow() {
+  return state.ft.rows.find((row) => String(row.id) === String(state.ft.selectedRowId)) || null;
+}
+
+function selectedFtTrainingJob() {
+  return state.ft.selectedTrainingJob;
+}
+
+function selectedModel() {
+  return state.models.selectedModel;
+}
+
+function selectedRagCollection() {
+  return state.rag.selectedCollection;
+}
+
+function selectedRagDocument() {
+  return state.rag.selectedDocument;
+}
+
 function setWorkflowHint(message) {
   dom.workflow.runHint.textContent = message || '';
 }
@@ -575,6 +791,34 @@ function setPlcImportHint(message) {
 
 function setPlcRunHint(message) {
   dom.plc.runHint.textContent = message || '';
+}
+
+function setFtDatasetHint(message) {
+  dom.ft.datasetHint.textContent = message || '';
+}
+
+function setFtVersionHint(message) {
+  dom.ft.versionHint.textContent = message || '';
+}
+
+function setFtTrainingHint(message) {
+  dom.ft.trainingHint.textContent = message || '';
+}
+
+function setModelsHint(message) {
+  dom.models.runHint.textContent = message || '';
+}
+
+function setRagCollectionHint(message) {
+  dom.rag.collectionHint.textContent = message || '';
+}
+
+function setRagDocumentHint(message) {
+  dom.rag.documentHint.textContent = message || '';
+}
+
+function setRagPreviewHint(message) {
+  dom.rag.previewHint.textContent = message || '';
 }
 
 function stopWorkflowPolling() {
@@ -593,12 +837,27 @@ async function setMode(mode) {
   renderMode();
   if (mode === MODES.PLC) {
     await ensurePlcInitialized();
+    return;
+  }
+  if (mode === MODES.FT) {
+    await ensureFtInitialized();
+    return;
+  }
+  if (mode === MODES.MODELS) {
+    await ensureModelsInitialized();
+    return;
+  }
+  if (mode === MODES.RAG) {
+    await ensureRagInitialized();
   }
 }
 
 function renderMode() {
   dom.workflowMode.hidden = state.mode !== MODES.WORKFLOW;
   dom.plcMode.hidden = state.mode !== MODES.PLC;
+  dom.ftMode.hidden = state.mode !== MODES.FT;
+  dom.modelsMode.hidden = state.mode !== MODES.MODELS;
+  dom.ragMode.hidden = state.mode !== MODES.RAG;
   dom.modeButtons.forEach((button) => {
     const active = button.dataset.mode === state.mode;
     button.classList.toggle('active', active);
@@ -2048,16 +2307,870 @@ function beginPlcRunPolling(runId) {
   }, 1500);
 }
 
+function renderFtDatasets() {
+  if (!state.ft.datasets.length) {
+    dom.ft.datasetList.className = 'stack-list empty';
+    dom.ft.datasetList.textContent = 'Fine-tuning datasets will appear here.';
+    return;
+  }
+
+  dom.ft.datasetList.className = 'stack-list';
+  dom.ft.datasetList.innerHTML = state.ft.datasets
+    .map((dataset) => {
+      const currentVersion = safeArray(dataset.versions).find((version) => version.id === dataset.current_version_id) || safeArray(dataset.versions)[0] || null;
+      return `
+        <button type="button" class="list-card${dataset.id === state.ft.selectedDatasetId ? ' active' : ''}" data-ft-dataset-id="${escapeHtml(dataset.id)}">
+          <div class="inline-meta">
+            ${renderBadge(dataset.task_type || 'unknown task')}
+            ${renderBadge(dataset.schema_type || 'unknown schema')}
+            ${currentVersion ? renderStatusBadge(currentVersion.status) : renderBadge('no versions')}
+          </div>
+          <h3>${escapeHtml(dataset.name)}</h3>
+          <p class="meta-line">${escapeHtml(dataset.id)} · ${countLabel(safeArray(dataset.versions).length, 'version')}</p>
+          <div class="badge-row">
+            ${dataset.current_version_id ? renderBadge(`current ${dataset.current_version_id}`) : renderBadge('no current version')}
+            ${currentVersion ? renderBadge(`${currentVersion.row_summary?.total ?? currentVersion.row_count ?? 0} rows`) : ''}
+          </div>
+        </button>
+      `;
+    })
+    .join('');
+
+  dom.ft.datasetList.querySelectorAll('[data-ft-dataset-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadFtDataset(button.dataset.ftDatasetId);
+    });
+  });
+}
+
+function renderFtDatasetDetail() {
+  const dataset = selectedFtDataset();
+  if (!dataset) {
+    dom.ft.datasetDetail.className = 'detail-stack empty';
+    dom.ft.datasetDetail.textContent = 'Select a dataset to inspect versions and reviewer notes.';
+    dom.ft.versionList.className = 'stack-list empty';
+    dom.ft.versionList.textContent = 'Dataset versions will appear here after you select a dataset.';
+    return;
+  }
+
+  dom.ft.datasetDetail.className = 'detail-stack';
+  dom.ft.datasetDetail.innerHTML = `
+    ${renderDetailGrid([
+      { label: 'Dataset ID', value: dataset.id },
+      { label: 'Name', value: dataset.name },
+      { label: 'Task type', value: dataset.task_type },
+      { label: 'Schema type', value: dataset.schema_type },
+      { label: 'Current version', value: dataset.current_version_id || '—' },
+      { label: 'Version count', value: safeArray(dataset.versions).length },
+      { label: 'Created', value: formatDateTime(dataset.created_at) },
+      { label: 'Updated', value: formatDateTime(dataset.updated_at) },
+    ])}
+    ${dataset.description ? `<section class="callout success"><p class="callout-title">Description</p><p>${escapeHtml(dataset.description)}</p></section>` : ''}
+  `;
+
+  const versions = safeArray(dataset.versions);
+  if (!versions.length) {
+    dom.ft.versionList.className = 'stack-list empty';
+    dom.ft.versionList.textContent = 'Create a version to start adding rows and validating training data.';
+    return;
+  }
+
+  dom.ft.versionList.className = 'stack-list';
+  dom.ft.versionList.innerHTML = versions
+    .map(
+      (version) => `
+        <button type="button" class="list-card${version.id === state.ft.selectedVersionId ? ' active' : ''}" data-ft-version-id="${escapeHtml(version.id)}">
+          <div class="inline-meta">
+            ${renderStatusBadge(version.status)}
+            ${renderBadge(version.version_label || version.id)}
+          </div>
+          <h3>${escapeHtml(version.version_label || version.id)}</h3>
+          <p class="meta-line">${escapeHtml(version.id)} · ${version.row_summary?.total ?? version.row_count ?? 0} rows</p>
+          <div class="badge-row">
+            ${renderBadge(`valid ${version.row_summary?.valid ?? 0}`)}
+            ${renderBadge(`invalid ${version.row_summary?.invalid ?? 0}`)}
+            ${renderBadge(`train ${version.train_split_ratio}`)}
+          </div>
+        </button>
+      `,
+    )
+    .join('');
+
+  dom.ft.versionList.querySelectorAll('[data-ft-version-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadFtVersion(button.dataset.ftVersionId);
+    });
+  });
+}
+
+function renderFtVersionDetail() {
+  const version = selectedFtVersion();
+  if (!version) {
+    dom.ft.versionDetail.className = 'detail-stack empty';
+    dom.ft.versionDetail.textContent = 'Select a dataset version to inspect row summary and training readiness.';
+    dom.ft.versionStatusSelect.value = 'draft';
+    return;
+  }
+
+  dom.ft.versionStatusSelect.value = version.status || 'draft';
+  const rowSummary = version.row_summary || {};
+  const readinessTone = version.status === 'validated' || version.status === 'locked' ? 'success' : 'warning';
+  const readinessCopy = version.status === 'draft'
+    ? 'This version is still draft, so reviewers should inspect row validity before training can be enqueued successfully.'
+    : version.status === 'validated'
+      ? 'This version is validated and ready for training, while still allowing a final lock step if the reviewer wants to freeze it.'
+      : 'This version is locked, which makes it training-ready and row-stable for repeatable review.';
+
+  dom.ft.versionDetail.className = 'detail-stack';
+  dom.ft.versionDetail.innerHTML = `
+    <div class="inline-meta">${renderStatusBadge(version.status)}${renderBadge(version.version_label || version.id)}${renderBadge(`${rowSummary.total ?? version.row_count ?? 0} rows`)}</div>
+    ${renderDetailGrid([
+      { label: 'Version ID', value: version.id },
+      { label: 'Dataset ID', value: version.dataset_id },
+      { label: 'Version label', value: version.version_label },
+      { label: 'Status', value: version.status },
+      { label: 'Train split', value: version.train_split_ratio },
+      { label: 'Validation split', value: version.val_split_ratio },
+      { label: 'Test split', value: version.test_split_ratio },
+      { label: 'Created', value: formatDateTime(version.created_at) },
+      { label: 'Updated', value: formatDateTime(version.updated_at) },
+    ])}
+    <section class="callout ${readinessTone}">
+      <p class="callout-title">Version readiness</p>
+      <div class="badge-row">
+        ${renderBadge(`total ${rowSummary.total ?? 0}`)}
+        ${renderBadge(`valid ${rowSummary.valid ?? 0}`)}
+        ${renderBadge(`invalid ${rowSummary.invalid ?? 0}`)}
+      </div>
+      <p>${escapeHtml(readinessCopy)}</p>
+    </section>
+    ${rowSummary.by_split ? renderJsonDetails('Row split summary', rowSummary.by_split, { summaryDetail: 'Rows grouped by split' }) : ''}
+  `;
+}
+
+function renderFtRows() {
+  if (!selectedFtVersion()) {
+    dom.ft.rowSummary.textContent = 'Version rows will appear here.';
+    dom.ft.rowList.className = 'stack-list empty';
+    dom.ft.rowList.textContent = 'Version rows will appear here.';
+    return;
+  }
+
+  if (!state.ft.rows.length) {
+    dom.ft.rowSummary.textContent = 'No rows have been added to this version yet.';
+    dom.ft.rowList.className = 'stack-list empty';
+    dom.ft.rowList.textContent = 'No rows have been added to this version yet.';
+    return;
+  }
+
+  const validCount = state.ft.rows.filter((row) => row.validation_status === 'valid').length;
+  const invalidCount = state.ft.rows.filter((row) => row.validation_status === 'invalid').length;
+  dom.ft.rowSummary.textContent = `${countLabel(state.ft.rows.length, 'row')} · ${validCount} valid · ${invalidCount} invalid.`;
+  dom.ft.rowList.className = 'stack-list';
+  dom.ft.rowList.innerHTML = state.ft.rows
+    .map((row) => `
+      <button type="button" class="list-card${String(row.id) === String(state.ft.selectedRowId) ? ' active' : ''}" data-ft-row-id="${escapeHtml(row.id)}">
+        <div class="inline-meta">
+          ${renderStatusBadge(row.validation_status || 'pending')}
+          ${renderBadge(row.split || 'unlabeled')}
+          ${renderBadge(`row ${row.id}`)}
+        </div>
+        <h3>${escapeHtml(typeof row.input_json === 'string' ? row.input_json.slice(0, 48) || `Row ${row.id}` : `Row ${row.id}`)}</h3>
+        <p class="meta-line">created ${escapeHtml(formatDateTime(row.created_at))}</p>
+        ${row.validation_error ? `<p class="meta-line">${escapeHtml(row.validation_error)}</p>` : ''}
+      </button>
+    `)
+    .join('');
+
+  dom.ft.rowList.querySelectorAll('[data-ft-row-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.ft.selectedRowId = button.dataset.ftRowId;
+      renderFtRows();
+      renderFtRowDetail();
+    });
+  });
+}
+
+function renderFtRowDetail() {
+  const row = selectedFtRow();
+  if (!row) {
+    dom.ft.rowDetail.className = 'detail-stack empty';
+    dom.ft.rowDetail.textContent = 'Select a row to inspect its input, target, and validation state.';
+    return;
+  }
+
+  dom.ft.rowDetail.className = 'detail-stack';
+  dom.ft.rowDetail.innerHTML = `
+    <div class="inline-meta">${renderStatusBadge(row.validation_status || 'pending')}${renderBadge(row.split || 'unlabeled')}${renderBadge(`row ${row.id}`)}</div>
+    ${renderDetailGrid([
+      { label: 'Row ID', value: row.id },
+      { label: 'Version ID', value: row.dataset_version_id },
+      { label: 'Split', value: row.split },
+      { label: 'Validation status', value: row.validation_status },
+      { label: 'Created', value: formatDateTime(row.created_at) },
+      { label: 'Updated', value: formatDateTime(row.updated_at) },
+    ])}
+    ${row.validation_error ? `<section class="callout failure"><p class="callout-title">Validation error</p><p>${escapeHtml(row.validation_error)}</p></section>` : '<section class="callout success"><p class="callout-title">Validation</p><p>This row is currently valid for the selected fine-tuning task.</p></section>'}
+    ${renderJsonCallout('Input payload', row.input_json)}
+    ${renderJsonCallout('Target payload', row.target_json)}
+    ${renderJsonCallout('Metadata payload', row.metadata_json || {})}
+  `;
+}
+
+function renderFtTrainingJobs() {
+  if (!state.ft.trainingJobs.length) {
+    dom.ft.trainingList.className = 'stack-list empty';
+    dom.ft.trainingList.textContent = 'Fine-tuning training jobs will appear here.';
+    return;
+  }
+
+  dom.ft.trainingList.className = 'stack-list';
+  dom.ft.trainingList.innerHTML = state.ft.trainingJobs
+    .map((job) => `
+      <button type="button" class="list-card${job.id === state.ft.selectedTrainingJobId ? ' active' : ''}" data-ft-training-job-id="${escapeHtml(job.id)}">
+        <div class="inline-meta">
+          ${renderStatusBadge(job.status)}
+          ${renderBadge(job.base_model_name || 'base model n/a')}
+        </div>
+        <h3>${escapeHtml(job.dataset_name || job.dataset_version_label || job.id)}</h3>
+        <p class="meta-line">${escapeHtml(job.id)} · version ${escapeHtml(job.dataset_version_id || '—')}</p>
+        <div class="badge-row">
+          ${renderBadge(job.training_method || 'training method n/a')}
+          ${renderBadge(`${safeArray(job.artifacts).length} artifact${safeArray(job.artifacts).length === 1 ? '' : 's'}`)}
+          ${renderBadge(`${safeArray(job.registered_models).length} registered model${safeArray(job.registered_models).length === 1 ? '' : 's'}`)}
+        </div>
+      </button>
+    `)
+    .join('');
+
+  dom.ft.trainingList.querySelectorAll('[data-ft-training-job-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadFtTrainingJob(button.dataset.ftTrainingJobId);
+    });
+  });
+}
+
+function renderFtTrainingJobDetail() {
+  const job = selectedFtTrainingJob();
+  if (!job) {
+    dom.ft.trainingDetail.className = 'detail-stack empty';
+    dom.ft.trainingDetail.textContent = 'Select a training job to inspect artifacts and registered models.';
+    return;
+  }
+
+  dom.ft.trainingDetail.className = 'detail-stack';
+  dom.ft.trainingDetail.innerHTML = `
+    <div class="inline-meta">${renderStatusBadge(job.status)}${renderBadge(job.base_model_name || 'base model n/a')}${renderBadge(job.training_method || 'training')}</div>
+    ${renderDetailGrid([
+      { label: 'Training job ID', value: job.id },
+      { label: 'Dataset', value: job.dataset_name || '—' },
+      { label: 'Dataset version', value: job.dataset_version_label || job.dataset_version_id || '—' },
+      { label: 'Backing job ID', value: job.backing_job_id || '—' },
+      { label: 'Base model', value: job.base_model_name || '—' },
+      { label: 'Training method', value: job.training_method || '—' },
+      { label: 'Created', value: formatDateTime(job.created_at) },
+      { label: 'Started', value: formatDateTime(job.started_at) },
+      { label: 'Finished', value: formatDateTime(job.finished_at) },
+    ])}
+    ${job.log_text ? `<section class="callout"><p class="callout-title">Training log</p><p>${escapeHtml(job.log_text)}</p></section>` : ''}
+    ${renderJsonDetails('Training hyperparameters', job.hyperparams_json || {}, { summaryDetail: 'Submitted hyperparameter payload' })}
+    ${safeArray(job.artifacts).length ? renderJsonDetails('Artifacts', job.artifacts, { summaryDetail: `${job.artifacts.length} persisted artifact entries` }) : ''}
+    ${safeArray(job.registered_models).length ? renderJsonDetails('Registered models', job.registered_models, { summaryDetail: `${job.registered_models.length} model registry entries` }) : ''}
+  `;
+}
+
+function clearFtSelections() {
+  state.ft.selectedDatasetId = null;
+  state.ft.selectedDataset = null;
+  state.ft.selectedVersionId = null;
+  state.ft.selectedVersion = null;
+  state.ft.rows = [];
+  state.ft.selectedRowId = null;
+  renderFtDatasets();
+  renderFtDatasetDetail();
+  renderFtVersionDetail();
+  renderFtRows();
+  renderFtRowDetail();
+}
+
+async function refreshFtDatasets({ preferredDatasetId = null, preferredVersionId = null } = {}) {
+  state.ft.datasets = await fetchJson('/ft-datasets');
+  const nextDatasetId = preferredDatasetId && state.ft.datasets.some((dataset) => dataset.id === preferredDatasetId)
+    ? preferredDatasetId
+    : state.ft.datasets.some((dataset) => dataset.id === state.ft.selectedDatasetId)
+      ? state.ft.selectedDatasetId
+      : state.ft.datasets[0]?.id || null;
+  state.ft.selectedDatasetId = nextDatasetId;
+  renderFtDatasets();
+
+  if (!nextDatasetId) {
+    clearFtSelections();
+    return;
+  }
+
+  await loadFtDataset(nextDatasetId, { preferredVersionId });
+}
+
+async function loadFtDataset(datasetId, { preferredVersionId = null, preserveRow = false } = {}) {
+  if (!datasetId) {
+    clearFtSelections();
+    return;
+  }
+
+  const requestToken = ++state.ft.requestTokens.dataset;
+  const dataset = await fetchJson(`/ft-datasets/${encodeURIComponent(datasetId)}`);
+  if (requestToken !== state.ft.requestTokens.dataset) {
+    return;
+  }
+
+  state.ft.selectedDatasetId = datasetId;
+  state.ft.selectedDataset = dataset;
+  const versions = safeArray(dataset.versions);
+  state.ft.selectedVersionId = preferredVersionId && versions.some((version) => version.id === preferredVersionId)
+    ? preferredVersionId
+    : versions.some((version) => version.id === state.ft.selectedVersionId)
+      ? state.ft.selectedVersionId
+      : dataset.current_version_id && versions.some((version) => version.id === dataset.current_version_id)
+        ? dataset.current_version_id
+        : versions[0]?.id || null;
+
+  renderFtDatasets();
+  renderFtDatasetDetail();
+
+  if (!state.ft.selectedVersionId) {
+    state.ft.selectedVersion = null;
+    state.ft.rows = [];
+    state.ft.selectedRowId = null;
+    renderFtVersionDetail();
+    renderFtRows();
+    renderFtRowDetail();
+    return;
+  }
+
+  await loadFtVersion(state.ft.selectedVersionId, { preserveRow });
+}
+
+async function loadFtVersion(versionId, { preserveRow = false } = {}) {
+  if (!versionId) {
+    state.ft.selectedVersionId = null;
+    state.ft.selectedVersion = null;
+    state.ft.rows = [];
+    state.ft.selectedRowId = null;
+    renderFtDatasetDetail();
+    renderFtVersionDetail();
+    renderFtRows();
+    renderFtRowDetail();
+    return;
+  }
+
+  const requestToken = ++state.ft.requestTokens.version;
+  const [version, rows] = await Promise.all([
+    fetchJson(`/ft-dataset-versions/${encodeURIComponent(versionId)}`),
+    fetchJson(`/ft-dataset-versions/${encodeURIComponent(versionId)}/rows`),
+  ]);
+  if (requestToken !== state.ft.requestTokens.version) {
+    return;
+  }
+
+  state.ft.selectedVersionId = versionId;
+  state.ft.selectedVersion = version;
+  state.ft.rows = Array.isArray(rows) ? rows : [];
+  if (state.ft.selectedDataset) {
+    state.ft.selectedDataset.versions = safeArray(state.ft.selectedDataset.versions).map((item) => (item.id === version.id ? version : item));
+  }
+  if (!preserveRow || !state.ft.rows.some((row) => String(row.id) === String(state.ft.selectedRowId))) {
+    state.ft.selectedRowId = state.ft.rows[0]?.id || null;
+  }
+
+  renderFtDatasetDetail();
+  renderFtVersionDetail();
+  renderFtRows();
+  renderFtRowDetail();
+}
+
+async function refreshFtTrainingJobs({ preferredTrainingJobId = null } = {}) {
+  state.ft.trainingJobs = await fetchJson('/ft-training-jobs');
+  state.ft.selectedTrainingJobId = preferredTrainingJobId && state.ft.trainingJobs.some((job) => job.id === preferredTrainingJobId)
+    ? preferredTrainingJobId
+    : state.ft.trainingJobs.some((job) => job.id === state.ft.selectedTrainingJobId)
+      ? state.ft.selectedTrainingJobId
+      : state.ft.trainingJobs[0]?.id || null;
+
+  renderFtTrainingJobs();
+
+  if (!state.ft.selectedTrainingJobId) {
+    state.ft.selectedTrainingJob = null;
+    renderFtTrainingJobDetail();
+    return;
+  }
+
+  await loadFtTrainingJob(state.ft.selectedTrainingJobId);
+}
+
+async function loadFtTrainingJob(trainingJobId) {
+  if (!trainingJobId) {
+    state.ft.selectedTrainingJobId = null;
+    state.ft.selectedTrainingJob = null;
+    renderFtTrainingJobs();
+    renderFtTrainingJobDetail();
+    return;
+  }
+
+  const requestToken = ++state.ft.requestTokens.trainingJob;
+  const trainingJob = await fetchJson(`/ft-training-jobs/${encodeURIComponent(trainingJobId)}`);
+  if (requestToken !== state.ft.requestTokens.trainingJob) {
+    return;
+  }
+
+  state.ft.selectedTrainingJobId = trainingJob.id;
+  state.ft.selectedTrainingJob = trainingJob;
+  renderFtTrainingJobs();
+  renderFtTrainingJobDetail();
+}
+
+async function ensureFtInitialized({ force = false } = {}) {
+  if (state.ft.hasLoadedInitialData && !force) {
+    return;
+  }
+
+  await Promise.all([refreshFtDatasets(), refreshFtTrainingJobs()]);
+  state.ft.hasLoadedInitialData = true;
+}
+
+function renderModelsRegistry() {
+  const items = state.models.items;
+  if (!items.length) {
+    dom.models.list.className = 'stack-list empty';
+    dom.models.list.textContent = 'Registered models will appear here.';
+    dom.models.modelSelect.innerHTML = '';
+    dom.models.modelSelect.disabled = true;
+    return;
+  }
+
+  dom.models.modelSelect.disabled = false;
+  populateMappedSelectOptions(dom.models.modelSelect, items, {
+    selectedValue: state.models.selectedModelId,
+    valueKey: 'id',
+    labelBuilder: (item) => `${item.display_name || item.ollama_model_name || item.id} · ${item.status || 'unknown'}`,
+  });
+
+  dom.models.list.className = 'stack-list';
+  dom.models.list.innerHTML = items
+    .map((model) => `
+      <button type="button" class="list-card${model.id === state.models.selectedModelId ? ' active' : ''}" data-model-id="${escapeHtml(model.id)}">
+        <div class="inline-meta">
+          ${renderStatusBadge(model.status || 'registered')}
+          ${renderBadge(model.source_type || 'unknown source')}
+        </div>
+        <h3>${escapeHtml(model.display_name || model.ollama_model_name || model.id)}</h3>
+        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.ollama_model_name || model.base_model_name || 'model name unavailable')}</p>
+        <div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div>
+      </button>
+    `)
+    .join('');
+
+  dom.models.list.querySelectorAll('[data-model-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadModelDetail(button.dataset.modelId);
+    });
+  });
+}
+
+function renderModelsRagCollectionOptions() {
+  populateMappedSelectOptions(dom.models.ragCollectionSelect, state.models.ragCollections, {
+    placeholderLabel: 'No RAG collection',
+    selectedValue: state.models.selectedRagCollectionId,
+    valueKey: 'id',
+    labelBuilder: (item) => `${item.name || item.id} · ${item.document_count ?? 0} docs`,
+  });
+}
+
+function renderModelDetail() {
+  const model = selectedModel();
+  if (!model) {
+    dom.models.detail.className = 'detail-stack empty';
+    dom.models.detail.textContent = 'Select a model to inspect registry metadata and artifact detail.';
+    return;
+  }
+
+  dom.models.detail.className = 'detail-stack';
+  dom.models.detail.innerHTML = `
+    <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.ollama_model_name || model.base_model_name || 'model')}</div>
+    ${renderDetailGrid([
+      { label: 'Model ID', value: model.id || '—' },
+      { label: 'Display name', value: model.display_name || '—' },
+      { label: 'Source type', value: model.source_type || '—' },
+      { label: 'Base model', value: model.base_model_name || '—' },
+      { label: 'Serving model', value: model.ollama_model_name || '—' },
+      { label: 'Artifact ID', value: model.artifact_id || '—' },
+      { label: 'Created', value: formatDateTime(model.created_at) },
+      { label: 'Updated', value: formatDateTime(model.updated_at) },
+    ])}
+    ${safeArray(model.tags_json).length ? `<section class="callout"><p class="callout-title">Tags</p><div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div></section>` : ''}
+    ${model.description ? `<section class="callout success"><p class="callout-title">Description</p><p>${escapeHtml(model.description)}</p></section>` : ''}
+    ${model.artifact ? renderJsonDetails('Artifact detail', model.artifact, { summaryDetail: 'Backing fine-tuning artifact' }) : ''}
+  `;
+}
+
+function renderInferenceResult() {
+  const result = state.models.inferenceResult;
+  if (!result) {
+    dom.models.result.className = 'detail-stack empty';
+    dom.models.result.textContent = 'Inference answers, model metadata, and retrieval preview will appear here.';
+    return;
+  }
+
+  const retrievalPreview = result.retrieval_preview || null;
+  dom.models.result.className = 'detail-stack';
+  dom.models.result.innerHTML = `
+    <section class="callout success">
+      <p class="callout-title">Inference answer</p>
+      <p>${escapeHtml(result.answer || 'No answer returned.')}</p>
+    </section>
+    ${renderDetailGrid([
+      { label: 'Selected model', value: result.model?.display_name || result.model?.ollama_model_name || '—' },
+      { label: 'Model ID', value: result.model?.id || '—' },
+      { label: 'Provider', value: result.meta?.provider || '—' },
+      { label: 'Serving model', value: result.meta?.model || '—' },
+      { label: 'RAG collection', value: result.meta?.rag_collection_id || 'none' },
+      { label: 'Temperature', value: result.meta?.temperature ?? '—' },
+      { label: 'Max tokens', value: result.meta?.max_tokens ?? '—' },
+    ])}
+    ${renderJsonDetails('Inference model payload', result.model || {}, { summaryDetail: 'Resolved registry model used for the run' })}
+    ${renderJsonDetails('Inference meta', result.meta || {}, { summaryDetail: 'Execution metadata returned by the API' })}
+    ${retrievalPreview ? renderJsonDetails('Inference retrieval preview', retrievalPreview, { summaryDetail: `${safeArray(retrievalPreview.results).length} retrieval result${safeArray(retrievalPreview.results).length === 1 ? '' : 's'}` }) : '<section class="callout"><p class="callout-title">RAG context</p><p>No RAG collection was selected for this inference run.</p></section>'}
+  `;
+}
+
+async function refreshModelsRegistry({ preferredModelId = null } = {}) {
+  state.models.items = await fetchJson('/models');
+  state.models.selectedModelId = preferredModelId && state.models.items.some((item) => item.id === preferredModelId)
+    ? preferredModelId
+    : state.models.items.some((item) => item.id === state.models.selectedModelId)
+      ? state.models.selectedModelId
+      : state.models.items[0]?.id || null;
+
+  renderModelsRegistry();
+
+  if (!state.models.selectedModelId) {
+    state.models.selectedModel = null;
+    renderModelDetail();
+    return;
+  }
+
+  await loadModelDetail(state.models.selectedModelId);
+}
+
+async function loadModelDetail(modelId) {
+  if (!modelId) {
+    state.models.selectedModelId = null;
+    state.models.selectedModel = null;
+    renderModelsRegistry();
+    renderModelDetail();
+    return;
+  }
+
+  const requestToken = ++state.models.requestTokens.detail;
+  const model = await fetchJson(`/models/${encodeURIComponent(modelId)}`);
+  if (requestToken !== state.models.requestTokens.detail) {
+    return;
+  }
+
+  state.models.selectedModelId = model.id;
+  state.models.selectedModel = model;
+  renderModelsRegistry();
+  renderModelDetail();
+}
+
+async function refreshModelsRagCollections() {
+  state.models.ragCollections = await fetchJson('/rag-collections');
+  if (state.models.selectedRagCollectionId && !state.models.ragCollections.some((collection) => collection.id === state.models.selectedRagCollectionId)) {
+    state.models.selectedRagCollectionId = '';
+  }
+  renderModelsRagCollectionOptions();
+}
+
+async function ensureModelsInitialized({ force = false } = {}) {
+  if (state.models.hasLoadedInitialData && !force) {
+    return;
+  }
+
+  await Promise.all([refreshModelsRegistry(), refreshModelsRagCollections()]);
+  renderInferenceResult();
+  state.models.hasLoadedInitialData = true;
+}
+
+function renderRagCollections() {
+  if (!state.rag.collections.length) {
+    dom.rag.collectionList.className = 'stack-list empty';
+    dom.rag.collectionList.textContent = 'RAG collections will appear here.';
+    return;
+  }
+
+  dom.rag.collectionList.className = 'stack-list';
+  dom.rag.collectionList.innerHTML = state.rag.collections
+    .map((collection) => `
+      <button type="button" class="list-card${collection.id === state.rag.selectedCollectionId ? ' active' : ''}" data-rag-collection-id="${escapeHtml(collection.id)}">
+        <div class="inline-meta">
+          ${renderStatusBadge(collection.index_status || 'ready')}
+          ${renderBadge(collection.embedding_model || 'embed model n/a')}
+        </div>
+        <h3>${escapeHtml(collection.name)}</h3>
+        <p class="meta-line">${escapeHtml(collection.id)} · ${collection.document_count ?? 0} documents</p>
+        ${collection.description ? `<p class="meta-line">${escapeHtml(collection.description)}</p>` : ''}
+      </button>
+    `)
+    .join('');
+
+  dom.rag.collectionList.querySelectorAll('[data-rag-collection-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadRagCollection(button.dataset.ragCollectionId);
+    });
+  });
+}
+
+function renderRagCollectionDetail() {
+  const collection = selectedRagCollection();
+  if (!collection) {
+    dom.rag.collectionDetail.className = 'detail-stack empty';
+    dom.rag.collectionDetail.textContent = 'Select a collection to inspect document counts, embedding settings, and chunking policy.';
+    return;
+  }
+
+  dom.rag.collectionDetail.className = 'detail-stack';
+  dom.rag.collectionDetail.innerHTML = `
+    <div class="inline-meta">${renderStatusBadge(collection.index_status || 'ready')}${renderBadge(collection.embedding_model || 'embedding model n/a')}${renderBadge(`${collection.document_count ?? 0} documents`)}</div>
+    ${renderDetailGrid([
+      { label: 'Collection ID', value: collection.id },
+      { label: 'Name', value: collection.name },
+      { label: 'Embedding model', value: collection.embedding_model || '—' },
+      { label: 'Index status', value: collection.index_status || '—' },
+      { label: 'Document count', value: collection.document_count ?? 0 },
+      { label: 'Created', value: formatDateTime(collection.created_at) },
+      { label: 'Updated', value: formatDateTime(collection.updated_at) },
+    ])}
+    ${collection.description ? `<section class="callout success"><p class="callout-title">Description</p><p>${escapeHtml(collection.description)}</p></section>` : ''}
+    ${renderJsonDetails('Chunking policy', collection.chunking_policy_json || {}, { summaryDetail: 'Stored collection chunking policy' })}
+  `;
+}
+
+function renderRagDocuments() {
+  if (!selectedRagCollection()) {
+    dom.rag.documentSummary.textContent = 'Collection documents will appear here.';
+    dom.rag.documentList.className = 'stack-list empty';
+    dom.rag.documentList.textContent = 'Collection documents will appear here.';
+    return;
+  }
+
+  if (!state.rag.documents.length) {
+    dom.rag.documentSummary.textContent = 'No documents uploaded for this collection yet.';
+    dom.rag.documentList.className = 'stack-list empty';
+    dom.rag.documentList.textContent = 'No documents uploaded for this collection yet.';
+    return;
+  }
+
+  dom.rag.documentSummary.textContent = `${countLabel(state.rag.documents.length, 'document')} in the selected collection.`;
+  dom.rag.documentList.className = 'stack-list';
+  dom.rag.documentList.innerHTML = state.rag.documents
+    .map((document) => `
+      <button type="button" class="list-card${document.id === state.rag.selectedDocumentId ? ' active' : ''}" data-rag-document-id="${escapeHtml(document.id)}">
+        <div class="inline-meta">
+          ${renderStatusBadge(document.status || 'uploaded')}
+          ${renderBadge(document.mime_type || 'mime n/a')}
+        </div>
+        <h3>${escapeHtml(document.filename || document.id)}</h3>
+        <p class="meta-line">${escapeHtml(document.id)} · ${escapeHtml(document.source_type || 'unknown source')}</p>
+        ${document.preview_excerpt ? `<p class="meta-line">${escapeHtml(document.preview_excerpt)}</p>` : ''}
+      </button>
+    `)
+    .join('');
+
+  dom.rag.documentList.querySelectorAll('[data-rag-document-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await loadRagDocument(button.dataset.ragDocumentId);
+    });
+  });
+}
+
+function renderRagDocumentDetail() {
+  const document = selectedRagDocument();
+  if (!document) {
+    dom.rag.documentDetail.className = 'detail-stack empty';
+    dom.rag.documentDetail.textContent = 'Select a document to inspect filename, source type, and preview detail.';
+    return;
+  }
+
+  dom.rag.documentDetail.className = 'detail-stack';
+  dom.rag.documentDetail.innerHTML = `
+    <div class="inline-meta">${renderStatusBadge(document.status || 'uploaded')}${renderBadge(document.mime_type || 'mime n/a')}${renderBadge(document.source_type || 'source n/a')}</div>
+    ${renderDetailGrid([
+      { label: 'Document ID', value: document.id },
+      { label: 'Collection ID', value: document.collection_id },
+      { label: 'Filename', value: document.filename },
+      { label: 'Checksum', value: document.checksum || '—' },
+      { label: 'Created', value: formatDateTime(document.created_at) },
+      { label: 'Updated', value: formatDateTime(document.updated_at) },
+    ])}
+    ${document.preview_excerpt ? `<section class="callout success"><p class="callout-title">Preview excerpt</p><p>${escapeHtml(document.preview_excerpt)}</p></section>` : ''}
+    ${renderJsonDetails('Document metadata', document.metadata_json || {}, { summaryDetail: 'Parse, storage, and chunk preview metadata' })}
+  `;
+}
+
+function renderRagPreviewResult() {
+  const preview = state.rag.retrievalPreview;
+  if (!preview) {
+    dom.rag.previewResult.className = 'detail-stack empty';
+    dom.rag.previewResult.textContent = 'Retrieval preview results will appear here.';
+    return;
+  }
+
+  dom.rag.previewResult.className = 'detail-stack';
+  dom.rag.previewResult.innerHTML = `
+    ${renderDetailGrid([
+      { label: 'Collection', value: preview.collection_name || preview.collection_id || '—' },
+      { label: 'Collection ID', value: preview.collection_id || '—' },
+      { label: 'Query', value: preview.query || '—' },
+      { label: 'Top k', value: preview.top_k ?? '—' },
+      { label: 'Result count', value: safeArray(preview.results).length },
+    ])}
+    ${safeArray(preview.results).length ? renderJsonDetails('Retrieval results', preview.results, { open: true, summaryDetail: `${preview.results.length} matching document${preview.results.length === 1 ? '' : 's'}` }) : '<section class="callout warning"><p class="callout-title">No retrieval matches</p><p>No documents in the selected collection matched the preview query.</p></section>'}
+  `;
+}
+
+function clearRagSelections() {
+  state.rag.selectedCollectionId = null;
+  state.rag.selectedCollection = null;
+  state.rag.documents = [];
+  state.rag.selectedDocumentId = null;
+  state.rag.selectedDocument = null;
+  state.rag.retrievalPreview = null;
+  renderRagCollections();
+  renderRagCollectionDetail();
+  renderRagDocuments();
+  renderRagDocumentDetail();
+  renderRagPreviewResult();
+}
+
+async function refreshRagCollections({ preferredCollectionId = null, preferredDocumentId = null } = {}) {
+  state.rag.collections = await fetchJson('/rag-collections');
+  state.rag.selectedCollectionId = preferredCollectionId && state.rag.collections.some((collection) => collection.id === preferredCollectionId)
+    ? preferredCollectionId
+    : state.rag.collections.some((collection) => collection.id === state.rag.selectedCollectionId)
+      ? state.rag.selectedCollectionId
+      : state.rag.collections[0]?.id || null;
+
+  renderRagCollections();
+
+  if (!state.rag.selectedCollectionId) {
+    clearRagSelections();
+    return;
+  }
+
+  await loadRagCollection(state.rag.selectedCollectionId, { preferredDocumentId });
+}
+
+async function loadRagCollection(collectionId, { preferredDocumentId = null } = {}) {
+  if (!collectionId) {
+    clearRagSelections();
+    return;
+  }
+
+  const requestToken = ++state.rag.requestTokens.collection;
+  const [collection, documents] = await Promise.all([
+    fetchJson(`/rag-collections/${encodeURIComponent(collectionId)}`),
+    fetchJson(`/rag-collections/${encodeURIComponent(collectionId)}/documents`),
+  ]);
+  if (requestToken !== state.rag.requestTokens.collection) {
+    return;
+  }
+
+  state.rag.selectedCollectionId = collectionId;
+  state.rag.selectedCollection = collection;
+  state.rag.documents = Array.isArray(documents) ? documents : [];
+  state.rag.retrievalPreview = null;
+  state.rag.selectedDocumentId = preferredDocumentId && state.rag.documents.some((item) => item.id === preferredDocumentId)
+    ? preferredDocumentId
+    : state.rag.documents.some((item) => item.id === state.rag.selectedDocumentId)
+      ? state.rag.selectedDocumentId
+      : state.rag.documents[0]?.id || null;
+
+  renderRagCollections();
+  renderRagCollectionDetail();
+  renderRagDocuments();
+  renderRagPreviewResult();
+
+  if (!state.rag.selectedDocumentId) {
+    state.rag.selectedDocument = null;
+    renderRagDocumentDetail();
+    return;
+  }
+
+  await loadRagDocument(state.rag.selectedDocumentId);
+}
+
+async function loadRagDocument(documentId) {
+  if (!documentId) {
+    state.rag.selectedDocumentId = null;
+    state.rag.selectedDocument = null;
+    renderRagDocuments();
+    renderRagDocumentDetail();
+    return;
+  }
+
+  const requestToken = ++state.rag.requestTokens.document;
+  const document = await fetchJson(`/rag-documents/${encodeURIComponent(documentId)}`);
+  if (requestToken !== state.rag.requestTokens.document) {
+    return;
+  }
+
+  state.rag.selectedDocumentId = document.id;
+  state.rag.selectedDocument = document;
+  renderRagDocuments();
+  renderRagDocumentDetail();
+}
+
+async function ensureRagInitialized({ force = false } = {}) {
+  if (state.rag.hasLoadedInitialData && !force) {
+    return;
+  }
+
+  await refreshRagCollections();
+  renderRagPreviewResult();
+  state.rag.hasLoadedInitialData = true;
+}
+
 dom.modeButtons.forEach((button) => {
   button.addEventListener('click', async () => {
     try {
       await setMode(button.dataset.mode);
       if (button.dataset.mode === MODES.PLC) {
         setPlcRunHint('PLC tester ready. Import a suite or inspect existing runs.');
+        return;
+      }
+      if (button.dataset.mode === MODES.FT) {
+        setFtDatasetHint('Fine-tuning datasets ready. Create or inspect a dataset version here.');
+        setFtVersionHint('Review row validity, apply status transitions, and prepare the selected version for training.');
+        setFtTrainingHint('Training enqueue is ready. Use the selected version to create or review jobs.');
+        return;
+      }
+      if (button.dataset.mode === MODES.MODELS) {
+        setModelsHint('Models ready. Select a registered model and run inference here.');
+        return;
+      }
+      if (button.dataset.mode === MODES.RAG) {
+        setRagCollectionHint('RAG collections ready. Create or inspect retrieval collections here.');
+        setRagDocumentHint('Upload or review collection documents here.');
+        setRagPreviewHint('Run retrieval preview to inspect grounding context before inference.');
       }
     } catch (error) {
       if (button.dataset.mode === MODES.PLC) {
         setPlcRunHint(error.message);
+      } else if (button.dataset.mode === MODES.FT) {
+        setFtDatasetHint(error.message);
+      } else if (button.dataset.mode === MODES.MODELS) {
+        setModelsHint(error.message);
+      } else if (button.dataset.mode === MODES.RAG) {
+        setRagCollectionHint(error.message);
       } else {
         setWorkflowHint(error.message);
       }
@@ -2393,6 +3506,397 @@ dom.plc.runDetailRefresh.addEventListener('click', async () => {
   }
 });
 
+dom.ft.datasetsRefresh.addEventListener('click', async () => {
+  try {
+    await ensureFtInitialized();
+    await Promise.all([refreshFtDatasets(), refreshFtTrainingJobs()]);
+    setFtDatasetHint('Fine-tuning datasets refreshed.');
+  } catch (error) {
+    setFtDatasetHint(error.message);
+  }
+});
+
+dom.ft.createDatasetButton.addEventListener('click', async () => {
+  const name = dom.ft.datasetName.value.trim();
+  if (!name) {
+    setFtDatasetHint('Enter a dataset name before creating a fine-tuning dataset.');
+    return;
+  }
+
+  dom.ft.createDatasetButton.disabled = true;
+  setFtDatasetHint('Creating fine-tuning dataset...');
+  try {
+    const created = await fetchJson('/ft-datasets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        task_type: dom.ft.datasetTaskType.value,
+        schema_type: dom.ft.datasetSchemaType.value.trim() || 'json',
+        description: dom.ft.datasetDescription.value.trim() || null,
+      }),
+    });
+    await refreshFtDatasets({ preferredDatasetId: created.id });
+    dom.ft.datasetName.value = '';
+    dom.ft.datasetDescription.value = '';
+    setFtDatasetHint(`Created dataset ${created.name}.`);
+  } catch (error) {
+    setFtDatasetHint(error.message);
+  } finally {
+    dom.ft.createDatasetButton.disabled = false;
+  }
+});
+
+dom.ft.createVersionButton.addEventListener('click', async () => {
+  const dataset = selectedFtDataset();
+  if (!dataset) {
+    setFtVersionHint('Select a dataset before creating a version.');
+    return;
+  }
+
+  const versionLabel = dom.ft.versionLabel.value.trim();
+  if (!versionLabel) {
+    setFtVersionHint('Enter a version label before creating a dataset version.');
+    return;
+  }
+
+  dom.ft.createVersionButton.disabled = true;
+  setFtVersionHint(`Creating version ${versionLabel}...`);
+  try {
+    const created = await fetchJson(`/ft-datasets/${encodeURIComponent(dataset.id)}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version_label: versionLabel,
+        train_split_ratio: parseNumberInput(dom.ft.trainRatio.value, { fallback: 0.8, minimum: 0, fieldLabel: 'Train split' }),
+        val_split_ratio: parseNumberInput(dom.ft.valRatio.value, { fallback: 0.1, minimum: 0, fieldLabel: 'Validation split' }),
+        test_split_ratio: parseNumberInput(dom.ft.testRatio.value, { fallback: 0.1, minimum: 0, fieldLabel: 'Test split' }),
+      }),
+    });
+    await refreshFtDatasets({ preferredDatasetId: dataset.id, preferredVersionId: created.id });
+    dom.ft.versionLabel.value = '';
+    setFtVersionHint(`Created version ${created.version_label}.`);
+  } catch (error) {
+    setFtVersionHint(error.message);
+  } finally {
+    dom.ft.createVersionButton.disabled = false;
+  }
+});
+
+dom.ft.versionRefresh.addEventListener('click', async () => {
+  if (!state.ft.selectedVersionId) {
+    setFtVersionHint('Select a version before refreshing version detail.');
+    return;
+  }
+  try {
+    await loadFtVersion(state.ft.selectedVersionId, { preserveRow: true });
+    setFtVersionHint(`Version ${state.ft.selectedVersionId} refreshed.`);
+  } catch (error) {
+    setFtVersionHint(error.message);
+  }
+});
+
+dom.ft.applyVersionStatusButton.addEventListener('click', async () => {
+  const version = selectedFtVersion();
+  if (!version) {
+    setFtVersionHint('Select a version before applying a status transition.');
+    return;
+  }
+
+  dom.ft.applyVersionStatusButton.disabled = true;
+  setFtVersionHint(`Applying ${dom.ft.versionStatusSelect.value} to ${version.version_label || version.id}...`);
+  try {
+    const updated = await fetchJson(`/ft-dataset-versions/${encodeURIComponent(version.id)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: dom.ft.versionStatusSelect.value }),
+    });
+    await refreshFtDatasets({ preferredDatasetId: updated.dataset_id, preferredVersionId: updated.id });
+    setFtVersionHint(`Version ${updated.version_label || updated.id} is now ${updated.status}.`);
+  } catch (error) {
+    setFtVersionHint(error.message);
+  } finally {
+    dom.ft.applyVersionStatusButton.disabled = false;
+  }
+});
+
+dom.ft.addRowButton.addEventListener('click', async () => {
+  const version = selectedFtVersion();
+  if (!version) {
+    setFtVersionHint('Select a version before adding rows.');
+    return;
+  }
+
+  dom.ft.addRowButton.disabled = true;
+  setFtVersionHint(`Adding a row to ${version.version_label || version.id}...`);
+  try {
+    await fetchJson(`/ft-dataset-versions/${encodeURIComponent(version.id)}/rows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rows: [
+          {
+            split: dom.ft.rowSplit.value,
+            input_json: parseOptionalJsonValue(dom.ft.rowInputJson.value, { allowStringFallback: true, fieldLabel: 'Input payload' }),
+            target_json: parseOptionalJsonValue(dom.ft.rowTargetJson.value, { allowStringFallback: true, fieldLabel: 'Target payload' }),
+            metadata_json: parseOptionalJsonValue(dom.ft.rowMetadataJson.value, {
+              allowStringFallback: false,
+              fallbackValue: {},
+              requireObject: true,
+              fieldLabel: 'Metadata payload',
+            }),
+          },
+        ],
+      }),
+    });
+    await loadFtVersion(version.id);
+    dom.ft.rowInputJson.value = '';
+    dom.ft.rowTargetJson.value = '';
+    dom.ft.rowMetadataJson.value = '{}';
+    setFtVersionHint(`Added a row to ${version.version_label || version.id}.`);
+  } catch (error) {
+    setFtVersionHint(error.message);
+  } finally {
+    dom.ft.addRowButton.disabled = false;
+  }
+});
+
+dom.ft.trainingRefresh.addEventListener('click', async () => {
+  try {
+    await ensureFtInitialized();
+    await refreshFtTrainingJobs({ preferredTrainingJobId: state.ft.selectedTrainingJobId });
+    setFtTrainingHint('Fine-tuning training jobs refreshed.');
+  } catch (error) {
+    setFtTrainingHint(error.message);
+  }
+});
+
+dom.ft.enqueueTrainingButton.addEventListener('click', async () => {
+  const version = selectedFtVersion();
+  if (!version) {
+    setFtTrainingHint('Select a version before enqueueing a training job.');
+    return;
+  }
+  const baseModelName = dom.ft.baseModelName.value.trim();
+  if (!baseModelName) {
+    setFtTrainingHint('Enter a base model name before enqueueing training.');
+    return;
+  }
+
+  dom.ft.enqueueTrainingButton.disabled = true;
+  setFtTrainingHint(`Enqueueing training for ${version.version_label || version.id}...`);
+  try {
+    const created = await fetchJson('/ft-training-jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dataset_version_id: version.id,
+        base_model_name: baseModelName,
+        training_method: dom.ft.trainingMethod.value.trim() || 'stub_adapter',
+        hyperparams_json: parseOptionalJsonValue(dom.ft.trainingHyperparamsJson.value, {
+          allowStringFallback: false,
+          fallbackValue: {},
+          requireObject: true,
+          fieldLabel: 'Training hyperparameters',
+        }),
+      }),
+    });
+    await refreshFtTrainingJobs({ preferredTrainingJobId: created.id });
+    setFtTrainingHint(`Training job ${created.id} queued for ${version.version_label || version.id}.`);
+  } catch (error) {
+    setFtTrainingHint(error.message);
+  } finally {
+    dom.ft.enqueueTrainingButton.disabled = false;
+  }
+});
+
+dom.models.refresh.addEventListener('click', async () => {
+  try {
+    await ensureModelsInitialized();
+    await Promise.all([
+      refreshModelsRegistry({ preferredModelId: state.models.selectedModelId }),
+      refreshModelsRagCollections(),
+    ]);
+    setModelsHint('Model registry refreshed.');
+  } catch (error) {
+    setModelsHint(error.message);
+  }
+});
+
+dom.models.modelSelect.addEventListener('change', async (event) => {
+  try {
+    await loadModelDetail(event.target.value);
+    setModelsHint(`Model selector changed to ${event.target.selectedOptions[0]?.textContent || event.target.value}.`);
+  } catch (error) {
+    setModelsHint(error.message);
+  }
+});
+
+dom.models.ragCollectionSelect.addEventListener('change', (event) => {
+  state.models.selectedRagCollectionId = event.target.value;
+  const selectedLabel = event.target.selectedOptions[0]?.textContent || 'No RAG collection';
+  setModelsHint(`Inference RAG collection set to ${selectedLabel}.`);
+});
+
+dom.models.runButton.addEventListener('click', async () => {
+  const prompt = dom.models.prompt.value.trim();
+  if (!prompt) {
+    setModelsHint('Enter a prompt before running inference.');
+    return;
+  }
+  if (!state.models.selectedModelId) {
+    setModelsHint('Select a model before running inference.');
+    return;
+  }
+
+  dom.models.runButton.disabled = true;
+  setModelsHint('Running inference...');
+  try {
+    const result = await fetchJson('/inference/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        model_id: state.models.selectedModelId,
+        rag_collection_id: state.models.selectedRagCollectionId || null,
+        temperature: parseNumberInput(dom.models.temperature.value, { fallback: 0, minimum: 0, fieldLabel: 'Temperature' }),
+        max_tokens: parseNumberInput(dom.models.maxTokens.value, { fallback: null, minimum: 1, fieldLabel: 'Max tokens', integer: true }),
+        top_k: parseNumberInput(dom.models.topK.value, { fallback: 3, minimum: 1, fieldLabel: 'RAG top k', integer: true }),
+      }),
+    });
+    state.models.inferenceResult = result;
+    renderInferenceResult();
+    setModelsHint(`Inference completed with ${result.model?.display_name || result.meta?.model || 'the selected model'}.`);
+  } catch (error) {
+    setModelsHint(error.message);
+  } finally {
+    dom.models.runButton.disabled = false;
+  }
+});
+
+dom.rag.collectionsRefresh.addEventListener('click', async () => {
+  try {
+    await ensureRagInitialized();
+    await refreshRagCollections({ preferredCollectionId: state.rag.selectedCollectionId, preferredDocumentId: state.rag.selectedDocumentId });
+    setRagCollectionHint('RAG collections refreshed.');
+  } catch (error) {
+    setRagCollectionHint(error.message);
+  }
+});
+
+dom.rag.createCollectionButton.addEventListener('click', async () => {
+  const name = dom.rag.collectionName.value.trim();
+  if (!name) {
+    setRagCollectionHint('Enter a collection name before creating a RAG collection.');
+    return;
+  }
+
+  dom.rag.createCollectionButton.disabled = true;
+  setRagCollectionHint('Creating RAG collection...');
+  try {
+    const created = await fetchJson('/rag-collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        description: dom.rag.collectionDescription.value.trim() || null,
+        embedding_model: dom.rag.embeddingModel.value.trim() || null,
+        chunking_policy_json: parseOptionalJsonValue(dom.rag.chunkingPolicyJson.value, {
+          allowStringFallback: false,
+          fallbackValue: {},
+          requireObject: true,
+          fieldLabel: 'Chunking policy',
+        }),
+      }),
+    });
+    await refreshRagCollections({ preferredCollectionId: created.id });
+    dom.rag.collectionName.value = '';
+    dom.rag.collectionDescription.value = '';
+    setRagCollectionHint(`Created RAG collection ${created.name}.`);
+  } catch (error) {
+    setRagCollectionHint(error.message);
+  } finally {
+    dom.rag.createCollectionButton.disabled = false;
+  }
+});
+
+dom.rag.documentsRefresh.addEventListener('click', async () => {
+  if (!state.rag.selectedCollectionId) {
+    setRagDocumentHint('Select a collection before refreshing document detail.');
+    return;
+  }
+  try {
+    await loadRagCollection(state.rag.selectedCollectionId, { preferredDocumentId: state.rag.selectedDocumentId });
+    setRagDocumentHint(`Documents refreshed for ${selectedRagCollection()?.name || state.rag.selectedCollectionId}.`);
+  } catch (error) {
+    setRagDocumentHint(error.message);
+  }
+});
+
+dom.rag.uploadDocumentButton.addEventListener('click', async () => {
+  const collection = selectedRagCollection();
+  if (!collection) {
+    setRagDocumentHint('Select a collection before uploading documents.');
+    return;
+  }
+  const file = dom.rag.documentFile.files[0];
+  if (!file) {
+    setRagDocumentHint('Choose a TXT, Markdown, or PDF file before uploading.');
+    return;
+  }
+
+  dom.rag.uploadDocumentButton.disabled = true;
+  setRagDocumentHint(`Uploading ${file.name}...`);
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const uploaded = await fetchJson(buildUrl(`/rag-collections/${encodeURIComponent(collection.id)}/documents`, { source_type: dom.rag.documentSourceType.value || 'upload' }), {
+      method: 'POST',
+      body: formData,
+    });
+    await loadRagCollection(collection.id, { preferredDocumentId: uploaded.id });
+    dom.rag.documentFile.value = '';
+    setRagDocumentHint(`Uploaded ${uploaded.filename} into ${collection.name}.`);
+  } catch (error) {
+    setRagDocumentHint(error.message);
+  } finally {
+    dom.rag.uploadDocumentButton.disabled = false;
+  }
+});
+
+dom.rag.previewButton.addEventListener('click', async () => {
+  const collection = selectedRagCollection();
+  if (!collection) {
+    setRagPreviewHint('Select a collection before running retrieval preview.');
+    return;
+  }
+  const query = dom.rag.previewQuery.value.trim();
+  if (!query) {
+    setRagPreviewHint('Enter a preview query before running retrieval preview.');
+    return;
+  }
+
+  dom.rag.previewButton.disabled = true;
+  setRagPreviewHint('Running retrieval preview...');
+  try {
+    state.rag.retrievalPreview = await fetchJson('/rag-retrieval/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collection_id: collection.id,
+        query,
+        top_k: parseNumberInput(dom.rag.previewTopK.value, { fallback: 3, minimum: 1, fieldLabel: 'Preview top k', integer: true }),
+      }),
+    });
+    renderRagPreviewResult();
+    setRagPreviewHint(`Retrieval preview completed for ${collection.name}.`);
+  } catch (error) {
+    setRagPreviewHint(error.message);
+  } finally {
+    dom.rag.previewButton.disabled = false;
+  }
+});
+
 async function boot() {
   renderMode();
   try {
@@ -2400,6 +3904,15 @@ async function boot() {
     setWorkflowHint('Ready. Choose a dataset, select a workflow, and run the demo.');
     setPlcImportHint('Choose a CSV or XLSX file to import PLC testcases.');
     setPlcRunHint('Switch to PLC testing mode to load suites, review testcases, and enqueue runs.');
+    setFtDatasetHint('Switch to Fine-tuning mode to manage datasets and versions.');
+    setFtVersionHint('Fine-tuning version detail will appear here after you select a dataset version.');
+    setFtTrainingHint('Training jobs will appear here after you enqueue or refresh them.');
+    setModelsHint('Switch to Models mode to inspect registered models and run inference.');
+    setRagCollectionHint('Switch to RAG mode to manage collections and document grounding data.');
+    setRagDocumentHint('Select a RAG collection to inspect or upload documents.');
+    setRagPreviewHint('Select a RAG collection and run retrieval preview here.');
+    renderInferenceResult();
+    renderRagPreviewResult();
   } catch (error) {
     setWorkflowHint(error.message);
   }

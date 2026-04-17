@@ -134,11 +134,27 @@ h4 {
 }
 
 .plc-overview-grid,
-.plc-run-grid {
+.plc-run-grid,
+.ft-overview-grid,
+.ft-training-grid,
+.models-browser-grid,
+.rag-browser-grid,
+.rag-doc-grid {
   grid-template-columns: 1.15fr 0.85fr;
 }
 
+.ft-browser-grid {
+  grid-template-columns: 0.95fr 1.05fr;
+}
+
 .plc-item-grid {
+  grid-template-columns: 0.9fr 1.1fr;
+  align-items: start;
+  margin-bottom: 0;
+}
+
+.ft-row-grid,
+.ft-training-detail-grid {
   grid-template-columns: 0.9fr 1.1fr;
   align-items: start;
   margin-bottom: 0;
@@ -173,6 +189,10 @@ input[type="file"] {
 textarea {
   resize: vertical;
   min-height: 120px;
+}
+
+.textarea-compact {
+  min-height: 92px;
 }
 
 .mode-switch {
@@ -289,7 +309,20 @@ textarea {
   margin-bottom: var(--space-4);
 }
 
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+
 .plc-toolbar {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+}
+
+.ft-toolbar {
   padding: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
@@ -670,7 +703,15 @@ textarea {
   .grid,
   .plc-overview-grid,
   .plc-run-grid,
-  .plc-item-grid {
+  .plc-item-grid,
+  .ft-overview-grid,
+  .ft-browser-grid,
+  .ft-row-grid,
+  .ft-training-grid,
+  .ft-training-detail-grid,
+  .models-browser-grid,
+  .rag-browser-grid,
+  .rag-doc-grid {
     grid-template-columns: 1fr;
   }
 
