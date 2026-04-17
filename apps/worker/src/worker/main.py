@@ -19,6 +19,7 @@ SUPPORTED_JOB_TYPES = (
     "ollama_warmup",
     "rag_verify_index",
     "workflow_run",
+    "ft_train_model",
     "plc_test_run",
 )
 
@@ -28,6 +29,7 @@ RUNNER_MODULE_BY_JOB_TYPE = {
     "ollama_warmup": "api.services.rag.warmup_job_runner",
     "rag_verify_index": "api.services.rag.verify_index_job_runner",
     "workflow_run": "api.services.workflows.job_runner",
+    "ft_train_model": "api.services.model_registry.job_runner",
     "plc_test_run": "api.services.plc.job_runner",
 }
 
@@ -206,6 +208,8 @@ def _claim_next_job(
                 {"job_id": _coerce_job_id(row["id"])},
             )
 
+            if str(row["type"]) == "ft_train_model":
+                _sync_ft_training_job_claimed(connection, _coerce_job_id(row["id"]))
             if str(row["type"]) == "plc_test_run":
                 _sync_plc_run_claimed(connection, _coerce_job_id(row["id"]))
 
@@ -256,6 +260,8 @@ def _claim_next_job(
         if claimed.rowcount != 1:
             return None
 
+        if str(row["type"]) == "ft_train_model":
+            _sync_ft_training_job_claimed(connection, _coerce_job_id(row["id"]))
         if str(row["type"]) == "plc_test_run":
             _sync_plc_run_claimed(connection, _coerce_job_id(row["id"]))
 
@@ -293,6 +299,43 @@ def _sync_plc_run_claimed(connection, job_id: int | str) -> None:
             """
         ),
         {"job_id": job_id},
+    )
+
+
+def _sync_ft_training_job_claimed(connection, job_id: int | str) -> None:
+    connection.execute(
+        text(
+            """
+            UPDATE ft_training_jobs
+            SET status = 'running',
+                started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+            WHERE CAST(backing_job_id AS TEXT) = CAST(:job_id AS TEXT)
+            """
+        ),
+        {"job_id": job_id},
+    )
+
+
+def _sync_ft_training_job_status(
+    connection, *, job_id: int | str, status: str, error_message: str | None = None
+) -> None:
+    connection.execute(
+        text(
+            """
+            UPDATE ft_training_jobs
+            SET status = CAST(:status AS VARCHAR),
+                finished_at = CASE
+                    WHEN CAST(:status AS VARCHAR) IN ('succeeded', 'failed') THEN CURRENT_TIMESTAMP
+                    ELSE finished_at
+                END,
+                log_text = CASE
+                    WHEN :error_message IS NOT NULL THEN COALESCE(log_text, '') || CASE WHEN COALESCE(log_text, '') = '' THEN '' ELSE '\n' END || :error_message
+                    ELSE log_text
+                END
+            WHERE CAST(backing_job_id AS TEXT) = CAST(:job_id AS TEXT)
+            """
+        ),
+        {"job_id": job_id, "status": status, "error_message": error_message},
     )
 
 
@@ -473,6 +516,8 @@ def _mark_job_succeeded(
     job_type: str,
 ) -> None:
     with engine.begin() as connection:
+        if job_type == "ft_train_model":
+            _sync_ft_training_job_status(connection, job_id=job_id, status="succeeded")
         if job_type == "plc_test_run":
             _sync_plc_run_status(connection, job_id=job_id, status="succeeded")
         connection.execute(
@@ -504,6 +549,13 @@ def _mark_job_failure(
     requeue = next_attempts < max_attempts
 
     with engine.begin() as connection:
+        if job_type == "ft_train_model":
+            _sync_ft_training_job_status(
+                connection,
+                job_id=job_id,
+                status="queued" if requeue else "failed",
+                error_message=error_message,
+            )
         if job_type == "plc_test_run":
             _sync_plc_run_status(
                 connection,

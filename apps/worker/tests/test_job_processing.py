@@ -37,6 +37,25 @@ def _create_schema(engine) -> None:
                 """
             )
         )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE ft_training_jobs (
+                    id VARCHAR(64) PRIMARY KEY,
+                    dataset_version_id VARCHAR(64) NOT NULL,
+                    base_model_name VARCHAR(255) NOT NULL,
+                    training_method VARCHAR(64) NOT NULL,
+                    hyperparams_json TEXT NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    backing_job_id VARCHAR(64),
+                    log_text TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP
+                )
+                """
+            )
+        )
 
 
 def test_coerce_job_id_converts_numeric_string_to_int() -> None:
@@ -230,6 +249,69 @@ def test_worker_claims_and_processes_incremental_job(tmp_path) -> None:
     assert row[1] == 0
     assert '"mode": "incremental"' in str(row[2])
     assert row[3] is None
+
+
+def test_worker_claims_and_processes_ft_training_job(tmp_path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'worker-ft.db'}")
+    _create_schema(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO jobs (id, type, status, payload_json, attempts, max_attempts)
+                VALUES ('6', 'ft_train_model', 'queued', '{"training_job_id":"ft-job-1"}', 0, 2)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO ft_training_jobs (
+                    id, dataset_version_id, base_model_name, training_method,
+                    hyperparams_json, status, backing_job_id, log_text
+                )
+                VALUES (
+                    'ft-job-1', 'ft-version-1', 'qwen2.5:7b-instruct-q4_K_M', 'stub_adapter',
+                    '{}', 'queued', '6', 'queued'
+                )
+                """
+            )
+        )
+
+    assert "ft_train_model" in SUPPORTED_JOB_TYPES
+    assert (
+        RUNNER_MODULE_BY_JOB_TYPE["ft_train_model"]
+        == "api.services.model_registry.job_runner"
+    )
+
+    job = _claim_next_job(engine, job_types=("ft_train_model",))
+    assert job is not None
+    assert job["type"] == "ft_train_model"
+    _process_claimed_job(
+        engine,
+        job,
+        runner=lambda _: {"training_job_id": "ft-job-1", "status": "succeeded"},
+    )
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT status, result_json, error FROM jobs WHERE id = '6'")
+        ).fetchone()
+        training_row = connection.execute(
+            text(
+                "SELECT status, started_at, finished_at FROM ft_training_jobs WHERE id = 'ft-job-1'"
+            )
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "succeeded"
+    assert '"training_job_id": "ft-job-1"' in str(row[1])
+    assert row[2] is None
+    assert training_row is not None
+    assert training_row[0] == "succeeded"
+    assert training_row[1] is not None
+    assert training_row[2] is not None
 
 
 def test_run_job_subprocess_uses_workspace_root_from_api_project_dir(

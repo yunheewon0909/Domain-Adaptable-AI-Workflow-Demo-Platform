@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+from io import BytesIO
+
+from fastapi.testclient import TestClient
+from pypdf import PdfWriter
+from sqlalchemy.orm import Session
+
+from api.db import get_engine
+from api.dependencies import get_llm_client
+from api.main import app
+from api.models import (
+    FTTrainingJobRecord,
+    JobRecord,
+    ModelRegistryRecord,
+    RAGDocumentRecord,
+)
+from api.services.model_registry.service import complete_training_job
+
+
+class FakeLLMClient:
+    def generate_answer(
+        self,
+        *,
+        question: str,
+        context: str,
+        model: str | None = None,
+        temperature: float = 0,
+        max_tokens: int | None = None,
+    ):
+        class _Result:
+            def __init__(self) -> None:
+                self.answer = f"answer::{question}::{model}"
+                self.model = model or "default-model"
+                self.used_fallback = False
+
+        return _Result()
+
+
+def _create_pdf_bytes(text: str) -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=300)
+    writer.add_metadata({"/Title": text})
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def test_ft_dataset_version_and_rows_flow(client: TestClient) -> None:
+    dataset_response = client.post(
+        "/ft-datasets",
+        json={
+            "name": "Instruction tuning demo",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+            "description": "demo dataset",
+        },
+    )
+    assert dataset_response.status_code == 201
+    dataset_id = dataset_response.json()["id"]
+
+    version_response = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={
+            "version_label": "v1",
+            "train_split_ratio": 0.7,
+            "val_split_ratio": 0.2,
+            "test_split_ratio": 0.1,
+        },
+    )
+    assert version_response.status_code == 201
+    version_id = version_response.json()["id"]
+
+    rows_response = client.post(
+        f"/ft-dataset-versions/{version_id}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {
+                        "instruction": "summarize",
+                        "input": "plant outage note",
+                    },
+                    "target_json": {"output": "summary"},
+                    "metadata_json": {"source": "manual"},
+                },
+                {
+                    "split": "val",
+                    "input_json": {"instruction": "classify"},
+                    "target_json": None,
+                    "metadata_json": {"source": "invalid-row"},
+                },
+            ]
+        },
+    )
+    assert rows_response.status_code == 201
+    payload = rows_response.json()
+    assert payload["row_summary"]["total"] == 2
+    assert payload["row_summary"]["valid"] == 1
+    assert payload["row_summary"]["invalid"] == 1
+
+    validate_response = client.post(
+        f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+    )
+    assert validate_response.status_code == 400
+
+    rows_list = client.get(f"/ft-dataset-versions/{version_id}/rows")
+    assert rows_list.status_code == 200
+    assert rows_list.json()[1]["validation_status"] == "invalid"
+
+
+def test_training_job_model_registry_and_inference_flow(client: TestClient) -> None:
+    app.dependency_overrides[get_llm_client] = lambda: FakeLLMClient()
+    try:
+        dataset_id = client.post(
+            "/ft-datasets",
+            json={
+                "name": "Chat tuning demo",
+                "task_type": "chat_sft",
+                "schema_type": "json",
+                "description": "chat demo",
+            },
+        ).json()["id"]
+        version_id = client.post(
+            f"/ft-datasets/{dataset_id}/versions",
+            json={"version_label": "v1"},
+        ).json()["id"]
+        add_rows = client.post(
+            f"/ft-dataset-versions/{version_id}/rows",
+            json={
+                "rows": [
+                    {
+                        "split": "train",
+                        "input_json": [{"role": "user", "content": "hello"}],
+                        "target_json": {"response": "hi"},
+                    }
+                ]
+            },
+        )
+        assert add_rows.status_code == 201
+        validated = client.post(
+            f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+        )
+        assert validated.status_code == 200
+
+        training_response = client.post(
+            "/ft-training-jobs",
+            json={
+                "dataset_version_id": version_id,
+                "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+                "training_method": "stub_adapter",
+                "hyperparams_json": {"epochs": 1},
+            },
+        )
+        assert training_response.status_code == 202
+        training_job_id = training_response.json()["id"]
+        backing_job_id = training_response.json()["backing_job_id"]
+
+        with Session(get_engine()) as session:
+            training_job = session.get(FTTrainingJobRecord, training_job_id)
+            assert training_job is not None
+            assert training_job.backing_job_id == backing_job_id
+            queue_job = session.get(JobRecord, backing_job_id)
+            assert queue_job is not None
+            assert queue_job.type == "ft_train_model"
+            complete_training_job(session, training_job_id=training_job_id)
+
+        training_detail = client.get(f"/ft-training-jobs/{training_job_id}")
+        assert training_detail.status_code == 200
+        assert training_detail.json()["status"] == "succeeded"
+        assert len(training_detail.json()["artifacts"]) == 1
+        assert len(training_detail.json()["registered_models"]) == 1
+        model_id = training_detail.json()["registered_models"][0]["id"]
+
+        models_response = client.get("/models")
+        assert models_response.status_code == 200
+        assert any(item["id"] == model_id for item in models_response.json())
+
+        inference_response = client.post(
+            "/inference/run",
+            json={"prompt": "generate summary", "model_id": model_id},
+        )
+        assert inference_response.status_code == 200
+        assert inference_response.json()["model"]["id"] == model_id
+        assert inference_response.json()["answer"].startswith(
+            "answer::generate summary"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_rag_collection_document_and_preview_flow(client: TestClient) -> None:
+    collection_response = client.post(
+        "/rag-collections",
+        json={"name": "Maintenance docs", "description": "RAG demo docs"},
+    )
+    assert collection_response.status_code == 201
+    collection_id = collection_response.json()["id"]
+
+    txt_upload = client.post(
+        f"/rag-collections/{collection_id}/documents",
+        files={
+            "file": ("note.txt", b"maintenance automation diagnostics", "text/plain")
+        },
+    )
+    assert txt_upload.status_code == 201
+    assert txt_upload.json()["status"] == "parsed"
+
+    md_upload = client.post(
+        f"/rag-collections/{collection_id}/documents",
+        files={
+            "file": (
+                "guide.md",
+                b"# Guide\nplant maintenance checklist",
+                "text/markdown",
+            )
+        },
+    )
+    assert md_upload.status_code == 201
+    assert "maintenance checklist" in md_upload.json()["text_preview"]
+
+    pdf_upload = client.post(
+        f"/rag-collections/{collection_id}/documents",
+        files={
+            "file": (
+                "spec.pdf",
+                _create_pdf_bytes("maintenance pdf title"),
+                "application/pdf",
+            )
+        },
+    )
+    assert pdf_upload.status_code == 201
+    assert pdf_upload.json()["metadata_json"]["parse_method"] in {
+        "pypdf",
+        "pdf-fallback",
+    }
+
+    list_response = client.get(f"/rag-collections/{collection_id}/documents")
+    assert list_response.status_code == 200
+    assert len(list_response.json()) == 3
+
+    document_id = txt_upload.json()["id"]
+    document_detail = client.get(f"/rag-documents/{document_id}")
+    assert document_detail.status_code == 200
+    assert document_detail.json()["filename"] == "note.txt"
+
+    preview_response = client.post(
+        "/rag-retrieval/preview",
+        json={
+            "collection_id": collection_id,
+            "query": "maintenance automation",
+            "top_k": 2,
+        },
+    )
+    assert preview_response.status_code == 200
+    assert preview_response.json()["results"][0]["filename"] == "note.txt"
+
+    with Session(get_engine()) as session:
+        stored_document = session.get(RAGDocumentRecord, document_id)
+        assert stored_document is not None
+        assert stored_document.status == "parsed"
+
+
+def test_model_registry_default_entries_are_seeded(client: TestClient) -> None:
+    response = client.get("/models")
+    assert response.status_code == 200
+    models = response.json()
+    assert any(item["source_type"] == "base" for item in models)
+
+    with Session(get_engine()) as session:
+        registry_rows = session.query(ModelRegistryRecord).all()
+        assert registry_rows
