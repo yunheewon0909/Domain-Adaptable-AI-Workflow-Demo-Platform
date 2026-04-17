@@ -1,7 +1,7 @@
 """add ai ops fine-tuning, models, and rag collection domains
 
 Revision ID: 20260417_0010
-Revises: 20260415_0009
+Revises: 20260415_0010
 Create Date: 2026-04-17 11:00:00
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260417_0010"
-down_revision: Union[str, Sequence[str], None] = "20260415_0009"
+down_revision: Union[str, Sequence[str], None] = "20260415_0010"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
