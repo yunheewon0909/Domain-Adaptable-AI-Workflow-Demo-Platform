@@ -2,7 +2,7 @@
 
 ## Why this repository is not just a demo anymore
 
-Originally, this repo functioned mainly as a reviewer workflow skeleton: FastAPI, worker, queue, local retrieval, and a small `/demo` page. With the PLC testing MVP, it now also contains a concrete domain service that demonstrates how the skeleton can host real operational workflows.
+Originally, this repo functioned mainly as a reviewer workflow skeleton: FastAPI, worker, queue, local retrieval, and a small `/demo` page. With the PLC testing MVP and the new local AI ops expansion, it now also contains concrete domain services that demonstrate how the skeleton can host real operational workflows.
 
 That matters because the intended long-term shape is a single monorepo that can hold:
 
@@ -28,16 +28,22 @@ These are the pieces another domain could reuse later.
 
 The demo is the co-hosted reviewer surface under `/demo`.
 
-It exists to make the repository explorable and reviewable without introducing a separate frontend app. In this repo it now supports two reviewer modes:
+It exists to make the repository explorable and reviewable without introducing a separate frontend app. In this repo it now supports five reviewer modes:
 
 - retrieval-first workflow review
 - PLC suite/run/result review
+- fine-tuning dataset and version review
+- model registry plus model-selectable inference review
+- RAG collection/document/retrieval preview review
 
 ### Service / Domain
 
-The domain service is the new PLC testing slice under `apps/api/src/api/services/plc/` plus its routes, migration, tests, and worker job type.
+The repo now has multiple concrete domain slices:
 
-This is intentionally not split into a separate repository or long-lived branch. It lives beside the reviewer skeleton so the repo can show both the reusable platform and one real domain implementation.
+- PLC testing under `apps/api/src/api/services/plc/`
+- local AI ops slices under `apps/api/src/api/services/fine_tuning/`, `apps/api/src/api/services/model_registry/`, and the expanded `apps/api/src/api/services/rag/`
+
+These are intentionally not split into separate repositories or long-lived branches. They live beside the reviewer skeleton so the repo can show both the reusable platform and multiple real domain implementations.
 
 The PLC service is no longer just an import-and-JSON demo. It now demonstrates a more operational shape:
 
@@ -49,6 +55,8 @@ The PLC service is no longer just an import-and-JSON demo. It now demonstrates a
 - review-oriented APIs and demo panels layered on top of those records
 - persisted LLM suggestion review artifacts that stay outside the deterministic execution path
 - explicit relational-first review boundaries, with `definition_json` fallback surfaced as compatibility rather than hidden primary behavior
+- separate fine-tuning dataset/version/row review, training orchestration, artifact registration, and model selection flows for local AI ops
+- separate RAG collection/document management so grounding data can evolve independently from fine-tuning corpora
 
 ### Shared Core
 
@@ -71,6 +79,7 @@ This repository now demonstrates that the same underlying skeleton can support:
 
 - knowledge/reviewer workflows
 - deterministic industrial test automation workflows
+- local AI ops workflows such as fine-tuning data review, training job orchestration, model selection, and RAG collection management
 
 without changing deployment shape, abandoning the queue model, or introducing a second frontend stack.
 

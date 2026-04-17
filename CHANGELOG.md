@@ -2,6 +2,29 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.6.0] - 2026-04-17
+
+### Added
+
+- relational fine-tuning dataset tables, versioned rows, validation state, and APIs under `/ft-datasets` and `/ft-dataset-versions`
+- queue-backed `ft_train_model` orchestration with worker dispatch, lightweight artifact manifests, and `ft_training_jobs` state tracking
+- model registry records plus `/models` and `/inference/run` APIs so inference can select a base or fine-tuned registry entry
+- separate `rag_collections` and `rag_documents` metadata tables plus collection/document/retrieval preview APIs that do not mix with fine-tuning data
+- new `/demo` reviewer modes for Fine-tuning, Models, and RAG inside the existing co-hosted static shell
+
+### Changed
+
+- the repo now presents PLC automation and local AI ops management as parallel domain slices on the same modular monolith and jobs queue
+- Ollama remains documented as a serving target for inference while training stays a separate scaffolded pipeline handled by the queue and worker
+- README, architecture docs, skeleton/service notes, changelog, and workspace package versions now describe the AI ops reviewer expansion and current limitations honestly
+- workspace, API, worker, and starter app versions bumped from `0.5.0` to `0.6.0`
+
+### Notes
+
+- fine-tuning remains a lightweight scaffold in this milestone: dataset management, job orchestration, artifact registration, and model selection are end-to-end, but no heavy trainer backend is wired in yet
+- fine-tuned registry entries currently point back to the configured Ollama serving model name until a future artifact import/publish step is implemented
+- RAG collection management is intentionally separate from the legacy dataset-backed retrieval flow and currently uses metadata/text preview plus retrieval preview rather than a full collection embedding pipeline
+
 ## [0.5.0] - 2026-04-15
 
 ### Added

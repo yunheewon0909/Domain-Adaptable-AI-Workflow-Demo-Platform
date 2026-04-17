@@ -10,7 +10,7 @@ WorkflowKey: TypeAlias = Literal["briefing", "recommendation", "report_generator
 @dataclass(frozen=True)
 class AppDefinition:
     title: str
-    version: str = "0.2.0"
+    version: str = "0.6.0"
 
 
 @dataclass(frozen=True)

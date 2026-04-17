@@ -2,14 +2,15 @@
 
 ## Overview
 
-This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, and it now also includes a **DB-centered PLC test automation platform slice** that imports Excel/CSV test suites, materializes testcase masters into relational tables, validates targets before queueing runs, hardens a future CLI executor seam, persists reviewable LLM suggestions, records run items plus raw I/O, and exposes results through API plus a co-hosted reviewer UI.
+This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed training scaffolding, model registration, model-selectable inference, and separate RAG collection/document review.
 
-The current milestone is best understood as **v0.5.0: an operational preparation release before any real native PLC adapter integration**. The repo still does not include private C++ assets or live PLC bindings, but it now makes execution metadata, target metadata, reviewer drill-down, and fallback boundaries much more explicit and reviewable.
+The current milestone is best understood as **v0.6.0: a reviewer-first local AI ops expansion on top of the existing PLC and workflow skeleton**. The repo still does not include private C++ assets or live PLC bindings, and it still does not ship a heavy in-repo fine-tuning backend. What it now does provide is an end-to-end review flow for training data management, training job orchestration, artifact registration, model selection, and separate RAG data operations.
 
-The key message of the repo is now twofold:
+The key message of the repo is now threefold:
 
 - **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
 - **domain service**: a concrete PLC testing slice that shows how Excel-based industrial test assets can be turned into a DB + queue + dashboard workflow without overhauling the skeleton
+- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, model registry entries, model-selectable inference, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
 
 ## What the PLC Testing Slice Adds
 
@@ -46,6 +47,37 @@ Out of scope for this milestone:
 - live progress streaming beyond queue polling
 - LLM-driven execution or pass/fail decisions
 
+## What the AI Ops Slice Adds
+
+The local AI ops slice focuses on reviewer-visible orchestration rather than pretending heavy training is already complete. In this milestone the important flow is:
+
+1. register fine-tuning datasets and versioned rows
+2. validate and lock a dataset version
+3. enqueue a queue-backed training job scaffold
+4. let the worker create a lightweight artifact manifest and model registry entry
+5. pick a registered model during inference
+6. manage RAG collections and documents separately from fine-tuning corpora
+
+Included in the current milestone:
+
+- `ft_datasets`, `ft_dataset_versions`, and `ft_dataset_rows` with row-level validation status
+- dataset version status transitions (`draft -> validated -> locked`)
+- `ft_train_model` queue jobs plus `ft_training_jobs` domain status tracking
+- lightweight artifact manifests in `data/model_artifacts/` for training scaffold output
+- `model_registry` entries for base models and fine-tuned placeholders
+- `/models` and `/inference/run` so inference can choose a model source explicitly
+- `rag_collections` and `rag_documents` tables for collection/document review
+- txt/md/pdf upload support with parse preview or metadata preview
+- retrieval preview over collection-managed document text previews
+- new `/demo` reviewer modes for Fine-tuning, Models, and RAG
+
+Current limitations of the AI ops slice:
+
+- Ollama is still the serving target, not the trainer itself
+- the training path is a lightweight scaffold that produces a reviewable artifact manifest and registry entry rather than a real adapter/merged model
+- fine-tuned registry entries currently point back to the configured Ollama serving model name until a future import/publish seam is added
+- RAG collection management is separate from the legacy dataset-backed retrieval flow and currently emphasizes metadata/text preview plus retrieval preview rather than full collection embedding lifecycle management
+
 ## Architecture Summary
 
 ### Runtime services
@@ -54,6 +86,18 @@ Out of scope for this milestone:
 - `api`: FastAPI app, routers, domain services, static demo UI, runner modules
 - `worker`: Postgres-backed job worker that dispatches runner modules via subprocess
 - `ollama`: local LLM/embedding runtime for the original reviewer workflows
+
+### AI ops execution path
+
+1. Create a fine-tuning dataset with `POST /ft-datasets`
+2. Create a version with `POST /ft-datasets/{dataset_id}/versions`
+3. Add rows with `POST /ft-dataset-versions/{version_id}/rows`
+4. Mark the version `validated` and optionally `locked`
+5. Enqueue `POST /ft-training-jobs`
+6. Worker claims the backing `ft_train_model` job from `jobs`
+7. Runner writes a lightweight artifact manifest and registers a model entry
+8. `/models` and `/inference/run` expose the resulting model selection flow
+9. `POST /rag-collections` plus collection document upload/retrieval preview stay separate from fine-tuning data management
 
 ### PLC execution path
 
@@ -264,10 +308,94 @@ Open:
 http://127.0.0.1:8000/demo
 ```
 
-The page now has two reviewer modes:
+The page now has five reviewer modes:
 
 - **Workflow reviewer**: the original dataset/workflow/evidence experience
 - **PLC testing MVP**: suite import, testcase preview, queued/running/succeeded/failed run review, and raw I/O/result drill-down
+- **Fine-tuning**: dataset creation, version management, row review, validation status transitions, and training enqueue controls
+- **Models**: model registry inspection plus model-selectable inference with optional RAG collection context
+- **RAG**: collection creation, document upload/list/detail, and retrieval preview
+
+## AI Ops API Examples
+
+Create a fine-tuning dataset:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/ft-datasets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Instruction tuning demo",
+    "task_type": "instruction_sft",
+    "schema_type": "json",
+    "description": "Reviewer-visible local tuning dataset"
+  }'
+```
+
+Create a dataset version and add rows:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/ft-datasets/ft-dataset-1/versions \
+  -H "Content-Type: application/json" \
+  -d '{"version_label":"v1","train_split_ratio":0.8,"val_split_ratio":0.1,"test_split_ratio":0.1}'
+
+curl -sS -X POST http://127.0.0.1:8000/ft-dataset-versions/ft-version-1/rows \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rows": [
+      {
+        "split": "train",
+        "input_json": {"instruction": "summarize", "input": "shift handover note"},
+        "target_json": {"output": "short summary"},
+        "metadata_json": {"source": "manual-demo"}
+      }
+    ]
+  }'
+
+curl -sS -X POST http://127.0.0.1:8000/ft-dataset-versions/ft-version-1/status \
+  -H "Content-Type: application/json" \
+  -d '{"status":"validated"}'
+```
+
+Enqueue a training scaffold job:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/ft-training-jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dataset_version_id": "ft-version-1",
+    "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+    "training_method": "stub_adapter",
+    "hyperparams_json": {"epochs": 1}
+  }'
+```
+
+Inspect registered models and run inference:
+
+```bash
+curl -sS http://127.0.0.1:8000/models
+
+curl -sS -X POST http://127.0.0.1:8000/inference/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Summarize the latest maintenance note",
+    "model_id": "model-1"
+  }'
+```
+
+Create a RAG collection, upload a document, and preview retrieval:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/rag-collections \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Maintenance docs","description":"Grounding material for local reviewer runs"}'
+
+curl -sS -X POST http://127.0.0.1:8000/rag-collections/rag-collection-1/documents \
+  -F "file=@./examples/ls-add-demo.csv;type=text/plain"
+
+curl -sS -X POST http://127.0.0.1:8000/rag-retrieval/preview \
+  -H "Content-Type: application/json" \
+  -d '{"collection_id":"rag-collection-1","query":"maintenance automation","top_k":3}'
+```
 
 ## Stub Executor vs Future C++ Adapter
 
@@ -447,17 +575,31 @@ uv run --project apps/worker pytest -q \
   apps/worker/tests/test_plc_job_processing.py
 ```
 
+Targeted AI ops verification:
+
+```bash
+uv run --project apps/api pytest -q \
+  apps/api/tests/test_ai_ops_api.py \
+  apps/api/tests/test_demo_ui.py
+
+uv run --project apps/worker pytest -q \
+  apps/worker/tests/test_job_processing.py
+```
+
 ## Reviewer UI
 
-The co-hosted `/demo` surface still stays inside the existing static shell, but the PLC mode is now much closer to an operational reviewer:
+The co-hosted `/demo` surface still stays inside the existing static shell, but it now spans both PLC review and local AI ops review:
 
 - suite-scoped or all-suite dashboard refresh
 - target status and instruction failure profile panels
 - testcase filters for instruction, input type, expected outcome, and saved suggestion state
 - target-aware run filters with failed/problem-only drill-down
 - richer run detail panels with target context, request payloads, validator payloads, executor logs, and sequence-oriented I/O timelines
+- fine-tuning dataset, version, row, and training job panels
+- model registry inspection and model-selectable inference runs
+- RAG collection/document management and retrieval preview
 
-The original workflow reviewer mode is still preserved.
+The original workflow reviewer mode is still preserved, and the new AI ops modes stay in the same shell rather than branching into a separate frontend.
 
 ## Current Limitations
 
@@ -468,6 +610,9 @@ The original workflow reviewer mode is still preserved.
 - no real C++ or live PLC binding in this repo yet
 - persisted LLM suggestions remain review-only and are not auto-applied to testcase masters
 - `/demo` remains a static page, so richer charts/filters are still intentionally modest compared with a dedicated frontend
+- fine-tuning still uses a lightweight training scaffold rather than a real trainer backend
+- fine-tuned registry entries are reviewable placeholders and not yet published/imported as standalone Ollama artifacts
+- RAG collection previews use extracted text and retrieval preview, not a full per-collection embedding/index lifecycle yet
 
 ## Versioning and Milestones
 
@@ -478,6 +623,7 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.3.0`: relational PLC testcase/run persistence + stronger reviewer drill-down
 - `v0.4.0`: versioned CLI contract, active target validation, relational-first suite review boundaries, persisted suggestion review flow, and richer PLC reviewer filters/drill-down
 - `v0.5.0`: execution profile scaffolding, normalized target metadata, reviewer/dashboard hardening, typed suggestion review artifacts, and explicit fallback markers before native adapter work
-- next likely milestone: `v0.5.x` for narrower hardening work or `v0.6.0` once a real native adapter and broader operational controls land
+- `v0.6.0`: fine-tuning dataset management, queue-backed training scaffolding, model registry plus model-selectable inference, separate RAG collection management, and expanded reviewer modes
+- next likely milestone: `v0.6.x` for hardening or `v0.7.0` once real trainer/publish flows and broader operational controls land
 
 See `CHANGELOG.md` for the current milestone notes.

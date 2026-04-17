@@ -7,7 +7,7 @@ This repository is a modular monolith organized as a uv workspace with two runti
 - `apps/api`: HTTP surface, domain services, static reviewer UI, job runner modules
 - `apps/worker`: queue claim/retry loop and subprocess dispatch
 
-Postgres remains the system of record for queue state and operational metadata. Local retrieval artifacts still use SQLite/JSON for the reviewer workflow slice. The new PLC slice does not replace that existing reviewer architecture; it adds a second domain surface that uses the same queue and demo infrastructure.
+Postgres remains the system of record for queue state and operational metadata. Local retrieval artifacts still use SQLite/JSON for the reviewer workflow slice. The PLC slice and the new local AI ops slice do not replace that existing reviewer architecture; they add more domain surfaces that reuse the same queue and demo infrastructure.
 
 ## Main Components
 
@@ -17,6 +17,9 @@ The FastAPI app assembles small routers under `apps/api/src/api/routers/` and in
 
 - datasets/workflows/jobs/rag from the original reviewer flow
 - plc routes for suite import, testcase listing, target-aware run enqueueing, run review, dashboard summary, normalization preview, and persisted suggestion review
+- fine-tuning routes for dataset registries, versioned rows, status transitions, and training enqueueing
+- model routes for training job inspection, model registry inspection, and model-selectable inference
+- rag collection/document routes for collection management, upload/preview, and retrieval preview
 - `/demo` for the co-hosted static reviewer UI
 
 ### Worker / Queue
@@ -28,7 +31,7 @@ The `jobs` table is still the queue. Jobs move through:
 - `succeeded`
 - `failed`
 
-The worker claims queued rows from Postgres, then dispatches runner modules via subprocess. That pattern is shared by both reviewer workflows and PLC runs.
+The worker claims queued rows from Postgres, then dispatches runner modules via subprocess. That pattern is shared by reviewer workflows, PLC runs, and the new `ft_train_model` training scaffold.
 
 ### PLC Domain Slice
 
@@ -47,6 +50,21 @@ The PLC slice now adds:
 - exact-match validator logic inside the PLC runner path
 
 The current architecture is intentionally hybrid: relational tables now hold the primary PLC review data, while `plc_test_suites.definition_json` and `jobs.result_json` remain as compatibility/provenance snapshots during the migration away from the compact JSON-only MVP. `definition_json` is now explicitly narrower: it remains suite provenance plus a compatibility fallback only when relational testcase rows are missing. Partial relational drift is treated as an operational error during run creation rather than a silent fallback case, and the fallback path is now surfaced explicitly through `case_source` / `testcase_source` markers instead of being hidden.
+
+### Local AI Ops Slice
+
+The AI ops expansion adds three deliberately separated surfaces:
+
+- `ft_datasets`, `ft_dataset_versions`, and `ft_dataset_rows` for fine-tuning dataset management
+- `ft_training_jobs`, `ft_model_artifacts`, and `model_registry` for queue-backed training scaffolding and model registration
+- `rag_collections` and `rag_documents` for collection/document management that stays distinct from fine-tuning data and from the legacy dataset registry
+
+Important boundaries in this milestone:
+
+- Ollama remains the serving target for inference requests
+- training is a queue + worker scaffold, not a heavy in-repo trainer backend
+- fine-tuning rows and RAG documents are stored and reviewed separately rather than merged into one generic dataset table
+- the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
 
 ## PLC Flow
 
@@ -156,7 +174,8 @@ The important architectural decision is reuse rather than replacement:
 - reuse the existing queue
 - reuse the existing worker subprocess pattern
 - reuse the co-hosted reviewer UI
-- add a domain service slice inside the current monorepo shape
+- add multiple domain service slices inside the current monorepo shape
 - separate queue lifecycle state from PLC domain review state without introducing a second queue
+- separate fine-tuning/model/RAG review state from generic jobs without introducing a second queue or frontend
 
-That is what turns the repo from “workflow demo only” into “skeleton + demo + service” without a destabilizing rewrite.
+That is what turns the repo from “workflow demo only” into “skeleton + demo + services” without a destabilizing rewrite.
