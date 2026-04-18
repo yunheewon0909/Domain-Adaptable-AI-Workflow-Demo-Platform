@@ -772,7 +772,13 @@ function selectedFtTrainingJob() {
 }
 
 function selectedReviewModel() {
-  return state.models.selectedReviewModel;
+  if (!state.models.selectedReviewModelId) {
+    return null;
+  }
+  if (state.models.selectedReviewModel?.id === state.models.selectedReviewModelId) {
+    return state.models.selectedReviewModel;
+  }
+  return state.models.items.find((model) => model.id === state.models.selectedReviewModelId) || null;
 }
 
 function selectedInferenceModel() {
@@ -2974,6 +2980,9 @@ async function refreshModelsRegistry({ preferredReviewModelId = null, preferredI
     : selectableIds.includes(state.models.selectedInferenceModelId)
       ? state.models.selectedInferenceModelId
       : selectableIds[0] || null;
+  state.models.selectedReviewModel = state.models.selectedReviewModelId
+    ? state.models.items.find((item) => item.id === state.models.selectedReviewModelId) || null
+    : null;
 
   renderModelsRegistry();
   renderModelsStatus();
