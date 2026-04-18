@@ -315,6 +315,11 @@ def test_training_job_model_registry_and_inference_flow(
         assert training_detail.status_code == 200
         assert training_detail.json()["status"] == "succeeded"
         assert training_detail.json()["trainer_backend"] == "local_peft"
+        assert (
+            training_detail.json()["trainer_model_name"]
+            == "hf-internal/testing-tiny-random-gpt2"
+        )
+        assert training_detail.json()["device"] == "cpu"
         assert len(training_detail.json()["artifacts"]) >= 4
         assert len(training_detail.json()["registered_models"]) == 1
         model_id = training_detail.json()["registered_models"][0]["id"]
@@ -332,6 +337,9 @@ def test_training_job_model_registry_and_inference_flow(
             training_detail.json()["registered_models"][0]["readiness"]["selectable"]
             is False
         )
+        assert training_detail.json()["artifact_validation"]["artifact_valid"] is True
+        assert training_detail.json()["lineage_warning"]
+        assert training_detail.json()["publish_readiness"]["runtime_ready"] is False
 
         models_response = client.get("/models")
         assert models_response.status_code == 200
@@ -345,13 +353,30 @@ def test_training_job_model_registry_and_inference_flow(
 
         publish_response = client.post(f"/ft-training-jobs/{training_job_id}/publish")
         assert publish_response.status_code == 200
-        assert publish_response.json()["publish_status"] == "published"
-        assert publish_response.json()["serving_model_name"] == "demo/trainer_output"
+        assert publish_response.json()["publish_status"] == "publish_ready"
+        assert publish_response.json()["serving_model_name"] is None
+        assert (
+            publish_response.json()["candidate_published_model_name"]
+            == "demo/trainer_output"
+        )
+        assert publish_response.json()["readiness"]["runtime_ready"] is False
+        assert any(
+            "Automatic Ollama import is not implemented" in warning
+            for warning in publish_response.json()["warnings"]
+        )
 
         lineage_response = client.get(f"/models/{model_id}/lineage")
         assert lineage_response.status_code == 200
         assert (
             lineage_response.json()["lineage_json"]["dataset_version_id"] == version_id
+        )
+        assert (
+            lineage_response.json()["trainer_model_name"]
+            == "hf-internal/testing-tiny-random-gpt2"
+        )
+        assert (
+            lineage_response.json()["candidate_published_model_name"]
+            == "demo/trainer_output"
         )
 
         artifact_id = training_detail.json()["artifacts"][0]["id"]
@@ -365,11 +390,7 @@ def test_training_job_model_registry_and_inference_flow(
             "/inference/run",
             json={"prompt": "generate summary", "model_id": model_id},
         )
-        assert inference_response.status_code == 200
-        assert inference_response.json()["model"]["id"] == model_id
-        assert inference_response.json()["answer"].startswith(
-            "answer::generate summary"
-        )
+        assert inference_response.status_code == 404
 
         ambiguous_inference_response = client.post(
             "/inference/run",
@@ -382,6 +403,76 @@ def test_training_job_model_registry_and_inference_flow(
         assert ambiguous_inference_response.status_code == 400
     finally:
         app.dependency_overrides.clear()
+
+
+def test_publish_disabled_returns_truthful_artifact_ready_status(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
+    monkeypatch.setenv("OLLAMA_PUBLISH_ENABLED", "false")
+    monkeypatch.setenv("OLLAMA_MODEL_NAMESPACE", "demo")
+    get_settings.cache_clear()
+
+    def _fake_run_training_backend(*args, **kwargs):
+        return _build_fake_training_artifacts(tmp_path / "trainer_output_disabled")
+
+    monkeypatch.setattr(
+        "api.services.model_registry.service.run_training_backend",
+        _fake_run_training_backend,
+    )
+
+    dataset_id = client.post(
+        "/ft-datasets",
+        json={
+            "name": "Publish disabled demo",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+        },
+    ).json()["id"]
+    version_id = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={"version_label": "v1"},
+    ).json()["id"]
+    client.post(
+        f"/ft-dataset-versions/{version_id}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {"instruction": "summarize", "input": "alpha"},
+                    "target_json": {"output": "beta"},
+                }
+            ]
+        },
+    )
+    client.post(
+        f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+    )
+    client.post(f"/ft-dataset-versions/{version_id}/status", json={"status": "locked"})
+    training_job_id = client.post(
+        "/ft-training-jobs",
+        json={
+            "dataset_version_id": version_id,
+            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "training_method": "sft_lora",
+            "hyperparams_json": {
+                "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
+            },
+        },
+    ).json()["id"]
+
+    with Session(get_engine()) as session:
+        complete_training_job(session, training_job_id=training_job_id)
+
+    publish_response = client.post(f"/ft-training-jobs/{training_job_id}/publish")
+    assert publish_response.status_code == 200
+    assert publish_response.json()["status"] == "artifact_ready"
+    assert publish_response.json()["publish_status"] == "publish_ready"
+    assert publish_response.json()["readiness"]["selectable"] is False
+    assert (
+        publish_response.json()["candidate_published_model_name"]
+        == "demo/trainer_output_disabled"
+    )
 
 
 def test_rag_collection_document_and_preview_flow(client: TestClient) -> None:

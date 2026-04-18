@@ -18,7 +18,11 @@ from api.models import (
     ModelRegistryRecord,
 )
 from api.services.jobs import create_job
-from api.services.fine_tuning.artifacts import build_publish_manifest
+from api.services.fine_tuning.artifacts import (
+    build_publish_manifest,
+    validate_publish_artifacts,
+    validate_training_artifacts,
+)
 from api.services.fine_tuning.dataset_formatters import (
     export_dataset_version_for_training,
 )
@@ -57,6 +61,8 @@ def _artifacts_root() -> Path:
 def _serialize_readiness(model: ModelRegistryRecord) -> dict[str, Any]:
     selectable = False
     selectable_reason = "model is not selectable"
+    runtime_ready = False
+    runtime_ready_reason = "runtime readiness is not available"
     if model.source_type == "base":
         selectable = model.status in BASE_MODEL_READY_STATUSES
         selectable_reason = (
@@ -64,21 +70,166 @@ def _serialize_readiness(model: ModelRegistryRecord) -> dict[str, Any]:
             if selectable
             else "base model is not in a ready status"
         )
+        runtime_ready = selectable
+        runtime_ready_reason = selectable_reason
     elif model.source_type == "fine_tuned":
         selectable = (
             model.status in READY_MODEL_STATUSES
             and model.publish_status == "published"
             and bool(model.published_model_name)
         )
-        selectable_reason = (
-            "fine-tuned model has a published serving target"
-            if selectable
-            else "fine-tuned model is artifact-ready only and not yet serving-ready"
-        )
+        runtime_ready = selectable
+        if selectable:
+            selectable_reason = "fine-tuned model has a published serving target"
+            runtime_ready_reason = selectable_reason
+        elif model.publish_status == "publish_ready":
+            selectable_reason = "PEFT adapter exists and the publish manifest is ready, but no Ollama serving model has been created yet."
+            runtime_ready_reason = "Automatic Ollama import is not implemented, so this fine-tuned model remains artifact-only until a real serving model exists."
+        elif model.publish_status == "failed":
+            selectable_reason = "fine-tuned model publish preparation failed"
+            runtime_ready_reason = (
+                "publish preparation failed before a serving model became available"
+            )
+        else:
+            selectable_reason = (
+                "fine-tuned model is artifact-ready only and not yet serving-ready"
+            )
+            runtime_ready_reason = selectable_reason
     return {
         "selectable": selectable,
         "selectable_reason": selectable_reason,
         "publish_status": model.publish_status,
+        "runtime_ready": runtime_ready,
+        "runtime_ready_reason": runtime_ready_reason,
+    }
+
+
+def _artifact_metadata_value(artifact: FTModelArtifactRecord | None, key: str) -> Any:
+    if artifact is None:
+        return None
+    return dict(artifact.metadata_json or {}).get(key)
+
+
+def _lineage_value(model: ModelRegistryRecord, key: str) -> Any:
+    return dict(model.lineage_json or {}).get(key)
+
+
+def _lineage_warning(
+    *, base_model_name: str | None, trainer_model_name: str | None
+) -> str | None:
+    if not base_model_name or not trainer_model_name:
+        return None
+    if base_model_name == trainer_model_name:
+        return None
+    return "Serving lineage and trainer source differ. This is acceptable for smoke tests but does not mean the serving model itself was fine-tuned."
+
+
+def _model_warnings(
+    model: ModelRegistryRecord, artifact: FTModelArtifactRecord | None
+) -> list[str]:
+    warnings: list[str] = []
+    if model.source_type == "fine_tuned":
+        warnings.append(
+            "This registry entry tracks a PEFT adapter artifact. It is not itself an Ollama serving model."
+        )
+        if model.publish_status == "publish_ready":
+            warnings.append(
+                "Publish-ready means a manifest/template exists. Automatic Ollama import is not implemented by this repository."
+            )
+    validation = _artifact_metadata_value(artifact, "validation")
+    if isinstance(validation, dict):
+        warnings.extend(str(item) for item in validation.get("warnings") or [])
+    mismatch_warning = _lineage_warning(
+        base_model_name=model.base_model_name,
+        trainer_model_name=_lineage_value(model, "trainer_model_name"),
+    )
+    if mismatch_warning:
+        warnings.append(mismatch_warning)
+    deduped: list[str] = []
+    for item in warnings:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _artifact_paths_by_type(
+    artifacts: list[FTModelArtifactRecord],
+) -> dict[str, str | None]:
+    by_type = {artifact.artifact_type: artifact.local_path for artifact in artifacts}
+    publish_artifact = next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_type == "publish_manifest"
+        ),
+        None,
+    )
+    publish_metadata = (
+        dict(publish_artifact.metadata_json or {})
+        if publish_artifact is not None
+        else {}
+    )
+    return {
+        "dataset_export_dir": by_type.get("dataset_export"),
+        "adapter_dir": by_type.get("adapter_bundle"),
+        "training_report_path": by_type.get("training_report"),
+        "merged_model_dir": by_type.get("merged_model"),
+        "publish_manifest_path": by_type.get("publish_manifest"),
+        "modelfile_template_path": publish_metadata.get("modelfile_template_path"),
+        "training_log_path": next(
+            (
+                dict(artifact.metadata_json or {}).get("log_path")
+                for artifact in artifacts
+                if artifact.artifact_type == "training_report"
+            ),
+            None,
+        ),
+    }
+
+
+def _resolve_training_job_trainer_model_name(
+    training_job: FTTrainingJobRecord,
+    artifacts: list[FTModelArtifactRecord],
+    models: list[ModelRegistryRecord],
+) -> str | None:
+    explicit = str(
+        training_job.hyperparams_json.get("trainer_model_name") or ""
+    ).strip()
+    if explicit:
+        return explicit
+    for artifact in artifacts:
+        metadata = dict(artifact.metadata_json or {})
+        trainer_model_name = str(metadata.get("trainer_model_name") or "").strip()
+        if trainer_model_name:
+            return trainer_model_name
+    for model in models:
+        trainer_model_name = str(
+            _lineage_value(model, "trainer_model_name") or ""
+        ).strip()
+        if trainer_model_name:
+            return trainer_model_name
+    return None
+
+
+def _resolve_training_job_publish_readiness(
+    models: list[ModelRegistryRecord],
+) -> dict[str, Any] | None:
+    if not models:
+        return None
+    model = models[0]
+    readiness = _serialize_readiness(model)
+    return {
+        "status": model.status,
+        "publish_status": model.publish_status,
+        "serving_model_name": model.published_model_name,
+        "candidate_published_model_name": _lineage_value(
+            model, "candidate_published_model_name"
+        ),
+        "selectable": readiness["selectable"],
+        "selectable_reason": readiness["selectable_reason"],
+        "runtime_ready": readiness["runtime_ready"],
+        "runtime_ready_reason": readiness["runtime_ready_reason"],
+        "warnings": _model_warnings(model, None),
     }
 
 
@@ -106,15 +257,27 @@ def _serialize_model(
     if model.source_type == "fine_tuned":
         serving_model_name = model.published_model_name
     readiness = _serialize_readiness(model)
+    artifact_metadata = (
+        dict(artifact.metadata_json or {}) if artifact is not None else {}
+    )
     return {
         "id": model.id,
         "display_name": model.display_name,
         "source_type": model.source_type,
         "base_model_name": model.base_model_name,
+        "trainer_model_name": _lineage_value(model, "trainer_model_name"),
+        "trainer_backend": artifact_metadata.get("trainer_backend")
+        or _lineage_value(model, "trainer_backend"),
         "ollama_model_name": model.ollama_model_name,
         "published_model_name": model.published_model_name,
+        "candidate_published_model_name": _lineage_value(
+            model, "candidate_published_model_name"
+        ),
         "serving_model_name": serving_model_name,
         "artifact_id": model.artifact_id,
+        "artifact_type": artifact.artifact_type if artifact is not None else None,
+        "artifact_format": artifact_metadata.get("artifact_format"),
+        "artifact_valid": artifact_metadata.get("artifact_valid"),
         "status": model.status,
         "publish_status": model.publish_status,
         "tags_json": model.tags_json,
@@ -128,6 +291,7 @@ def _serialize_model(
         else None,
         "artifact": _serialize_artifact(artifact),
         "readiness": readiness,
+        "warnings": _model_warnings(model, artifact),
     }
 
 
@@ -138,6 +302,31 @@ def _serialize_training_job(
     artifacts: list[FTModelArtifactRecord],
     models: list[ModelRegistryRecord],
 ) -> dict[str, Any]:
+    trainer_model_name = _resolve_training_job_trainer_model_name(
+        training_job, artifacts, models
+    )
+    artifact_paths = _artifact_paths_by_type(artifacts)
+    report_artifact = next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_type == "training_report"
+        ),
+        None,
+    )
+    adapter_artifact = next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_type == "adapter_bundle"
+        ),
+        None,
+    )
+    artifact_validation = _artifact_metadata_value(adapter_artifact, "validation")
+    lineage_warning = _lineage_warning(
+        base_model_name=training_job.base_model_name,
+        trainer_model_name=trainer_model_name,
+    )
     return {
         "id": training_job.id,
         "dataset_version_id": training_job.dataset_version_id,
@@ -147,10 +336,12 @@ def _serialize_training_job(
         if dataset_version is not None
         else None,
         "base_model_name": training_job.base_model_name,
+        "trainer_model_name": trainer_model_name,
         "training_method": training_job.training_method,
         "hyperparams_json": training_job.hyperparams_json,
         "status": training_job.status,
         "trainer_backend": training_job.trainer_backend,
+        "device": _artifact_metadata_value(report_artifact, "device"),
         "backing_job_id": training_job.backing_job_id,
         "train_rows": training_job.train_rows,
         "val_rows": training_job.val_rows,
@@ -160,6 +351,10 @@ def _serialize_training_job(
         "evaluation_json": training_job.evaluation_json,
         "error_json": training_job.error_json,
         "output_dir": training_job.output_dir,
+        "artifact_paths": artifact_paths,
+        "artifact_validation": artifact_validation,
+        "lineage_warning": lineage_warning,
+        "publish_readiness": _resolve_training_job_publish_readiness(models),
         "log_text": training_job.log_text,
         "created_at": training_job.created_at.isoformat()
         if training_job.created_at is not None
@@ -545,162 +740,225 @@ def complete_training_job(
     if invalid_rows:
         raise RuntimeError("training dataset version contains invalid rows")
 
+    failure_phase = "preparing_data"
     now = datetime.now(timezone.utc)
-    training_job.status = "preparing_data"
-    training_job.started_at = training_job.started_at or now
+    try:
+        training_job.status = "preparing_data"
+        training_job.started_at = training_job.started_at or now
 
-    artifact_dir = _artifacts_root() / training_job.id
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    export_dir = artifact_dir / "dataset_export"
-    export_result = export_dataset_version_for_training(
-        dataset,
-        dataset_version,
-        list(rows),
-        export_root=export_dir,
-        require_locked=training_job.training_method == "sft_lora",
-    )
-    training_job.train_rows = export_result.row_counts.get("train")
-    training_job.val_rows = export_result.row_counts.get("val")
-    training_job.test_rows = export_result.row_counts.get("test")
-    training_job.format_summary_json = export_result.format_summary
-    training_job.output_dir = str(artifact_dir)
-    training_job.status = "training"
-    session.flush()
-
-    settings = get_settings()
-    training_output = run_training_backend(
-        export_result,
-        base_model_name=training_job.base_model_name,
-        training_method=training_job.training_method,
-        hyperparams_json=training_job.hyperparams_json,
-        settings=settings,
-        output_dir=artifact_dir / "trainer_output",
-    )
-
-    training_job.status = "packaging"
-    training_job.trainer_backend = training_output.trainer_backend
-    training_job.metrics_json = training_output.metrics
-    training_job.evaluation_json = training_output.evaluation
-    training_job.log_text = (
-        f"Exported dataset to {export_result.export_dir}. "
-        f"Trained adapter at {training_output.adapter_dir}."
-    )
-
-    dataset_export_artifact = FTModelArtifactRecord(
-        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
-        training_job_id=training_job.id,
-        artifact_type="dataset_export",
-        local_path=export_result.export_dir,
-        metadata_json={
-            **export_result.format_summary,
-            "train_file": export_result.train_file,
-            "val_file": export_result.val_file,
-            "test_file": export_result.test_file,
-            "all_rows_file": export_result.all_rows_file,
-            "summary_file": export_result.summary_file,
-        },
-    )
-    session.add(dataset_export_artifact)
-    session.flush()
-
-    adapter_artifact = FTModelArtifactRecord(
-        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
-        training_job_id=training_job.id,
-        artifact_type=artifact_type,
-        local_path=training_output.adapter_dir,
-        metadata_json={
-            "training_job_id": training_job.id,
-            "dataset_version_id": dataset_version.id,
-            "base_model_name": training_job.base_model_name,
-            "trainer_model_name": training_output.trainer_model_name,
-            "trainer_backend": training_output.trainer_backend,
-            "artifact_format": "peft_adapter",
-            "status": "ready",
-            "created_at": now.isoformat(),
-            "metrics": training_output.metrics,
-        },
-    )
-    session.add(adapter_artifact)
-    session.flush()
-
-    report_artifact = FTModelArtifactRecord(
-        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
-        training_job_id=training_job.id,
-        artifact_type="training_report",
-        local_path=training_output.report_path,
-        metadata_json={
-            "log_path": training_output.logs_path,
-            "device": training_output.device,
-            "evaluation": training_output.evaluation,
-            "metrics": training_output.metrics,
-        },
-    )
-    session.add(report_artifact)
-    session.flush()
-
-    if training_output.merged_model_dir is not None:
-        merged_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
-            training_job_id=training_job.id,
-            artifact_type="merged_model",
-            local_path=training_output.merged_model_dir,
-            metadata_json={
-                "status": "ready",
-                "artifact_format": "transformers_pretrained",
-                "base_model_name": training_job.base_model_name,
-            },
+        artifact_dir = _artifacts_root() / training_job.id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        export_dir = artifact_dir / "dataset_export"
+        export_result = export_dataset_version_for_training(
+            dataset,
+            dataset_version,
+            list(rows),
+            export_root=export_dir,
+            require_locked=training_job.training_method == "sft_lora",
         )
-        session.add(merged_artifact)
+        training_job.train_rows = export_result.row_counts.get("train")
+        training_job.val_rows = export_result.row_counts.get("val")
+        training_job.test_rows = export_result.row_counts.get("test")
+        training_job.format_summary_json = export_result.format_summary
+        training_job.output_dir = str(artifact_dir)
+        training_job.status = "training"
+        failure_phase = "training"
         session.flush()
 
-    publish_manifest_path, publish_manifest = build_publish_manifest(
-        manifest_dir=artifact_dir / "publish",
-        dataset_export=export_result,
-        training_artifacts=training_output,
-        base_model_name=training_job.base_model_name,
-        trainer_model_name=training_output.trainer_model_name,
-        settings=settings,
-    )
-    publish_artifact = FTModelArtifactRecord(
-        id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
-        training_job_id=training_job.id,
-        artifact_type="publish_manifest",
-        local_path=str(publish_manifest_path),
-        metadata_json=publish_manifest,
-    )
-    session.add(publish_artifact)
-    session.flush()
+        settings = get_settings()
+        training_output = run_training_backend(
+            export_result,
+            base_model_name=training_job.base_model_name,
+            training_method=training_job.training_method,
+            hyperparams_json=training_job.hyperparams_json,
+            settings=settings,
+            output_dir=artifact_dir / "trainer_output",
+        )
 
-    training_job.status = "registering"
-    registry_entry = ModelRegistryRecord(
-        id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
-        display_name=f"{dataset.name} {dataset_version.version_label}",
-        source_type="fine_tuned",
-        base_model_name=training_job.base_model_name,
-        ollama_model_name=f"artifact::{training_job.id}",
-        published_model_name=None,
-        artifact_id=adapter_artifact.id,
-        status="artifact_ready",
-        publish_status="publish_ready",
-        tags_json=["fine_tuned", dataset.task_type, training_job.training_method],
-        lineage_json={
-            "dataset_id": dataset.id,
-            "dataset_version_id": dataset_version.id,
-            "dataset_version_label": dataset_version.version_label,
-            "trainer_model_name": training_output.trainer_model_name,
-            "training_job_id": training_job.id,
-        },
-        description=(
-            f"Real fine-tuning artifact for {dataset.name} {dataset_version.version_label}. "
-            "The adapter exists locally, but inference stays blocked until a serving publish/import step succeeds."
-        ),
-        updated_at=now,
-    )
-    session.add(registry_entry)
-    training_job.status = status
-    training_job.finished_at = datetime.now(timezone.utc)
-    session.commit()
-    return get_training_job(session, training_job.id) or {"id": training_job.id}
+        training_job.status = "packaging"
+        failure_phase = "packaging"
+        training_job.trainer_backend = training_output.trainer_backend
+        training_job.metrics_json = training_output.metrics
+        training_job.evaluation_json = training_output.evaluation
+        artifact_validation = validate_training_artifacts(
+            training_artifacts=training_output,
+            base_model_name=training_job.base_model_name,
+            smoke_test=bool(training_job.hyperparams_json.get("smoke_test", False)),
+        )
+        if not artifact_validation["artifact_valid"]:
+            raise RuntimeError(
+                "training artifacts failed validation: "
+                + ", ".join(artifact_validation["missing"])
+            )
+        training_job.log_text = (
+            f"Exported dataset to {export_result.export_dir}. "
+            f"Validated PEFT adapter artifact at {training_output.adapter_dir}."
+        )
+
+        dataset_export_artifact = FTModelArtifactRecord(
+            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            training_job_id=training_job.id,
+            artifact_type="dataset_export",
+            local_path=export_result.export_dir,
+            metadata_json={
+                **export_result.format_summary,
+                "train_file": export_result.train_file,
+                "val_file": export_result.val_file,
+                "test_file": export_result.test_file,
+                "all_rows_file": export_result.all_rows_file,
+                "summary_file": export_result.summary_file,
+            },
+        )
+        session.add(dataset_export_artifact)
+        session.flush()
+
+        adapter_artifact = FTModelArtifactRecord(
+            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            training_job_id=training_job.id,
+            artifact_type=artifact_type,
+            local_path=training_output.adapter_dir,
+            metadata_json={
+                "training_job_id": training_job.id,
+                "dataset_version_id": dataset_version.id,
+                "base_model_name": training_job.base_model_name,
+                "trainer_model_name": training_output.trainer_model_name,
+                "trainer_backend": training_output.trainer_backend,
+                "artifact_format": "peft_adapter",
+                "artifact_valid": artifact_validation["artifact_valid"],
+                "status": "ready",
+                "device": training_output.device,
+                "smoke_test": artifact_validation["smoke_test"],
+                "created_at": now.isoformat(),
+                "metrics": training_output.metrics,
+                "validation": artifact_validation,
+            },
+        )
+        session.add(adapter_artifact)
+        session.flush()
+
+        report_artifact = FTModelArtifactRecord(
+            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            training_job_id=training_job.id,
+            artifact_type="training_report",
+            local_path=training_output.report_path,
+            metadata_json={
+                "log_path": training_output.logs_path,
+                "device": training_output.device,
+                "evaluation": training_output.evaluation,
+                "metrics": training_output.metrics,
+                "artifact_valid": artifact_validation["artifact_valid"],
+            },
+        )
+        session.add(report_artifact)
+        session.flush()
+
+        if training_output.merged_model_dir is not None:
+            merged_artifact = FTModelArtifactRecord(
+                id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+                training_job_id=training_job.id,
+                artifact_type="merged_model",
+                local_path=training_output.merged_model_dir,
+                metadata_json={
+                    "status": "ready",
+                    "artifact_format": "transformers_pretrained",
+                    "base_model_name": training_job.base_model_name,
+                },
+            )
+            session.add(merged_artifact)
+            session.flush()
+
+        publish_manifest_path, publish_manifest = build_publish_manifest(
+            manifest_dir=artifact_dir / "publish",
+            dataset_export=export_result,
+            training_artifacts=training_output,
+            base_model_name=training_job.base_model_name,
+            trainer_model_name=training_output.trainer_model_name,
+            settings=settings,
+        )
+        publish_validation = validate_publish_artifacts(
+            manifest_path=publish_manifest_path,
+            modelfile_template_path=Path(
+                str(publish_manifest.get("modelfile_template_path") or "")
+            ),
+            manifest_payload=publish_manifest,
+            training_validation=artifact_validation,
+        )
+        if not publish_validation["artifact_valid"]:
+            raise RuntimeError(
+                "publish artifacts failed validation: "
+                + ", ".join(publish_validation["missing"])
+            )
+        publish_artifact = FTModelArtifactRecord(
+            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            training_job_id=training_job.id,
+            artifact_type="publish_manifest",
+            local_path=str(publish_manifest_path),
+            metadata_json={
+                **publish_manifest,
+                "artifact_valid": publish_validation["artifact_valid"],
+                "validation": publish_validation,
+            },
+        )
+        session.add(publish_artifact)
+        session.flush()
+
+        training_job.status = "registering"
+        failure_phase = "registering"
+        registry_entry = ModelRegistryRecord(
+            id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
+            display_name=f"{dataset.name} {dataset_version.version_label}",
+            source_type="fine_tuned",
+            base_model_name=training_job.base_model_name,
+            ollama_model_name=f"artifact::{training_job.id}",
+            published_model_name=None,
+            artifact_id=adapter_artifact.id,
+            status="artifact_ready",
+            publish_status="publish_ready",
+            tags_json=["fine_tuned", dataset.task_type, training_job.training_method],
+            lineage_json={
+                "dataset_id": dataset.id,
+                "dataset_version_id": dataset_version.id,
+                "dataset_version_label": dataset_version.version_label,
+                "trainer_model_name": training_output.trainer_model_name,
+                "trainer_backend": training_output.trainer_backend,
+                "artifact_type": artifact_type,
+                "artifact_format": "peft_adapter",
+                "training_job_id": training_job.id,
+                "candidate_published_model_name": publish_manifest.get(
+                    "candidate_model_name"
+                ),
+                "lineage_warning": _lineage_warning(
+                    base_model_name=training_job.base_model_name,
+                    trainer_model_name=training_output.trainer_model_name,
+                ),
+            },
+            description=(
+                f"Real fine-tuning artifact for {dataset.name} {dataset_version.version_label}. "
+                "The local output is a validated PEFT adapter artifact with a publish-ready manifest, but no Ollama serving model has been created yet."
+            ),
+            updated_at=now,
+        )
+        session.add(registry_entry)
+        training_job.status = status
+        training_job.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        return get_training_job(session, training_job.id) or {"id": training_job.id}
+    except Exception as exc:
+        session.rollback()
+        failed_job = session.get(FTTrainingJobRecord, training_job_id)
+        if failed_job is not None:
+            failed_job.status = "failed"
+            failed_job.finished_at = datetime.now(timezone.utc)
+            failed_job.error_json = {
+                "phase": failure_phase,
+                "message": str(exc),
+            }
+            failed_job.log_text = (
+                (failed_job.log_text or "")
+                + f"\nTraining failed during {failure_phase}: {exc}"
+            ).strip()
+            session.commit()
+        raise
 
 
 def get_model_artifact(session: Session, artifact_id: str) -> dict[str, Any] | None:
@@ -732,13 +990,31 @@ def get_model_lineage(session: Session, model_id: str) -> dict[str, Any] | None:
     model = session.get(ModelRegistryRecord, model_id)
     if model is None:
         return None
+    artifact = (
+        session.get(FTModelArtifactRecord, model.artifact_id)
+        if model.artifact_id is not None
+        else None
+    )
+    readiness = _serialize_readiness(model)
     return {
         "model_id": model.id,
         "source_type": model.source_type,
         "base_model_name": model.base_model_name,
+        "trainer_model_name": _lineage_value(model, "trainer_model_name"),
+        "trainer_backend": _artifact_metadata_value(artifact, "trainer_backend")
+        or _lineage_value(model, "trainer_backend"),
+        "artifact_id": model.artifact_id,
+        "artifact_type": artifact.artifact_type if artifact is not None else None,
+        "artifact_format": _artifact_metadata_value(artifact, "artifact_format"),
         "published_model_name": model.published_model_name,
+        "candidate_published_model_name": _lineage_value(
+            model, "candidate_published_model_name"
+        ),
+        "ollama_model_name": model.ollama_model_name,
         "status": model.status,
         "publish_status": model.publish_status,
+        "readiness": readiness,
+        "warnings": _model_warnings(model, artifact),
         "lineage_json": model.lineage_json,
     }
 
@@ -765,14 +1041,6 @@ def publish_training_job_artifacts(
         )
 
     settings = get_settings()
-    if not settings.ollama_publish_enabled:
-        model.publish_status = "publish_ready"
-        model.status = "artifact_ready"
-        session.commit()
-        return _serialize_model(
-            model, session.get(FTModelArtifactRecord, model.artifact_id)
-        )
-
     publish_artifact = session.scalar(
         select(FTModelArtifactRecord).where(
             FTModelArtifactRecord.training_job_id == training_job_id,
@@ -791,10 +1059,21 @@ def publish_training_job_artifacts(
             "publish manifest does not include a candidate serving model name"
         )
 
-    model.published_model_name = candidate_model_name
-    model.publish_status = "published"
-    model.status = "published"
+    model.publish_status = "publish_ready"
+    model.status = "artifact_ready"
+    model.published_model_name = None
     model.updated_at = datetime.now(timezone.utc)
+    publish_metadata = dict(publish_artifact.metadata_json or {})
+    publish_metadata["ollama_publish_enabled"] = settings.ollama_publish_enabled
+    publish_metadata["status"] = "publish_ready"
+    publish_metadata.setdefault("notes", [])
+    publish_metadata["notes"] = [
+        *publish_metadata["notes"],
+        (
+            "Automatic Ollama create/import is not implemented in this repository, so publish keeps the model artifact-ready until a real serving model exists."
+        ),
+    ]
+    publish_artifact.metadata_json = publish_metadata
     session.commit()
     return _serialize_model(
         model, session.get(FTModelArtifactRecord, model.artifact_id)
