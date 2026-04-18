@@ -1,0 +1,4 @@
+{"instruction":"Summarize the maintenance note.","input":"Pump 3 was restarted after a 15 minute inspection. No leaks were detected.","output":"Pump 3 restarted cleanly after inspection with no leaks detected."}
+{"instruction":"Classify the operator message.","input":"Temperature reached the warning threshold but the line stayed online.","output":"warning"}
+{"instruction":"Rewrite the handover note in plain language.","input":"Night shift observed intermittent alarm clears after manual acknowledgement.","output":"The night shift saw alarms clear on and off after they were acknowledged manually."}
+{"instruction":"Extract the next action.","input":"Motor vibration increased during the final batch. Re-check alignment before the next run.","output":"Re-check motor alignment before the next run."}
