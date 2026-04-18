@@ -9,12 +9,16 @@ All notable changes to this repository will be documented in this file.
 - local smoke-test assets for fine-tuning validation via `examples/ft_smoke_instruction_dataset.jsonl` and `scripts/ft_smoke_test.sh`
 - tracked `.env.example` defaults for the local training/publish seam
 - artifact validation metadata and richer trainer/serving lineage payloads in the fine-tuning and model registry APIs
+- `/demo` Models cards now expose explicit Review details and Use for inference actions, with a clearer in-panel inference summary
+- `/demo` Fine-tuning now includes a smoke-test guide and a smoke hyperparameter preset
+- `/demo` Fine-tuning can prepare a smoke dataset, version, rows, validation, and lock flow using existing endpoints only
 
 ### Changed
 
 - successful fine-tuning now requires adapter/report/log/manifest validation before the job is marked `succeeded`
 - fine-tuned registry rows stay honestly artifact-only even after the publish seam is called, because automatic Ollama import is not implemented here
 - the `/demo` Fine-tuning and Models surfaces now separate registry review from inference selection, while still showing trainer source, adapter validation, publish readiness, and runtime-blocking copy explicitly
+- artifact-only rows stay reviewable, but they are not inference-selectable until a real serving model exists
 - README and architecture docs now describe Mac smoke-test expectations, artifact/package boundaries, and model naming more clearly
 
 ### Notes

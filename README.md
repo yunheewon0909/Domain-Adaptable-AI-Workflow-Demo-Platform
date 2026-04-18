@@ -2,15 +2,15 @@
 
 ## Overview
 
-This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review.
+This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review. The Models cards now expose explicit Review details and Use for inference actions, and the in-panel inference summary is clearer.
 
-The current milestone is best understood as **v0.7.1: a reviewer-first local AI ops hardening pass for the real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, and separate RAG data operations.
+The current milestone is best understood as **v0.7.1: a reviewer-first local AI ops hardening pass for the real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
 
 The key message of the repo is now threefold:
 
 - **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
 - **domain service**: a concrete PLC testing slice that shows how Excel-based industrial test assets can be turned into a DB + queue + dashboard workflow without overhauling the skeleton
-- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, real adapter artifacts, model registry entries, publish-ready serving seams, separate review versus inference selection in the Models tab, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
+- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, real adapter artifacts, model registry entries, publish-ready serving seams, separate review versus inference selection in the Models tab, clearer in-panel inference summaries, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
 
 ## What the PLC Testing Slice Adds
 
@@ -58,7 +58,7 @@ The local AI ops slice focuses on reviewer-visible orchestration with a narrow b
 5. let the worker export trainer-ready JSONL, run a local PEFT/Transformers LoRA path, and persist real artifacts
 6. register the resulting model as `artifact_ready` after adapter/report/manifest validation succeeds
 7. keep the model artifact-only until a real serving/import step exists; the current publish seam prepares metadata but does not create an Ollama runtime model
-6. manage RAG collections and documents separately from fine-tuning corpora
+8. manage RAG collections and documents separately from fine-tuning corpora
 
 Included in the current milestone:
 
@@ -67,12 +67,13 @@ Included in the current milestone:
 - `ft_train_model` queue jobs plus richer `ft_training_jobs` domain status tracking (`queued -> preparing_data -> training -> packaging -> registering -> succeeded/failed`)
 - real dataset export, adapter bundle, training report, and publish-manifest artifacts under `data/model_artifacts/`
 - `model_registry` entries for base models and fine-tuned artifact-ready or published models
-- `/models` and `/inference/run` so the Models tab can review registry rows separately from inference selection
+- `/models` and `/inference/run` so the Models tab can show explicit Review details, a separate Use for inference action, and a clearer in-panel inference summary while keeping artifact-only rows out of inference selection
 - `/ft-training-jobs/{job_id}/publish`, `/ft-model-artifacts/{artifact_id}`, `/ft-dataset-versions/{version_id}/summary`, `/models/{model_id}/lineage`, and `/ft-training-jobs/{job_id}/logs`
 - `rag_collections` and `rag_documents` tables for collection/document review
 - txt/md/pdf upload support with parse preview or metadata preview
 - retrieval preview over collection-managed document text previews
 - new `/demo` reviewer modes for Fine-tuning, Models, and RAG
+- Fine-tuning mode can prepare a smoke dataset, version, rows, validation, and lock flow using the existing endpoints already documented in this repo, with no hidden import wizard
 
 Current limitations of the AI ops slice:
 
@@ -130,6 +131,24 @@ Included helper assets:
 - sample dataset: `examples/ft_smoke_instruction_dataset.jsonl`
 - helper script: `scripts/ft_smoke_test.sh`
 
+Smoke hyperparameter preset:
+
+```json
+{
+  "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
+  "epochs": 1,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 1,
+  "learning_rate": 0.0005,
+  "max_seq_length": 256,
+  "lora_r": 4,
+  "lora_alpha": 8,
+  "lora_dropout": 0.0,
+  "seed": 42,
+  "smoke_test": true
+}
+```
+
 Rough expectations for a local smoke test:
 
 - runtime should be treated as a short pipeline verification, not a benchmark or realistic large-model training claim
@@ -139,9 +158,13 @@ Rough expectations for a local smoke test:
 - `/models` shows a fine-tuned row with `artifact_ready` / `publish_ready`
 - artifact-only rows stay reviewable, but inference remains blocked until a serving-ready selectable model exists
 
+### Smoke-test guide in `/demo`
+
+The Fine-tuning page can stage the smoke dataset, create the version, add rows, move the version through validated and locked, and enqueue the job using the same existing endpoints documented below. That keeps the demo flow truthful, because it does not depend on a fake import path or a separate backend shortcut.
+
 ## When can inference use a fine-tuned model?
 
-Only when a **real serving model exists** and the registry entry is genuinely serving-ready. In the current repo, artifact-only rows stay reviewable in the detail panel, but only serving-ready selectable rows can be used for inference.
+Only when a **real serving model exists** and the registry entry is genuinely serving-ready. In the current repo, artifact-only rows stay reviewable in the detail panel, but only serving-ready selectable rows can be used for inference. The Models card keeps that split visible with explicit Review details and Use for inference actions.
 
 ## Architecture Summary
 
@@ -397,7 +420,7 @@ The page now has five reviewer modes:
 - **Workflow reviewer**: the original dataset/workflow/evidence experience
 - **PLC testing MVP**: suite import, testcase preview, queued/running/succeeded/failed run review, and raw I/O/result drill-down
 - **Fine-tuning**: dataset creation, version management, row review, validation status transitions, and training enqueue controls
-- **Models**: model registry inspection plus separate inference selection with optional RAG collection context
+- **Models**: model registry inspection plus separate inference selection with optional RAG collection context, with explicit Review details and Use for inference actions on each card
 - **RAG**: collection creation, document upload/list/detail, and retrieval preview
 
 ## AI Ops API Examples
