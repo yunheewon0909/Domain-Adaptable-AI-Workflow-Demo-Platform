@@ -471,6 +471,14 @@ textarea {
   margin-top: var(--space-5);
 }
 
+.models-status-panel {
+  margin-bottom: var(--space-5);
+}
+
+.model-detail-actions {
+  margin-top: var(--space-3);
+}
+
 .run-button {
   justify-self: start;
   border: 0;

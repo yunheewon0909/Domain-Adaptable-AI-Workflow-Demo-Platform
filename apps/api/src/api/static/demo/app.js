@@ -86,8 +86,9 @@ const state = {
   models: {
     hasLoadedInitialData: false,
     items: [],
-    selectedModelId: null,
-    selectedModel: null,
+    selectedReviewModelId: null,
+    selectedReviewModel: null,
+    selectedInferenceModelId: null,
     ragCollections: [],
     selectedRagCollectionId: '',
     inferenceResult: null,
@@ -222,6 +223,7 @@ const dom = {
     refresh: document.querySelector('#models-refresh'),
     list: document.querySelector('#models-list'),
     detail: document.querySelector('#model-detail'),
+    statusSummary: document.querySelector('#models-status-summary'),
     modelSelect: document.querySelector('#inference-model-select'),
     ragCollectionSelect: document.querySelector('#inference-rag-collection-select'),
     temperature: document.querySelector('#inference-temperature'),
@@ -769,8 +771,32 @@ function selectedFtTrainingJob() {
   return state.ft.selectedTrainingJob;
 }
 
-function selectedModel() {
-  return state.models.selectedModel;
+function selectedReviewModel() {
+  return state.models.selectedReviewModel;
+}
+
+function selectedInferenceModel() {
+  return state.models.items.find((model) => model.id === state.models.selectedInferenceModelId) || null;
+}
+
+function modelDisplayName(model) {
+  return model?.display_name || model?.serving_model_name || model?.ollama_model_name || model?.id || 'unknown model';
+}
+
+function modelRegistrySubtitle(model) {
+  return model?.serving_model_name || model?.candidate_published_model_name || model?.base_model_name || 'model name unavailable';
+}
+
+function modelInferenceBlockedReason(model) {
+  return model?.readiness?.selectable_reason || model?.readiness?.runtime_ready_reason || 'This model is not selectable for inference yet.';
+}
+
+function setModelsInferenceModel(modelId) {
+  const nextModel = state.models.items.find((item) => item.id === modelId && item.readiness?.selectable) || null;
+  state.models.selectedInferenceModelId = nextModel?.id || null;
+  renderModelsRegistry();
+  renderModelsStatus();
+  renderModelDetail();
 }
 
 function selectedRagCollection() {
@@ -2762,31 +2788,38 @@ function renderModelsRegistry() {
   if (!items.length) {
     dom.models.list.className = 'stack-list empty';
     dom.models.list.textContent = 'Registered models will appear here.';
-    dom.models.modelSelect.innerHTML = '';
+    populateMappedSelectOptions(dom.models.modelSelect, [], {
+      placeholderLabel: 'No inference-selectable models available',
+      selectedValue: '',
+    });
     dom.models.modelSelect.disabled = true;
+    renderModelsStatus();
     return;
   }
 
   dom.models.modelSelect.disabled = !selectableItems.length;
   populateMappedSelectOptions(dom.models.modelSelect, selectableItems, {
-    selectedValue: state.models.selectedModelId,
+    placeholderLabel: selectableItems.length ? undefined : 'No inference-selectable models available',
+    selectedValue: state.models.selectedInferenceModelId,
     valueKey: 'id',
-    labelBuilder: (item) => `${item.display_name || item.serving_model_name || item.ollama_model_name || item.id} · ${item.status || 'unknown'} · ${item.publish_status || 'n/a'}`,
+    labelBuilder: (item) => `${modelDisplayName(item)} · ${item.status || 'unknown'} · ${item.publish_status || 'n/a'}`,
   });
 
   dom.models.list.className = 'stack-list';
   dom.models.list.innerHTML = items
     .map((model) => `
-      <button type="button" class="list-card${model.id === state.models.selectedModelId ? ' active' : ''}" data-model-id="${escapeHtml(model.id)}">
+      <button type="button" class="list-card${model.id === state.models.selectedReviewModelId ? ' active' : ''}" data-model-id="${escapeHtml(model.id)}">
         <div class="inline-meta">
           ${renderStatusBadge(model.status || 'registered')}
           ${renderBadge(model.source_type || 'unknown source')}
           ${renderBadge(model.publish_status || 'publish n/a')}
           ${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}
           ${renderBadge(model.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}
+          ${model.id === state.models.selectedReviewModelId ? renderBadge('reviewing model') : ''}
+          ${model.id === state.models.selectedInferenceModelId ? renderBadge('inference model') : ''}
         </div>
-        <h3>${escapeHtml(model.display_name || model.serving_model_name || model.id)}</h3>
-        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.serving_model_name || model.candidate_published_model_name || model.base_model_name || 'model name unavailable')}</p>
+        <h3>${escapeHtml(modelDisplayName(model))}</h3>
+        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(modelRegistrySubtitle(model))}</p>
         <div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div>
       </button>
     `)
@@ -2799,6 +2832,28 @@ function renderModelsRegistry() {
   });
 }
 
+function renderModelsStatus() {
+  const reviewingModel = selectedReviewModel();
+  const inferenceModel = selectedInferenceModel();
+  const reviewCopy = reviewingModel
+    ? `${modelDisplayName(reviewingModel)} is selected for review. Opening a model from the registry detail panel does not change inference selection.`
+    : 'Choose a model from the registry to inspect readiness, lineage, and artifact detail.';
+  const inferenceCopy = inferenceModel
+    ? `${modelDisplayName(inferenceModel)} is the current inference model. Only models with selectable readiness can appear in inference controls.`
+    : 'No inference model is selected yet. Artifact-only models stay reviewable in the registry, but inference only uses models where readiness.selectable === true.';
+
+  dom.models.statusSummary.innerHTML = `
+    <section class="callout${reviewingModel ? '' : ' warning'}">
+      <p class="callout-title">Reviewing model</p>
+      <p>${escapeHtml(reviewCopy)}</p>
+    </section>
+    <section class="callout${inferenceModel ? ' success' : ' warning'}">
+      <p class="callout-title">Inference model</p>
+      <p>${escapeHtml(inferenceCopy)}</p>
+    </section>
+  `;
+}
+
 function renderModelsRagCollectionOptions() {
   populateMappedSelectOptions(dom.models.ragCollectionSelect, state.models.ragCollections, {
     placeholderLabel: 'No RAG collection',
@@ -2809,15 +2864,33 @@ function renderModelsRagCollectionOptions() {
 }
 
 function renderModelDetail() {
-  const model = selectedModel();
+  const model = selectedReviewModel();
   if (!model) {
     dom.models.detail.className = 'detail-stack empty';
     dom.models.detail.textContent = 'Select a model to inspect registry metadata and artifact detail.';
     return;
   }
 
+  const inferenceModel = selectedInferenceModel();
+  const isInferenceModel = model.id === inferenceModel?.id;
+  const isSelectableForInference = Boolean(model.readiness?.selectable);
+  const inferenceAvailabilityCopy = isSelectableForInference
+    ? isInferenceModel
+      ? `${modelDisplayName(model)} is already the current inference model.`
+      : `${modelDisplayName(model)} is selectable for inference. Promote it below when you want inference to use the model you are reviewing.`
+    : `${modelInferenceBlockedReason(model)} Artifact-only models stay reviewable here, but inference only uses models with readiness.selectable === true.`;
+
   dom.models.detail.className = 'detail-stack';
   dom.models.detail.innerHTML = `
+    <section class="callout">
+      <p class="callout-title">Reviewing model</p>
+      <p>${escapeHtml(`${modelDisplayName(model)} is selected in the registry detail panel. Review selection is separate from the inference model until you explicitly promote it.`)}</p>
+    </section>
+    <section class="callout ${isSelectableForInference ? 'success' : 'warning'}">
+      <p class="callout-title">Inference availability</p>
+      <p>${escapeHtml(inferenceAvailabilityCopy)}</p>
+      ${isSelectableForInference ? `<div class="button-row model-detail-actions"><button id="use-review-model-for-inference" type="button" class="secondary-button" ${isInferenceModel ? 'disabled' : ''}>${isInferenceModel ? 'Already used for inference' : 'Use for inference'}</button></div>` : ''}
+    </section>
     <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.publish_status || 'publish n/a')}${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}</div>
     ${renderDetailGrid([
       { label: 'Model ID', value: model.id || '—' },
@@ -2844,6 +2917,14 @@ function renderModelDetail() {
     ${model.lineage_json ? renderJsonDetails('Model lineage', model.lineage_json, { summaryDetail: 'Base lineage and training source' }) : ''}
     ${model.artifact ? renderJsonDetails('Artifact detail', model.artifact, { summaryDetail: 'Backing fine-tuning artifact' }) : ''}
   `;
+
+  const useForInferenceButton = dom.models.detail.querySelector('#use-review-model-for-inference');
+  if (useForInferenceButton) {
+    useForInferenceButton.addEventListener('click', () => {
+      setModelsInferenceModel(model.id);
+      setModelsHint(`${modelDisplayName(model)} is now the inference model.`);
+    });
+  }
 }
 
 function renderInferenceResult() {
@@ -2862,7 +2943,7 @@ function renderInferenceResult() {
       <p>${escapeHtml(result.answer || 'No answer returned.')}</p>
     </section>
     ${renderDetailGrid([
-      { label: 'Selected model', value: result.model?.display_name || result.model?.serving_model_name || result.model?.ollama_model_name || '—' },
+      { label: 'Inference model', value: result.model?.display_name || result.model?.serving_model_name || result.model?.ollama_model_name || '—' },
       { label: 'Model ID', value: result.model?.id || '—' },
       { label: 'Model source', value: result.model?.source_type || '—' },
       { label: 'Base lineage', value: result.model?.base_model_name || '—' },
@@ -2879,31 +2960,39 @@ function renderInferenceResult() {
   `;
 }
 
-async function refreshModelsRegistry({ preferredModelId = null } = {}) {
+async function refreshModelsRegistry({ preferredReviewModelId = null, preferredInferenceModelId = null } = {}) {
   state.models.items = await fetchJson('/models');
+  const reviewableIds = state.models.items.map((item) => item.id);
   const selectableIds = state.models.items.filter((item) => item.readiness?.selectable).map((item) => item.id);
-  state.models.selectedModelId = preferredModelId && selectableIds.includes(preferredModelId)
-    ? preferredModelId
-    : selectableIds.includes(state.models.selectedModelId)
-      ? state.models.selectedModelId
-      : selectableIds[0] || state.models.items[0]?.id || null;
+  state.models.selectedReviewModelId = preferredReviewModelId && reviewableIds.includes(preferredReviewModelId)
+    ? preferredReviewModelId
+    : reviewableIds.includes(state.models.selectedReviewModelId)
+      ? state.models.selectedReviewModelId
+      : state.models.items[0]?.id || null;
+  state.models.selectedInferenceModelId = preferredInferenceModelId && selectableIds.includes(preferredInferenceModelId)
+    ? preferredInferenceModelId
+    : selectableIds.includes(state.models.selectedInferenceModelId)
+      ? state.models.selectedInferenceModelId
+      : selectableIds[0] || null;
 
   renderModelsRegistry();
+  renderModelsStatus();
 
-  if (!state.models.selectedModelId) {
-    state.models.selectedModel = null;
+  if (!state.models.selectedReviewModelId) {
+    state.models.selectedReviewModel = null;
     renderModelDetail();
     return;
   }
 
-  await loadModelDetail(state.models.selectedModelId);
+  await loadModelDetail(state.models.selectedReviewModelId);
 }
 
 async function loadModelDetail(modelId) {
   if (!modelId) {
-    state.models.selectedModelId = null;
-    state.models.selectedModel = null;
+    state.models.selectedReviewModelId = null;
+    state.models.selectedReviewModel = null;
     renderModelsRegistry();
+    renderModelsStatus();
     renderModelDetail();
     return;
   }
@@ -2914,9 +3003,10 @@ async function loadModelDetail(modelId) {
     return;
   }
 
-  state.models.selectedModelId = model.id;
-  state.models.selectedModel = model;
+  state.models.selectedReviewModelId = model.id;
+  state.models.selectedReviewModel = model;
   renderModelsRegistry();
+  renderModelsStatus();
   renderModelDetail();
 }
 
@@ -3752,7 +3842,10 @@ dom.models.refresh.addEventListener('click', async () => {
   try {
     await ensureModelsInitialized();
     await Promise.all([
-      refreshModelsRegistry({ preferredModelId: state.models.selectedModelId }),
+      refreshModelsRegistry({
+        preferredReviewModelId: state.models.selectedReviewModelId,
+        preferredInferenceModelId: state.models.selectedInferenceModelId,
+      }),
       refreshModelsRagCollections(),
     ]);
     setModelsHint('Model registry refreshed.');
@@ -3763,8 +3856,8 @@ dom.models.refresh.addEventListener('click', async () => {
 
 dom.models.modelSelect.addEventListener('change', async (event) => {
   try {
-    await loadModelDetail(event.target.value);
-    setModelsHint(`Model selector changed to ${event.target.selectedOptions[0]?.textContent || event.target.value}.`);
+    setModelsInferenceModel(event.target.value);
+    setModelsHint(`Inference model changed to ${event.target.selectedOptions[0]?.textContent || event.target.value}.`);
   } catch (error) {
     setModelsHint(error.message);
   }
@@ -3782,8 +3875,8 @@ dom.models.runButton.addEventListener('click', async () => {
     setModelsHint('Enter a prompt before running inference.');
     return;
   }
-  if (!state.models.selectedModelId) {
-    setModelsHint('Select a model before running inference.');
+  if (!state.models.selectedInferenceModelId) {
+    setModelsHint('Select an inference model before running inference.');
     return;
   }
 
@@ -3795,7 +3888,7 @@ dom.models.runButton.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt,
-        model_id: state.models.selectedModelId,
+        model_id: state.models.selectedInferenceModelId,
         rag_collection_id: state.models.selectedRagCollectionId || null,
         temperature: parseNumberInput(dom.models.temperature.value, { fallback: 0, minimum: 0, fieldLabel: 'Temperature' }),
         max_tokens: parseNumberInput(dom.models.maxTokens.value, { fallback: null, minimum: 1, fieldLabel: 'Max tokens', integer: true }),
@@ -3804,7 +3897,7 @@ dom.models.runButton.addEventListener('click', async () => {
     });
     state.models.inferenceResult = result;
     renderInferenceResult();
-    setModelsHint(`Inference completed with ${result.model?.display_name || result.meta?.model || 'the selected model'}.`);
+    setModelsHint(`Inference completed with ${result.model?.display_name || result.meta?.model || 'the inference model'}.`);
   } catch (error) {
     setModelsHint(error.message);
   } finally {

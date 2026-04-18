@@ -521,17 +521,36 @@
           </article>
         </section>
 
+        <section class="panel models-status-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Model selection status</h2>
+              <p class="section-copy">Keep review selection and inference selection separate here. Registry clicks update the reviewing model only, while inference stays limited to models the registry marks as selectable. Artifact-only models remain reviewable but cannot run inference until serving readiness exists.</p>
+            </div>
+          </div>
+          <div id="models-status-summary" class="status-summary">
+            <section class="callout">
+              <p class="callout-title">Reviewing model</p>
+              <p>Choose a model from the registry to inspect its readiness, lineage, and artifact detail.</p>
+            </section>
+            <section class="callout">
+              <p class="callout-title">Inference model</p>
+              <p>Choose a selectable model in the inference form or promote the reviewing model with the dedicated CTA.</p>
+            </section>
+          </div>
+        </section>
+
         <section class="panel">
           <div class="section-heading">
             <div>
               <h2>Inference run</h2>
-              <p class="section-copy">Run inference with the selected model, optionally layering in RAG collection context before reviewing the answer.</p>
+              <p class="section-copy">Run inference with the separately selected inference model, optionally layering in RAG collection context before reviewing the answer.</p>
             </div>
           </div>
           <div class="controls compact-controls">
             <div class="form-grid">
               <div class="field">
-                <label for="inference-model-select">Model selector</label>
+                <label for="inference-model-select">Inference model selector</label>
                 <select id="inference-model-select"></select>
               </div>
               <div class="field">
@@ -556,7 +575,7 @@
               <textarea id="inference-prompt" rows="5" placeholder="Ask the selected model to summarize, classify, or reason over the current reviewer context."></textarea>
             </div>
             <button id="inference-run-button" type="button" class="run-button">Run inference</button>
-            <p id="inference-run-hint" class="hint">Choose a model, optionally attach a RAG collection, and run inference here.</p>
+            <p id="inference-run-hint" class="hint">Choose an inference model, optionally attach a RAG collection, and run inference here.</p>
           </div>
           <div id="inference-result" class="detail-stack empty">Inference answers, model metadata, and retrieval preview will appear here.</div>
         </section>
