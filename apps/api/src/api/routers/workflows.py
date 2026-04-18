@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 from api.db import get_engine
 from api.services.jobs import create_job
 from api.services.workflows.catalog import get_workflow_definition, list_workflows
-from api.services.workflows.service import WorkflowExecutionError, create_workflow_job_payload
+from api.services.workflows.service import (
+    WorkflowExecutionError,
+    create_workflow_job_payload,
+)
 
 router = APIRouter(tags=["workflows"])
 
@@ -37,7 +40,9 @@ def get_workflows() -> list[dict[str, object]]:
 
 
 @router.post("/workflows/{workflow_key}/jobs", status_code=202)
-def enqueue_workflow_job(workflow_key: str, request: WorkflowJobRequest) -> dict[str, Any]:
+def enqueue_workflow_job(
+    workflow_key: str, request: WorkflowJobRequest
+) -> dict[str, Any]:
     try:
         get_workflow_definition(workflow_key)
     except KeyError as exc:
@@ -65,5 +70,11 @@ def enqueue_workflow_job(workflow_key: str, request: WorkflowJobRequest) -> dict
             payload_json=payload,
             workflow_key=workflow_key,
             dataset_key=dataset.key,
+            max_attempts=1,
         )
-    return {"job_id": job.id, "status": job.status, "workflow_key": workflow_key, "dataset_key": dataset.key}
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "workflow_key": workflow_key,
+        "dataset_key": dataset.key,
+    }

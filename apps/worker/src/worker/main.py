@@ -60,6 +60,11 @@ def _get_default_max_attempts() -> int:
     return max(1, int(value))
 
 
+def _get_workflow_run_timeout_seconds() -> int:
+    ollama_timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
+    return max(60, int(ollama_timeout) + 15)
+
+
 def _get_retry_base_seconds() -> float:
     value = os.getenv("WORKER_DB_RETRY_BASE_SECONDS", "1")
     return max(0.1, float(value))
@@ -478,14 +483,23 @@ def _run_job_subprocess(
     if payload_json is not None:
         command.extend(["--payload-json", json.dumps(payload_json)])
 
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=workspace_root,
-        env=_build_subprocess_env(api_project_dir),
+    timeout_seconds = (
+        _get_workflow_run_timeout_seconds() if job_type == "workflow_run" else None
     )
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=workspace_root,
+            env=_build_subprocess_env(api_project_dir),
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{job_type} timed out after {int(exc.timeout)}s") from exc
+
     if completed.returncode != 0:
         stderr = completed.stderr.strip() or completed.stdout.strip()
         stderr_first_line = stderr.splitlines()[0] if stderr else "<empty>"

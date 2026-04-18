@@ -1,6 +1,9 @@
-from sqlalchemy import create_engine, text
 import os
+import subprocess
 from typing import cast
+
+import pytest
+from sqlalchemy import create_engine, text
 
 from worker.main import (
     RUNNER_MODULE_BY_JOB_TYPE,
@@ -380,10 +383,11 @@ def test_run_job_subprocess_uses_workspace_root_from_api_project_dir(
         stdout = '{"ok": true}\n'
         stderr = ""
 
-    def _fake_run(command, *, capture_output, text, check, cwd, env):
+    def _fake_run(command, *, capture_output, text, check, cwd, env, timeout):
         captured["command"] = command
         captured["cwd"] = cwd
         captured["env"] = env
+        captured["timeout"] = timeout
         return _Completed()
 
     api_project_dir = tmp_path / "apps" / "api"
@@ -400,6 +404,7 @@ def test_run_job_subprocess_uses_workspace_root_from_api_project_dir(
     assert command[2] == "--project"
     assert command[3] == str(api_project_dir)
     assert env["WORKER_API_PROJECT_DIR"] == str(api_project_dir)
+    assert captured["timeout"] == 135
 
 
 def test_worker_claims_and_processes_workflow_run_job_with_evidence(tmp_path) -> None:
@@ -514,3 +519,45 @@ def test_run_job_subprocess_propagates_ollama_and_rag_env(monkeypatch) -> None:
     assert env["OLLAMA_EMBED_MODEL"] == "nomic-embed-text"
     assert env["RAG_DB_PATH"] == "/workspace/data/rag_index/rag.db"
     assert env["RAG_EXPECTED_EMBED_DIM"] == "768"
+
+
+def test_run_job_subprocess_sets_workflow_timeout(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("WORKER_API_PROJECT_DIR", str(tmp_path / "apps" / "api"))
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "120")
+
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = '{"ok": true}\n'
+            self.stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return _Completed()
+
+    monkeypatch.setattr("worker.main.subprocess.run", fake_run)
+
+    result = _run_job_subprocess("workflow_run", {"prompt": "hello"})
+
+    assert result == {"ok": True}
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["timeout"] == 135
+
+
+def test_run_job_subprocess_raises_clear_timeout_for_workflow(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("WORKER_API_PROJECT_DIR", str(tmp_path / "apps" / "api"))
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "45")
+
+    def fake_run(command, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=command, timeout=60)
+
+    monkeypatch.setattr("worker.main.subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError, match="workflow_run timed out after 60s"):
+        _run_job_subprocess("workflow_run", {"prompt": "hello"})

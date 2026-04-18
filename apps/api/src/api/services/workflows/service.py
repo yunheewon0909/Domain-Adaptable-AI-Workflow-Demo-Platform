@@ -23,6 +23,9 @@ from api.services.workflows.contracts import (
 from api.services.workflows.profiles import get_profile
 
 
+WORKFLOW_MAX_TOKENS = 512
+
+
 class WorkflowExecutionError(RuntimeError):
     pass
 
@@ -203,10 +206,11 @@ def execute_workflow(
     llm_client: LLMClient,
     embedding_client: EmbeddingClient,
 ) -> dict[str, Any]:
+    workflow_key = str(payload.get("workflow_key", "")).strip()
+    user_prompt = str(payload.get("prompt", "")).strip()
+    dataset_key = str(payload.get("dataset_key", "")).strip() or None
+
     try:
-        workflow_key = str(payload.get("workflow_key", "")).strip()
-        user_prompt = str(payload.get("prompt", "")).strip()
-        dataset_key = str(payload.get("dataset_key", "")).strip() or None
         top_k = int(payload.get("k", 4))
         workflow = get_workflow_definition(workflow_key)
         dataset = resolve_dataset(session, dataset_key)
@@ -240,7 +244,9 @@ def execute_workflow(
 
     try:
         chat_result = llm_client.generate_answer(
-            question=question, context=grounding_context
+            question=question,
+            context=grounding_context,
+            max_tokens=WORKFLOW_MAX_TOKENS,
         )
     except LLMClientError as exc:
         raise WorkflowExecutionError(f"LLM request failed: {exc}") from exc

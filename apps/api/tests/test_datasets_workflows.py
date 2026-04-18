@@ -27,6 +27,7 @@ class FakeEmbeddingClient:
 class FakeWorkflowLLM:
     def __init__(self, response_text: str) -> None:
         self.response_text = response_text
+        self.calls: list[dict[str, object | None]] = []
 
     def generate_answer(
         self,
@@ -37,6 +38,15 @@ class FakeWorkflowLLM:
         temperature: float = 0,
         max_tokens: int | None = None,
     ) -> ChatResult:
+        self.calls.append(
+            {
+                "question": question,
+                "context": context,
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+        )
         return ChatResult(
             answer=self.response_text,
             model=model or "fake-workflow-model",
@@ -105,6 +115,7 @@ def test_enqueue_workflow_job_and_filter_jobs(client: TestClient) -> None:
         "prompt": "Summarize the active dataset for a reviewer.",
         "k": 4,
     }
+    assert job.max_attempts == 1
 
     jobs_response = client.get(
         "/jobs",
@@ -185,6 +196,8 @@ def test_execute_workflow_returns_typed_output_with_evidence(
     monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
     get_settings.cache_clear()
 
+    llm = FakeWorkflowLLM(llm_output)
+
     with Session(get_engine()) as session:
         result = execute_workflow(
             session=session,
@@ -194,12 +207,13 @@ def test_execute_workflow_returns_typed_output_with_evidence(
                 "prompt": "Prepare a short briefing",
                 "k": 3,
             },
-            llm_client=FakeWorkflowLLM(llm_output),
+            llm_client=llm,
             embedding_client=FakeEmbeddingClient(),
         )
 
     assert expected_field in result
     assert len(result["evidence"]) >= 1
+    assert llm.calls[-1]["max_tokens"] == 512
     assert {"chunk_id", "source_path", "title", "text", "score"}.issubset(
         result["evidence"][0].keys()
     )
