@@ -460,7 +460,7 @@
             <div class="section-heading">
               <div>
                 <h2>Training enqueue</h2>
-                <p class="section-copy">Training jobs run here after a dataset version is reviewer-approved for validation or lock state.</p>
+                <p class="section-copy">Training jobs run here after a dataset version is locked. Keep the serving/base model lineage separate from the small trainer model you may use for a local smoke test.</p>
               </div>
             </div>
             <div class="controls compact-controls">
@@ -477,7 +477,7 @@
                 <textarea id="ft-training-hyperparams-json" rows="4" placeholder='{"epochs":1}'>{}</textarea>
               </div>
               <button id="ft-enqueue-training-button" type="button" class="run-button">Enqueue training job</button>
-              <p id="ft-training-hint" class="hint">Select a locked dataset version, provide the serving base model lineage plus trainer mapping/config, then enqueue a real local training job.</p>
+              <p id="ft-training-hint" class="hint">Select a locked dataset version, provide the serving base model lineage plus trainer mapping/config, then enqueue a real local training job. Trainer model mapping for smoke tests belongs in the JSON payload or env mapping.</p>
             </div>
           </article>
 
@@ -503,7 +503,7 @@
             <div class="section-heading">
               <div>
                 <h2>Model registry</h2>
-                <p class="section-copy">View registered base and fine-tuned models, distinguish artifact-ready from published models, then choose only a serving-ready model for inference.</p>
+                <p class="section-copy">View registered base and fine-tuned models, distinguish validated adapter artifacts from real serving readiness, and review trainer source versus serving lineage before inference.</p>
               </div>
               <button id="models-refresh" type="button" class="secondary-button">Refresh</button>
             </div>
@@ -514,7 +514,7 @@
             <div class="section-heading">
               <div>
                 <h2>Model detail</h2>
-                <p class="section-copy">Inspect the selected model source, base lineage, publish status, backing artifact, and serving name.</p>
+                <p class="section-copy">Inspect the selected model source, base lineage, trainer source, adapter validation status, publish readiness, and serving name.</p>
               </div>
             </div>
             <div id="model-detail" class="detail-stack empty">Select a model to inspect registry metadata and artifact detail.</div>

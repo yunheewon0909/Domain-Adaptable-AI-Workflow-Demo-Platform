@@ -20,7 +20,21 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert "failed lifecycle state" in text
     assert "Create fine-tuning dataset" in text
     assert "Training jobs" in text
+    assert "Trainer model mapping for smoke tests" in text
     assert "Model registry" in text
+    assert "validated adapter artifacts" in text
     assert "Inference run" in text
     assert "Create RAG collection" in text
     assert "Retrieval preview" in text
+
+
+def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -> None:
+    response = client.get("/demo/assets/app.js")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "Trainer/source mismatch" in text
+    assert "Artifact validation" in text
+    assert "Publish readiness" in text
+    assert "Trainer source" in text
+    assert "Runtime ready reason" in text

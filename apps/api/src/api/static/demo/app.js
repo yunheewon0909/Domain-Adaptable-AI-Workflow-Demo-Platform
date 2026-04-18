@@ -2559,6 +2559,9 @@ function renderFtTrainingJobDetail() {
   }
 
   dom.ft.trainingDetail.className = 'detail-stack';
+  const artifactValidation = job.artifact_validation || null;
+  const publishReadiness = job.publish_readiness || null;
+  const artifactPaths = job.artifact_paths || {};
   dom.ft.trainingDetail.innerHTML = `
     <div class="inline-meta">${renderStatusBadge(job.status)}${renderBadge(job.base_model_name || 'base model n/a')}${renderBadge(job.training_method || 'training')}</div>
     ${renderDetailGrid([
@@ -2566,8 +2569,10 @@ function renderFtTrainingJobDetail() {
       { label: 'Dataset', value: job.dataset_name || '—' },
       { label: 'Dataset version', value: job.dataset_version_label || job.dataset_version_id || '—' },
       { label: 'Backing job ID', value: job.backing_job_id || '—' },
-      { label: 'Base model', value: job.base_model_name || '—' },
+      { label: 'Serving/base model', value: job.base_model_name || '—' },
+      { label: 'Trainer model', value: job.trainer_model_name || '—' },
       { label: 'Trainer backend', value: job.trainer_backend || '—' },
+      { label: 'Device', value: job.device || '—' },
       { label: 'Training method', value: job.training_method || '—' },
       { label: 'Train rows', value: job.train_rows ?? '—' },
       { label: 'Validation rows', value: job.val_rows ?? '—' },
@@ -2577,12 +2582,17 @@ function renderFtTrainingJobDetail() {
       { label: 'Started', value: formatDateTime(job.started_at) },
       { label: 'Finished', value: formatDateTime(job.finished_at) },
     ])}
+    ${job.lineage_warning ? `<section class="callout warning"><p class="callout-title">Trainer/source mismatch</p><p>${escapeHtml(job.lineage_warning)}</p></section>` : ''}
+    ${artifactValidation ? `<section class="callout ${artifactValidation.artifact_valid ? 'success' : 'failure'}"><p class="callout-title">Artifact validation</p><div class="badge-row">${renderBadge(artifactValidation.artifact_valid ? 'validated' : 'invalid')}${renderBadge(job.artifact_paths?.adapter_dir ? 'adapter path ready' : 'adapter path missing')}${renderBadge(job.artifact_paths?.training_report_path ? 'report path ready' : 'report path missing')}</div><p>${escapeHtml(artifactValidation.artifact_valid ? 'Adapter/report/log artifacts passed structural validation before the job was marked succeeded.' : `Artifact validation failed: ${safeArray(artifactValidation.missing).join(', ') || 'unknown issue'}`)}</p>${safeArray(artifactValidation.warnings).length ? `<p>${safeArray(artifactValidation.warnings).map((warning) => escapeHtml(warning)).join(' ')}</p>` : ''}</section>` : ''}
+    ${publishReadiness ? `<section class="callout ${publishReadiness.runtime_ready ? 'success' : 'warning'}"><p class="callout-title">Publish readiness</p><div class="badge-row">${renderBadge(publishReadiness.publish_status || 'publish n/a')}${renderBadge(publishReadiness.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}${renderBadge(publishReadiness.candidate_published_model_name || 'candidate serving name pending')}</div><p>${escapeHtml(publishReadiness.runtime_ready ? 'A serving model is available for inference.' : publishReadiness.runtime_ready_reason || publishReadiness.selectable_reason || 'A serving model is not available yet.')}</p></section>` : ''}
     ${job.log_text ? `<section class="callout"><p class="callout-title">Training log</p><p>${escapeHtml(job.log_text)}</p></section>` : ''}
     ${renderJsonDetails('Training hyperparameters', job.hyperparams_json || {}, { summaryDetail: 'Submitted hyperparameter payload' })}
+    ${renderJsonDetails('Artifact paths', artifactPaths, { summaryDetail: 'Adapter, report, log, and manifest locations' })}
     ${job.format_summary_json ? renderJsonDetails('Dataset formatting summary', job.format_summary_json, { summaryDetail: 'Prepared training snapshot' }) : ''}
     ${job.metrics_json ? renderJsonDetails('Training metrics', job.metrics_json, { summaryDetail: 'Captured trainer metrics' }) : ''}
     ${job.evaluation_json ? renderJsonDetails('Evaluation summary', job.evaluation_json, { summaryDetail: 'Current evaluation seam' }) : ''}
     ${job.error_json ? renderJsonDetails('Training error', job.error_json, { summaryDetail: 'Structured failure context' }) : ''}
+    ${publishReadiness ? renderJsonDetails('Publish readiness payload', publishReadiness, { summaryDetail: 'Registry readiness and serving gate summary' }) : ''}
     ${safeArray(job.artifacts).length ? renderJsonDetails('Artifacts', job.artifacts, { summaryDetail: `${job.artifacts.length} persisted artifact entries` }) : ''}
     ${safeArray(job.registered_models).length ? renderJsonDetails('Registered models', job.registered_models, { summaryDetail: `${job.registered_models.length} model registry entries` }) : ''}
   `;
@@ -2773,9 +2783,10 @@ function renderModelsRegistry() {
           ${renderBadge(model.source_type || 'unknown source')}
           ${renderBadge(model.publish_status || 'publish n/a')}
           ${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}
+          ${renderBadge(model.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}
         </div>
         <h3>${escapeHtml(model.display_name || model.serving_model_name || model.id)}</h3>
-        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.serving_model_name || model.base_model_name || 'model name unavailable')}</p>
+        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(model.serving_model_name || model.candidate_published_model_name || model.base_model_name || 'model name unavailable')}</p>
         <div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div>
       </button>
     `)
@@ -2812,15 +2823,22 @@ function renderModelDetail() {
       { label: 'Model ID', value: model.id || '—' },
       { label: 'Display name', value: model.display_name || '—' },
       { label: 'Source type', value: model.source_type || '—' },
-      { label: 'Base model', value: model.base_model_name || '—' },
-      { label: 'Published model', value: model.published_model_name || '—' },
+      { label: 'Base lineage', value: model.base_model_name || '—' },
+      { label: 'Trainer source', value: model.trainer_model_name || '—' },
+      { label: 'Trainer backend', value: model.trainer_backend || '—' },
+      { label: 'Artifact status', value: model.artifact_valid ? 'validated adapter artifact' : 'artifact validation pending' },
+      { label: 'Published serving name', value: model.published_model_name || '—' },
+      { label: 'Candidate serving name', value: model.candidate_published_model_name || '—' },
       { label: 'Serving model', value: model.serving_model_name || '—' },
       { label: 'Artifact ID', value: model.artifact_id || '—' },
       { label: 'Selectable', value: model.readiness?.selectable ? 'true' : 'false' },
       { label: 'Selectable reason', value: model.readiness?.selectable_reason || '—' },
+      { label: 'Runtime ready', value: model.readiness?.runtime_ready ? 'true' : 'false' },
+      { label: 'Runtime ready reason', value: model.readiness?.runtime_ready_reason || '—' },
       { label: 'Created', value: formatDateTime(model.created_at) },
       { label: 'Updated', value: formatDateTime(model.updated_at) },
     ])}
+    ${safeArray(model.warnings).length ? `<section class="callout warning"><p class="callout-title">Model warnings</p><p>${safeArray(model.warnings).map((warning) => escapeHtml(warning)).join(' ')}</p></section>` : ''}
     ${safeArray(model.tags_json).length ? `<section class="callout"><p class="callout-title">Tags</p><div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div></section>` : ''}
     ${model.description ? `<section class="callout success"><p class="callout-title">Description</p><p>${escapeHtml(model.description)}</p></section>` : ''}
     ${model.lineage_json ? renderJsonDetails('Model lineage', model.lineage_json, { summaryDetail: 'Base lineage and training source' }) : ''}
