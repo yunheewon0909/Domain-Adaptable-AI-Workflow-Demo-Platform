@@ -495,6 +495,46 @@
             </div>
           </article>
         </section>
+
+        <section class="panel smoke-guide-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Smoke test guide</h2>
+              <p class="section-copy">Use the local helper script or the reviewer UI helpers to verify the SFT + LoRA artifact path without implying that a serving-ready Ollama model exists.</p>
+            </div>
+            <div class="button-row">
+              <button id="ft-fill-smoke-preset-button" type="button" class="secondary-button">Fill smoke hyperparameter preset</button>
+              <button id="ft-prepare-smoke-dataset-button" type="button" class="secondary-button">Prepare smoke dataset</button>
+            </div>
+          </div>
+          <div class="smoke-guide-grid">
+            <section class="callout">
+              <p class="callout-title">Local script command</p>
+              <pre class="mono">./scripts/ft_smoke_test.sh</pre>
+              <p>The script creates a small instruction_sft dataset, locks a smoke version, and queues a tiny local training job against <code>hf-internal/testing-tiny-random-gpt2</code>.</p>
+            </section>
+            <section class="callout">
+              <p class="callout-title">Expected artifacts</p>
+              <div class="badge-row">
+                <span class="tag">data/model_artifacts/&lt;job_id&gt;/trainer_output/adapter/</span>
+                <span class="tag">training_report.json</span>
+                <span class="tag">training.log</span>
+                <span class="tag">publish/publish_manifest.json</span>
+                <span class="tag">Modelfile.template</span>
+              </div>
+              <p>Expect adapter, report, log, and publish-manifest files under <code>data/model_artifacts/&lt;job_id&gt;/</code> after a successful smoke run.</p>
+            </section>
+            <section class="callout warning">
+              <p class="callout-title">Registry expectations</p>
+              <div class="badge-row">
+                <span class="tag">artifact_ready</span>
+                <span class="tag">publish_ready</span>
+                <span class="tag">not inference-selectable</span>
+              </div>
+              <p>Smoke-test outputs stay reviewable as validated adapter artifacts. They may become publish_ready, but they remain non-selectable for inference until a real serving model exists.</p>
+            </section>
+          </div>
+        </section>
       </section>
 
       <section id="models-mode" class="demo-mode" hidden>
@@ -547,6 +587,7 @@
               <p class="section-copy">Run inference with the separately selected inference model, optionally layering in RAG collection context before reviewing the answer.</p>
             </div>
           </div>
+          <div id="inference-selection-summary" class="detail-stack empty">Only runtime-ready/selectable models can run inference. Select one in the inference selector or use a model card action.</div>
           <div class="controls compact-controls">
             <div class="form-grid">
               <div class="field">

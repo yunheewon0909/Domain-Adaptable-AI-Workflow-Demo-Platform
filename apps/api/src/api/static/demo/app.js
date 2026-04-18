@@ -8,6 +8,37 @@ const MODES = {
 
 const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed']);
 const ACTIVE_JOB_STATUSES = new Set(['queued', 'running']);
+const SMOKE_TRAINER_MODEL_NAME = 'hf-internal/testing-tiny-random-gpt2';
+const SMOKE_HYPERPARAMETER_PRESET = {
+  epochs: 1,
+  learning_rate: 0.0005,
+  batch_size: 1,
+  gradient_accumulation_steps: 1,
+  max_seq_length: 256,
+  lora_r: 4,
+  lora_alpha: 8,
+  lora_dropout: 0.0,
+  seed: 42,
+  trainer_model_name: SMOKE_TRAINER_MODEL_NAME,
+  smoke_test: true,
+};
+const SMOKE_DATASET_SEED_ROWS = [
+  {
+    instruction: 'Summarize the maintenance note',
+    input: 'Pump 3 vibration increased after the filter swap. Inspect the bearings during the next shutdown.',
+    output: 'Inspect Pump 3 bearings during the next shutdown because vibration increased after the filter swap.',
+  },
+  {
+    instruction: 'Classify the maintenance urgency',
+    input: 'Cooling fan alarm cleared after restart. Monitor during the next routine round.',
+    output: 'monitor',
+  },
+  {
+    instruction: 'Generate a reviewer action',
+    input: 'Pressure drift exceeded the morning threshold on line 2 and calibration is overdue.',
+    output: 'Schedule line 2 pressure-sensor calibration and review the morning threshold drift.',
+  },
+];
 
 const state = {
   mode: MODES.WORKFLOW,
@@ -215,6 +246,8 @@ const dom = {
     trainingHyperparamsJson: document.querySelector('#ft-training-hyperparams-json'),
     enqueueTrainingButton: document.querySelector('#ft-enqueue-training-button'),
     trainingHint: document.querySelector('#ft-training-hint'),
+    fillSmokePresetButton: document.querySelector('#ft-fill-smoke-preset-button'),
+    prepareSmokeDatasetButton: document.querySelector('#ft-prepare-smoke-dataset-button'),
     trainingRefresh: document.querySelector('#ft-training-refresh'),
     trainingList: document.querySelector('#ft-training-list'),
     trainingDetail: document.querySelector('#ft-training-detail'),
@@ -224,6 +257,7 @@ const dom = {
     list: document.querySelector('#models-list'),
     detail: document.querySelector('#model-detail'),
     statusSummary: document.querySelector('#models-status-summary'),
+    inferenceSummary: document.querySelector('#inference-selection-summary'),
     modelSelect: document.querySelector('#inference-model-select'),
     ragCollectionSelect: document.querySelector('#inference-rag-collection-select'),
     temperature: document.querySelector('#inference-temperature'),
@@ -785,6 +819,10 @@ function selectedInferenceModel() {
   return state.models.items.find((model) => model.id === state.models.selectedInferenceModelId) || null;
 }
 
+function selectedModelsRagCollection() {
+  return state.models.ragCollections.find((collection) => collection.id === state.models.selectedRagCollectionId) || null;
+}
+
 function modelDisplayName(model) {
   return model?.display_name || model?.serving_model_name || model?.ollama_model_name || model?.id || 'unknown model';
 }
@@ -794,7 +832,67 @@ function modelRegistrySubtitle(model) {
 }
 
 function modelInferenceBlockedReason(model) {
-  return model?.readiness?.selectable_reason || model?.readiness?.runtime_ready_reason || 'This model is not selectable for inference yet.';
+  return model?.readiness?.selectable_reason
+    || model?.readiness?.runtime_ready_reason
+    || ((model?.artifact_id || model?.status === 'artifact_ready') && !model?.serving_model_name
+      ? 'Adapter artifact only — no serving model yet.'
+      : 'This model is not selectable for inference yet.');
+}
+
+function modelInferenceActionState(model) {
+  if (model?.readiness?.selectable) {
+    if (model.id === state.models.selectedInferenceModelId) {
+      return {
+        disabled: true,
+        label: 'Already used for inference',
+        reason: 'This model is already selected for inference.',
+      };
+    }
+    return {
+      disabled: false,
+      label: 'Use for inference',
+      reason: 'This updates only the inference model, selector, and runtime summary.',
+    };
+  }
+  return {
+    disabled: true,
+    label: 'Use for inference',
+    reason: modelInferenceBlockedReason(model),
+  };
+}
+
+function modelCardActionCopy(model, inferenceAction) {
+  const reviewCopy = model.id === state.models.selectedReviewModelId
+    ? 'Review details is currently open.'
+    : 'Review details updates only the review selection and detail panel.';
+  return `${reviewCopy} ${inferenceAction.reason}`;
+}
+
+function smokeNameSuffix() {
+  return new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+}
+
+function buildSmokeDatasetRows() {
+  return SMOKE_DATASET_SEED_ROWS.map((entry, index, items) => ({
+    split: index === items.length - 1 ? 'val' : 'train',
+    input_json: {
+      instruction: entry.instruction,
+      input: entry.input,
+    },
+    target_json: {
+      output: entry.output,
+    },
+    metadata_json: {
+      source: 'demo-ui-smoke-dataset',
+      smoke_test: true,
+      example_index: index + 1,
+    },
+  }));
+}
+
+function fillSmokeHyperparameterPreset() {
+  dom.ft.trainingHyperparamsJson.value = JSON.stringify(SMOKE_HYPERPARAMETER_PRESET, null, 2);
+  setFtTrainingHint(`Filled the smoke-test hyperparameter preset for ${SMOKE_TRAINER_MODEL_NAME}. Base model lineage stays separate from the tiny trainer model.`);
 }
 
 function setModelsInferenceModel(modelId) {
@@ -2800,6 +2898,7 @@ function renderModelsRegistry() {
     });
     dom.models.modelSelect.disabled = true;
     renderModelsStatus();
+    renderInferenceSelectionSummary();
     return;
   }
 
@@ -2813,40 +2912,92 @@ function renderModelsRegistry() {
 
   dom.models.list.className = 'stack-list';
   dom.models.list.innerHTML = items
-    .map((model) => `
-      <button type="button" class="list-card${model.id === state.models.selectedReviewModelId ? ' active' : ''}" data-model-id="${escapeHtml(model.id)}">
-        <div class="inline-meta">
-          ${renderStatusBadge(model.status || 'registered')}
-          ${renderBadge(model.source_type || 'unknown source')}
-          ${renderBadge(model.publish_status || 'publish n/a')}
-          ${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}
-          ${renderBadge(model.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}
-          ${model.id === state.models.selectedReviewModelId ? renderBadge('reviewing model') : ''}
-          ${model.id === state.models.selectedInferenceModelId ? renderBadge('inference model') : ''}
-        </div>
-        <h3>${escapeHtml(modelDisplayName(model))}</h3>
-        <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(modelRegistrySubtitle(model))}</p>
-        <div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div>
-      </button>
-    `)
+    .map((model) => {
+      const inferenceAction = modelInferenceActionState(model);
+      return `
+        <article class="list-card model-registry-card${model.id === state.models.selectedReviewModelId ? ' active' : ''}" data-model-card-id="${escapeHtml(model.id)}" tabindex="0" aria-label="Review model ${escapeHtml(modelDisplayName(model))}">
+          <div class="inline-meta">
+            ${renderStatusBadge(model.status || 'registered')}
+            ${renderBadge(model.source_type || 'unknown source')}
+            ${renderBadge(model.publish_status || 'publish n/a')}
+            ${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}
+            ${renderBadge(model.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}
+            ${model.id === state.models.selectedReviewModelId ? renderBadge('reviewing model') : ''}
+            ${model.id === state.models.selectedInferenceModelId ? renderBadge('inference model') : ''}
+          </div>
+          <h3>${escapeHtml(modelDisplayName(model))}</h3>
+          <p class="meta-line">${escapeHtml(model.id)} · ${escapeHtml(modelRegistrySubtitle(model))}</p>
+          <div class="badge-row">${safeArray(model.tags_json).map(renderBadge).join('')}</div>
+          <div class="card-action-row">
+            <button type="button" class="secondary-button" data-model-review-id="${escapeHtml(model.id)}">Review details</button>
+            <button type="button" class="secondary-button" data-model-inference-id="${escapeHtml(model.id)}" ${inferenceAction.disabled ? 'disabled' : ''}>${escapeHtml(inferenceAction.label)}</button>
+          </div>
+          <p class="card-action-copy">${escapeHtml(modelCardActionCopy(model, inferenceAction))}</p>
+        </article>
+      `;
+    })
     .join('');
 
-  dom.models.list.querySelectorAll('[data-model-id]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      await loadModelDetail(button.dataset.modelId);
+  dom.models.list.querySelectorAll('[data-model-card-id]').forEach((card) => {
+    const openReview = async () => {
+      await loadModelDetail(card.dataset.modelCardId);
+    };
+    card.querySelectorAll('.card-action-row').forEach((actionRow) => {
+      actionRow.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+    });
+    card.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (target instanceof Element && (target.closest('button') || target.closest('.card-action-row'))) {
+        return;
+      }
+      await openReview();
+    });
+    card.addEventListener('keydown', async (event) => {
+      if (event.target !== card) {
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        await openReview();
+      }
     });
   });
+
+  dom.models.list.querySelectorAll('[data-model-review-id]').forEach((button) => {
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await loadModelDetail(button.dataset.modelReviewId);
+    });
+  });
+
+  dom.models.list.querySelectorAll('[data-model-inference-id]').forEach((button) => {
+    if (button.disabled) {
+      return;
+    }
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const nextModel = state.models.items.find((item) => item.id === button.dataset.modelInferenceId) || null;
+      setModelsInferenceModel(button.dataset.modelInferenceId);
+      setModelsHint(`Inference model set to ${modelDisplayName(nextModel)}.`);
+    });
+  });
+
+  renderInferenceSelectionSummary();
 }
 
 function renderModelsStatus() {
   const reviewingModel = selectedReviewModel();
   const inferenceModel = selectedInferenceModel();
   const reviewCopy = reviewingModel
-    ? `${modelDisplayName(reviewingModel)} is selected for review. Opening a model from the registry detail panel does not change inference selection.`
+    ? `${modelDisplayName(reviewingModel)} is selected for review. Review details updates only selectedReviewModelId and the model detail panel.`
     : 'Choose a model from the registry to inspect readiness, lineage, and artifact detail.';
   const inferenceCopy = inferenceModel
-    ? `${modelDisplayName(inferenceModel)} is the current inference model. Only models with selectable readiness can appear in inference controls.`
-    : 'No inference model is selected yet. Artifact-only models stay reviewable in the registry, but inference only uses models where readiness.selectable === true.';
+    ? `${modelDisplayName(inferenceModel)} is the current inference model. Inference selection stays separate from the reviewing model and only includes runtime-ready/selectable models.`
+    : 'No inference model is selected yet. Only runtime-ready/selectable models can run inference. Artifact-only models stay reviewable in the registry, but inference only uses models where readiness.selectable === true.';
 
   dom.models.statusSummary.innerHTML = `
     <section class="callout${reviewingModel ? '' : ' warning'}">
@@ -2867,6 +3018,62 @@ function renderModelsRagCollectionOptions() {
     valueKey: 'id',
     labelBuilder: (item) => `${item.name || item.id} · ${item.document_count ?? 0} docs`,
   });
+  renderInferenceSelectionSummary();
+}
+
+function renderInferenceSelectionSummary() {
+  const inferenceModel = selectedInferenceModel();
+  const ragCollection = selectedModelsRagCollection();
+  const ragState = ragCollection
+    ? `${ragCollection.name || ragCollection.id} (${ragCollection.id}) · ${ragCollection.document_count ?? 0} docs`
+    : 'none selected';
+
+  if (!inferenceModel) {
+    dom.models.inferenceSummary.className = 'detail-stack';
+    dom.models.inferenceSummary.innerHTML = `
+      <section class="callout warning">
+        <p class="callout-title">Inference readiness</p>
+        <p>Only runtime-ready/selectable models can run inference. Choose one in the selector or use a model card’s Use for inference action.</p>
+      </section>
+      ${renderDetailGrid([
+        { label: 'Display name', value: '—' },
+        { label: 'Model ID', value: '—' },
+        { label: 'Serving model name', value: '—' },
+        { label: 'Source type', value: '—' },
+        { label: 'Publish status', value: '—' },
+        { label: 'Runtime readiness', value: 'blocked — no inference model selected' },
+        { label: 'Selected RAG collection', value: ragState },
+      ])}
+    `;
+    return;
+  }
+
+  const readinessCopy = inferenceModel.readiness?.runtime_ready
+    ? inferenceModel.readiness?.runtime_ready_reason || 'This model is runtime-ready for inference.'
+    : modelInferenceBlockedReason(inferenceModel);
+
+  dom.models.inferenceSummary.className = 'detail-stack';
+  dom.models.inferenceSummary.innerHTML = `
+    <section class="callout ${inferenceModel.readiness?.runtime_ready ? 'success' : 'warning'}">
+      <p class="callout-title">Selected inference model</p>
+      <div class="badge-row">
+        ${renderBadge(inferenceModel.source_type || 'unknown source')}
+        ${renderBadge(inferenceModel.publish_status || 'publish n/a')}
+        ${renderBadge(inferenceModel.readiness?.selectable ? 'selectable' : 'not selectable')}
+        ${renderBadge(inferenceModel.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}
+      </div>
+      <p>${escapeHtml(readinessCopy)}</p>
+    </section>
+    ${renderDetailGrid([
+      { label: 'Display name', value: modelDisplayName(inferenceModel) },
+      { label: 'Model ID', value: inferenceModel.id || '—' },
+      { label: 'Serving model name', value: inferenceModel.serving_model_name || '—' },
+      { label: 'Source type', value: inferenceModel.source_type || '—' },
+      { label: 'Publish status', value: inferenceModel.publish_status || '—' },
+      { label: 'Runtime readiness', value: inferenceModel.readiness?.runtime_ready ? 'ready' : `blocked — ${readinessCopy}` },
+      { label: 'Selected RAG collection', value: ragState },
+    ])}
+  `;
 }
 
 function renderModelDetail() {
@@ -2880,6 +3087,7 @@ function renderModelDetail() {
   const inferenceModel = selectedInferenceModel();
   const isInferenceModel = model.id === inferenceModel?.id;
   const isSelectableForInference = Boolean(model.readiness?.selectable);
+  const inferenceAction = modelInferenceActionState(model);
   const inferenceAvailabilityCopy = isSelectableForInference
     ? isInferenceModel
       ? `${modelDisplayName(model)} is already the current inference model.`
@@ -2895,7 +3103,8 @@ function renderModelDetail() {
     <section class="callout ${isSelectableForInference ? 'success' : 'warning'}">
       <p class="callout-title">Inference availability</p>
       <p>${escapeHtml(inferenceAvailabilityCopy)}</p>
-      ${isSelectableForInference ? `<div class="button-row model-detail-actions"><button id="use-review-model-for-inference" type="button" class="secondary-button" ${isInferenceModel ? 'disabled' : ''}>${isInferenceModel ? 'Already used for inference' : 'Use for inference'}</button></div>` : ''}
+      <div class="button-row model-detail-actions"><button id="use-review-model-for-inference" type="button" class="secondary-button" ${inferenceAction.disabled ? 'disabled' : ''}>${escapeHtml(inferenceAction.label)}</button></div>
+      <p class="card-action-copy">${escapeHtml(inferenceAction.reason)}</p>
     </section>
     <div class="inline-meta">${renderStatusBadge(model.status || 'registered')}${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.publish_status || 'publish n/a')}${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}</div>
     ${renderDetailGrid([
@@ -2925,10 +3134,10 @@ function renderModelDetail() {
   `;
 
   const useForInferenceButton = dom.models.detail.querySelector('#use-review-model-for-inference');
-  if (useForInferenceButton) {
+  if (useForInferenceButton && !useForInferenceButton.disabled) {
     useForInferenceButton.addEventListener('click', () => {
       setModelsInferenceModel(model.id);
-      setModelsHint(`${modelDisplayName(model)} is now the inference model.`);
+      setModelsHint(`Inference model set to ${modelDisplayName(model)}.`);
     });
   }
 }
@@ -2954,6 +3163,7 @@ function renderInferenceResult() {
       { label: 'Model source', value: result.model?.source_type || '—' },
       { label: 'Base lineage', value: result.model?.base_model_name || '—' },
       { label: 'Publish status', value: result.model?.publish_status || '—' },
+      { label: 'Runtime readiness', value: result.model?.readiness?.runtime_ready ? 'ready' : result.model?.readiness?.runtime_ready_reason || 'blocked' },
       { label: 'Provider', value: result.meta?.provider || '—' },
       { label: 'Serving model', value: result.meta?.model || '—' },
       { label: 'RAG collection', value: result.meta?.rag_collection_id || 'none' },
@@ -3808,6 +4018,64 @@ dom.ft.trainingRefresh.addEventListener('click', async () => {
   }
 });
 
+dom.ft.fillSmokePresetButton.addEventListener('click', () => {
+  fillSmokeHyperparameterPreset();
+});
+
+dom.ft.prepareSmokeDatasetButton.addEventListener('click', async () => {
+  dom.ft.prepareSmokeDatasetButton.disabled = true;
+  const suffix = smokeNameSuffix();
+  setFtDatasetHint(`Preparing smoke dataset ${suffix}...`);
+  try {
+    await ensureFtInitialized();
+    const dataset = await fetchJson('/ft-datasets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `Local FT smoke test dataset ${suffix}`,
+        task_type: 'instruction_sft',
+        schema_type: 'json',
+        description: 'Small local smoke-test dataset prepared from the reviewer UI for validating the SFT + LoRA artifact pipeline.',
+      }),
+    });
+    const version = await fetchJson(`/ft-datasets/${encodeURIComponent(dataset.id)}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version_label: `smoke-v1-${suffix}`,
+        train_split_ratio: 0.75,
+        val_split_ratio: 0.25,
+        test_split_ratio: 0,
+      }),
+    });
+    await fetchJson(`/ft-dataset-versions/${encodeURIComponent(version.id)}/rows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: buildSmokeDatasetRows() }),
+    });
+    await fetchJson(`/ft-dataset-versions/${encodeURIComponent(version.id)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'validated' }),
+    });
+    const locked = await fetchJson(`/ft-dataset-versions/${encodeURIComponent(version.id)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'locked' }),
+    });
+    await refreshFtDatasets({ preferredDatasetId: dataset.id, preferredVersionId: locked.id });
+    setFtDatasetHint(`Prepared smoke dataset ${dataset.name}.`);
+    setFtVersionHint(`${locked.version_label || locked.id} is locked and ready for a smoke training job.`);
+    setFtTrainingHint('Smoke dataset is ready. Use the smoke hyperparameter preset to fill the tiny trainer payload before enqueueing training.');
+  } catch (error) {
+    setFtDatasetHint(error.message);
+    setFtVersionHint(error.message);
+    setFtTrainingHint(error.message);
+  } finally {
+    dom.ft.prepareSmokeDatasetButton.disabled = false;
+  }
+});
+
 dom.ft.enqueueTrainingButton.addEventListener('click', async () => {
   const version = selectedFtVersion();
   if (!version) {
@@ -3874,6 +4142,7 @@ dom.models.modelSelect.addEventListener('change', async (event) => {
 
 dom.models.ragCollectionSelect.addEventListener('change', (event) => {
   state.models.selectedRagCollectionId = event.target.value;
+  renderInferenceSelectionSummary();
   const selectedLabel = event.target.selectedOptions[0]?.textContent || 'No RAG collection';
   setModelsHint(`Inference RAG collection set to ${selectedLabel}.`);
 });
@@ -3885,7 +4154,7 @@ dom.models.runButton.addEventListener('click', async () => {
     return;
   }
   if (!state.models.selectedInferenceModelId) {
-    setModelsHint('Select an inference model before running inference.');
+    setModelsHint('Select an inference model before running inference. Only runtime-ready/selectable models can run inference.');
     return;
   }
 
