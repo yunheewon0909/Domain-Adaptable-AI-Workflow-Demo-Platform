@@ -64,7 +64,7 @@ Important boundaries in this milestone:
 - Ollama remains the serving target for inference requests
 - training now supports one real queue + worker path: local `sft_lora` with a PEFT/Transformers backend and explicit environment guards
 - fine-tuning rows and RAG documents are stored and reviewed separately rather than merged into one generic dataset table
-- fine-tuned models are visible in the registry immediately after artifact creation, but inference stays blocked until a serving seam marks them `published`
+- fine-tuned models are visible in the registry immediately after adapter/report/manifest validation, but inference stays blocked until a real serving model exists
 - the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
 
 ## AI Ops Flow
@@ -74,10 +74,29 @@ Important boundaries in this milestone:
 3. API inserts an `ft_training_jobs` row and a backing `ft_train_model` queue job.
 4. Worker claims the job and dispatches `api.services.model_registry.job_runner`.
 5. Runner exports trainer-ready JSONL snapshots under `data/model_artifacts/<job_id>/dataset_export/`.
-6. Runner executes the real local `sft_lora` backend, which produces an adapter bundle plus a training report.
-7. Artifact rows are written for dataset export, adapter bundle, training report, and publish manifest.
-8. A `model_registry` row is created as `artifact_ready` with `publish_status=publish_ready`.
-9. The optional publish seam can move that row to `published`; only then is the fine-tuned model selectable for `/inference/run`.
+6. Runner executes the real local `sft_lora` backend, which produces a PEFT adapter bundle plus a training report.
+7. The backend validates expected adapter/report/log files before a run is allowed to finish as `succeeded`.
+8. Artifact rows are written for dataset export, adapter bundle, training report, and publish manifest.
+9. A `model_registry` row is created as `artifact_ready` with `publish_status=publish_ready` and explicit trainer/serving lineage metadata.
+10. The current publish seam does not run a real Ollama import, so the fine-tuned row remains artifact-only until an external serving/import step exists.
+
+## Fine-tuning lineage and readiness semantics
+
+- `base_model_name` is the serving/base lineage chosen by the user
+- `trainer_model_name` is the actual local checkpoint used by PEFT/Transformers
+- a trainer/base mismatch is acceptable for a smoke test, but it must not be described as “the serving model was fine-tuned”
+- `artifact_ready` means the adapter/report/manifest package exists and passed structural validation
+- `publish_ready` means a reviewer-facing publish manifest/template exists
+- `runtime-ready` is still false until a real serving model exists
+
+## Apple Silicon smoke-test boundary
+
+For local Mac verification, the intended target is a **small-model smoke test**:
+
+- prefer `TRAINING_DEVICE=mps` when MPS is available
+- keep CPU disabled by default unless `TRAINING_ALLOW_CPU=true` is set deliberately for a tiny fallback run
+- validate the pipeline by checking job success, adapter output, report/log files, and the resulting `artifact_ready` registry row
+- do not treat that smoke path as evidence that large-model training is practical on a MacBook Air-class machine
 
 ## PLC Flow
 

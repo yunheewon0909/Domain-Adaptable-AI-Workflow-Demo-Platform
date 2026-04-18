@@ -2,6 +2,26 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.1] - 2026-04-18
+
+### Added
+
+- local smoke-test assets for fine-tuning validation via `examples/ft_smoke_instruction_dataset.jsonl` and `scripts/ft_smoke_test.sh`
+- tracked `.env.example` defaults for the local training/publish seam
+- artifact validation metadata and richer trainer/serving lineage payloads in the fine-tuning and model registry APIs
+
+### Changed
+
+- successful fine-tuning now requires adapter/report/log/manifest validation before the job is marked `succeeded`
+- fine-tuned registry rows stay honestly artifact-only even after the publish seam is called, because automatic Ollama import is not implemented here
+- the `/demo` Fine-tuning and Models surfaces now show trainer source, adapter validation, publish readiness, and runtime-blocking copy explicitly
+- README and architecture docs now describe Mac smoke-test expectations, artifact/package boundaries, and model naming more clearly
+
+### Notes
+
+- `v0.7.0` remains the real local SFT + LoRA MVP milestone
+- `v0.7.1` is the hardening pass for smoke-test verification, lineage clarity, artifact validation, and readiness documentation
+
 ## [0.7.0] - 2026-04-17
 
 ### Added
