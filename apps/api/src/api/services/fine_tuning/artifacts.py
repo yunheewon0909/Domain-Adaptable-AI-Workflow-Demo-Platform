@@ -151,7 +151,8 @@ def build_publish_manifest(
     modelfile_path = manifest_dir / "Modelfile.template"
     model_name = None
     if settings.ollama_model_namespace:
-        model_name = f"{settings.ollama_model_namespace}/{Path(training_artifacts.adapter_dir).parent.name}"
+        artifact_root_name = manifest_dir.parent.name
+        model_name = f"{settings.ollama_model_namespace}/{artifact_root_name}"
 
     modelfile_contents = "\n".join(
         [
