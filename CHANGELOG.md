@@ -14,7 +14,7 @@ All notable changes to this repository will be documented in this file.
 
 - successful fine-tuning now requires adapter/report/log/manifest validation before the job is marked `succeeded`
 - fine-tuned registry rows stay honestly artifact-only even after the publish seam is called, because automatic Ollama import is not implemented here
-- the `/demo` Fine-tuning and Models surfaces now show trainer source, adapter validation, publish readiness, and runtime-blocking copy explicitly
+- the `/demo` Fine-tuning and Models surfaces now separate registry review from inference selection, while still showing trainer source, adapter validation, publish readiness, and runtime-blocking copy explicitly
 - README and architecture docs now describe Mac smoke-test expectations, artifact/package boundaries, and model naming more clearly
 
 ### Notes

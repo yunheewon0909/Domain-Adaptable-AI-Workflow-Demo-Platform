@@ -18,7 +18,7 @@ The FastAPI app assembles small routers under `apps/api/src/api/routers/` and in
 - datasets/workflows/jobs/rag from the original reviewer flow
 - plc routes for suite import, testcase listing, target-aware run enqueueing, run review, dashboard summary, normalization preview, and persisted suggestion review
 - fine-tuning routes for dataset registries, versioned rows, status transitions, training summaries, and training enqueueing
-- model routes for training job inspection, artifact/log inspection, publish seam control, model lineage inspection, and model-selectable inference
+- model routes for training job inspection, artifact/log inspection, publish seam control, model lineage inspection, and separate registry review versus inference selection
 - rag collection/document routes for collection management, upload/preview, and retrieval preview
 - `/demo` for the co-hosted static reviewer UI
 
@@ -64,7 +64,7 @@ Important boundaries in this milestone:
 - Ollama remains the serving target for inference requests
 - training now supports one real queue + worker path: local `sft_lora` with a PEFT/Transformers backend and explicit environment guards
 - fine-tuning rows and RAG documents are stored and reviewed separately rather than merged into one generic dataset table
-- fine-tuned models are visible in the registry immediately after adapter/report/manifest validation, but inference stays blocked until a real serving model exists
+- fine-tuned models are visible in the registry immediately after adapter/report/manifest validation, artifact-only rows stay reviewable, and inference stays blocked until a real serving model exists
 - the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
 
 ## AI Ops Flow

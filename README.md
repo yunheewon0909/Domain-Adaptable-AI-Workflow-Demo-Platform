@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registration, model-selectable inference, and separate RAG collection/document review.
+This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review.
 
 The current milestone is best understood as **v0.7.1: a reviewer-first local AI ops hardening pass for the real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, and separate RAG data operations.
 
@@ -10,7 +10,7 @@ The key message of the repo is now threefold:
 
 - **skeleton/demo**: a reviewer-friendly starter with FastAPI, worker, Postgres queue, and co-hosted static UI
 - **domain service**: a concrete PLC testing slice that shows how Excel-based industrial test assets can be turned into a DB + queue + dashboard workflow without overhauling the skeleton
-- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, real adapter artifacts, model registry entries, publish-ready serving seams, model-selectable inference, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
+- **local AI ops**: a second concrete slice that shows how fine-tuning datasets, training jobs, real adapter artifacts, model registry entries, publish-ready serving seams, separate review versus inference selection in the Models tab, and RAG collections can live beside the same queue and reviewer shell without collapsing into one mixed data model
 
 ## What the PLC Testing Slice Adds
 
@@ -67,7 +67,7 @@ Included in the current milestone:
 - `ft_train_model` queue jobs plus richer `ft_training_jobs` domain status tracking (`queued -> preparing_data -> training -> packaging -> registering -> succeeded/failed`)
 - real dataset export, adapter bundle, training report, and publish-manifest artifacts under `data/model_artifacts/`
 - `model_registry` entries for base models and fine-tuned artifact-ready or published models
-- `/models` and `/inference/run` so inference can choose a model source explicitly
+- `/models` and `/inference/run` so the Models tab can review registry rows separately from inference selection
 - `/ft-training-jobs/{job_id}/publish`, `/ft-model-artifacts/{artifact_id}`, `/ft-dataset-versions/{version_id}/summary`, `/models/{model_id}/lineage`, and `/ft-training-jobs/{job_id}/logs`
 - `rag_collections` and `rag_documents` tables for collection/document review
 - txt/md/pdf upload support with parse preview or metadata preview
@@ -137,11 +137,11 @@ Rough expectations for a local smoke test:
 - `data/model_artifacts/<job_id>/trainer_output/adapter/` exists
 - `training_report.json` exists
 - `/models` shows a fine-tuned row with `artifact_ready` / `publish_ready`
-- inference remains blocked until a real serving model exists
+- artifact-only rows stay reviewable, but inference remains blocked until a serving-ready selectable model exists
 
 ## When can inference use a fine-tuned model?
 
-Only when a **real serving model exists** and the registry entry is genuinely serving-ready. In the current repo, artifact-only rows are reviewable but not directly selectable for inference.
+Only when a **real serving model exists** and the registry entry is genuinely serving-ready. In the current repo, artifact-only rows stay reviewable in the detail panel, but only serving-ready selectable rows can be used for inference.
 
 ## Architecture Summary
 
@@ -162,7 +162,7 @@ Only when a **real serving model exists** and the registry entry is genuinely se
 6. Worker claims the backing `ft_train_model` job from `jobs`
 7. Runner exports a trainer-ready dataset snapshot, trains an adapter, writes a training report, and creates a publish-ready manifest
 8. Registry rows stay `artifact_ready` until a serving seam marks them `published`
-9. `/models` and `/inference/run` expose the resulting model selection flow with readiness gating
+9. `/models` and `/inference/run` expose separate review and inference selection flows with readiness gating
 10. `POST /rag-collections` plus collection document upload/retrieval preview stay separate from fine-tuning data management
 
 ### PLC execution path
@@ -397,7 +397,7 @@ The page now has five reviewer modes:
 - **Workflow reviewer**: the original dataset/workflow/evidence experience
 - **PLC testing MVP**: suite import, testcase preview, queued/running/succeeded/failed run review, and raw I/O/result drill-down
 - **Fine-tuning**: dataset creation, version management, row review, validation status transitions, and training enqueue controls
-- **Models**: model registry inspection plus model-selectable inference with optional RAG collection context
+- **Models**: model registry inspection plus separate inference selection with optional RAG collection context
 - **RAG**: collection creation, document upload/list/detail, and retrieval preview
 
 ## AI Ops API Examples
@@ -725,7 +725,7 @@ The co-hosted `/demo` surface still stays inside the existing static shell, but 
 - target-aware run filters with failed/problem-only drill-down
 - richer run detail panels with target context, request payloads, validator payloads, executor logs, and sequence-oriented I/O timelines
 - fine-tuning dataset, version, row, and training job panels
-- model registry inspection and model-selectable inference runs
+- model registry inspection and separate inference selection runs
 - RAG collection/document management and retrieval preview
 
 The original workflow reviewer mode is still preserved, and the new AI ops modes stay in the same shell rather than branching into a separate frontend.
@@ -741,7 +741,7 @@ The original workflow reviewer mode is still preserved, and the new AI ops modes
 - `/demo` remains a static page, so richer charts/filters are still intentionally modest compared with a dedicated frontend
 - the repo now supports one real local `sft_lora` path, but it still expects a compatible local Python training stack and does not pretend all environments can train large models
 - fine-tuned registry entries are no longer silently routed through the base model; they stay `artifact_ready` with a validated adapter/report/manifest package until a real serving model exists
-- the publish/import path is still intentionally modest and reviewer-oriented; it creates a publish-ready seam rather than claiming a full automatic Ollama packaging pipeline
+- the publish seam is still intentionally modest and reviewer-oriented; it prepares metadata for a future serving step rather than claiming a full automatic Ollama packaging pipeline
 - RAG collection previews use extracted text and retrieval preview, not a full per-collection embedding/index lifecycle yet
 
 ## Versioning and Milestones
