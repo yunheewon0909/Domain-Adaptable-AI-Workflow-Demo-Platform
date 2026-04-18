@@ -8,6 +8,40 @@ const MODES = {
 
 const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed']);
 const ACTIVE_JOB_STATUSES = new Set(['queued', 'running']);
+const ACTIVE_FT_JOB_STATUSES = new Set(['queued', 'preparing_data', 'training', 'packaging', 'registering', 'running']);
+const FT_LIFECYCLE_STEPS = [
+  {
+    key: 'queued',
+    label: 'Queued',
+    description: 'The smoke or local training job has been accepted and is waiting for a worker slot.',
+  },
+  {
+    key: 'running',
+    label: 'Running',
+    description: 'A worker has claimed the job and is about to advance the fine-tuning phases.',
+  },
+  {
+    key: 'preparing_data',
+    label: 'Preparing dataset',
+    description: 'The locked dataset version is being exported and validated into a trainer-ready snapshot.',
+  },
+  {
+    key: 'training',
+    label: 'Training adapter',
+    description: 'The local fine-tuning backend is running the configured SFT + LoRA training step.',
+  },
+  {
+    key: 'packaging',
+    label: 'Packaging artifacts',
+    description: 'Adapter, report, log, and publish-manifest artifacts are being validated and recorded.',
+  },
+  {
+    key: 'registering',
+    label: 'Registering model',
+    description: 'The validated artifact bundle is being recorded in the model registry for review-only inspection.',
+  },
+];
+const SMOKE_BASE_MODEL_NAME = 'qwen2.5:7b-instruct-q4_K_M';
 const SMOKE_TRAINER_MODEL_NAME = 'hf-internal/testing-tiny-random-gpt2';
 const SMOKE_HYPERPARAMETER_PRESET = {
   epochs: 1,
@@ -108,6 +142,8 @@ const state = {
     trainingJobs: [],
     selectedTrainingJobId: null,
     selectedTrainingJob: null,
+    pollHandle: null,
+    pollTrainingJobId: null,
     requestTokens: {
       dataset: 0,
       version: 0,
@@ -248,6 +284,7 @@ const dom = {
     trainingHint: document.querySelector('#ft-training-hint'),
     fillSmokePresetButton: document.querySelector('#ft-fill-smoke-preset-button'),
     prepareSmokeDatasetButton: document.querySelector('#ft-prepare-smoke-dataset-button'),
+    enqueueSmokeTrainingButton: document.querySelector('#ft-enqueue-smoke-training-button'),
     trainingRefresh: document.querySelector('#ft-training-refresh'),
     trainingList: document.querySelector('#ft-training-list'),
     trainingDetail: document.querySelector('#ft-training-detail'),
@@ -357,6 +394,9 @@ function statusClassFor(status) {
     return 'is-error';
   }
   if (status === 'running') {
+    return 'is-running';
+  }
+  if (status === 'preparing_data' || status === 'training' || status === 'packaging' || status === 'registering') {
     return 'is-running';
   }
   if (status === 'queued') {
@@ -895,6 +935,12 @@ function fillSmokeHyperparameterPreset() {
   setFtTrainingHint(`Filled the smoke-test hyperparameter preset for ${SMOKE_TRAINER_MODEL_NAME}. Base model lineage stays separate from the tiny trainer model.`);
 }
 
+function applySmokeTrainingDefaults() {
+  dom.ft.baseModelName.value = SMOKE_BASE_MODEL_NAME;
+  dom.ft.trainingMethod.value = 'sft_lora';
+  dom.ft.trainingHyperparamsJson.value = JSON.stringify(SMOKE_HYPERPARAMETER_PRESET, null, 2);
+}
+
 function setModelsInferenceModel(modelId) {
   const nextModel = state.models.items.find((item) => item.id === modelId && item.readiness?.selectable) || null;
   state.models.selectedInferenceModelId = nextModel?.id || null;
@@ -962,7 +1008,16 @@ function stopPlcRunPolling() {
   state.plc.pollRunId = null;
 }
 
+function stopFtTrainingPolling() {
+  window.clearInterval(state.ft.pollHandle);
+  state.ft.pollHandle = null;
+  state.ft.pollTrainingJobId = null;
+}
+
 async function setMode(mode) {
+  if (mode !== MODES.FT) {
+    stopFtTrainingPolling();
+  }
   state.mode = mode;
   renderMode();
   if (mode === MODES.PLC) {
@@ -2539,6 +2594,7 @@ function renderFtVersionDetail() {
     dom.ft.versionDetail.className = 'detail-stack empty';
     dom.ft.versionDetail.textContent = 'Select a dataset version to inspect row summary and training readiness.';
     dom.ft.versionStatusSelect.value = 'draft';
+    renderFtSmokeActions();
     return;
   }
 
@@ -2576,6 +2632,7 @@ function renderFtVersionDetail() {
     </section>
     ${rowSummary.by_split ? renderJsonDetails('Row split summary', rowSummary.by_split, { summaryDetail: 'Rows grouped by split' }) : ''}
   `;
+  renderFtSmokeActions();
 }
 
 function renderFtRows() {
@@ -2647,6 +2704,174 @@ function renderFtRowDetail() {
   `;
 }
 
+function renderFtSmokeActions() {
+  if (!dom.ft.enqueueSmokeTrainingButton) {
+    return;
+  }
+  const version = selectedFtVersion();
+  const isLockedVersion = Boolean(version && version.status === 'locked');
+  dom.ft.enqueueSmokeTrainingButton.disabled = !isLockedVersion;
+  dom.ft.enqueueSmokeTrainingButton.title = isLockedVersion
+    ? 'Queue the tiny smoke training preset for the locked selected version.'
+    : 'Select a locked dataset version before enqueueing smoke training.';
+}
+
+function ftLifecycleProgressKey(job) {
+  const lifecycleKeys = new Set(FT_LIFECYCLE_STEPS.map((step) => step.key));
+  if (job?.status === 'failed' && lifecycleKeys.has(job?.error_json?.phase)) {
+    return job.error_json.phase;
+  }
+  return lifecycleKeys.has(job?.status) ? job.status : 'queued';
+}
+
+function ftStatusNarrative(job) {
+  const status = job?.status || 'queued';
+  if (status === 'queued') {
+    return {
+      tone: 'warning',
+      title: 'Queued for execution',
+      body: 'The fine-tuning job is queued and waiting for a worker. Polling will keep the active job selected until it reaches a terminal state.',
+    };
+  }
+  if (status === 'running') {
+    return {
+      tone: 'warning',
+      title: 'Worker claimed the job',
+      body: 'The worker is active and will advance into data preparation, training, packaging, and registration as the smoke run progresses.',
+    };
+  }
+  if (status === 'preparing_data') {
+    return {
+      tone: 'warning',
+      title: 'Preparing training snapshot',
+      body: 'The selected locked version is being exported and validated before the trainer starts.',
+    };
+  }
+  if (status === 'training') {
+    return {
+      tone: 'warning',
+      title: 'Training in progress',
+      body: 'The local trainer is actively producing adapter output from the locked dataset snapshot and smoke hyperparameters.',
+    };
+  }
+  if (status === 'packaging') {
+    return {
+      tone: 'warning',
+      title: 'Packaging and validation in progress',
+      body: 'Adapter, report, log, and publish-manifest files are being validated before the registry entry is created.',
+    };
+  }
+  if (status === 'registering') {
+    return {
+      tone: 'warning',
+      title: 'Registering review artifact',
+      body: 'The validated artifact package is being added to the Models registry while preserving artifact-only inference gating.',
+    };
+  }
+  if (status === 'failed') {
+    const failurePhase = job?.error_json?.phase ? ` during ${job.error_json.phase}` : '';
+    return {
+      tone: 'failure',
+      title: 'Training failed',
+      body: `The fine-tuning job failed${failurePhase}. Review the structured error payload and artifact paths below to see how far the run progressed.`,
+    };
+  }
+  return {
+    tone: 'success',
+    title: 'Training succeeded',
+    body: 'The smoke-training flow completed successfully. Review the validated artifact paths and use the review-only handoff to inspect the registered model in Models without changing inference selection.',
+  };
+}
+
+function renderFtTrainingLifecycle(job) {
+  const progressKey = ftLifecycleProgressKey(job);
+  const activeIndex = FT_LIFECYCLE_STEPS.findIndex((step) => step.key === progressKey);
+  return `
+    <section class="detail-stack">
+      <h4 class="subsection-title">Training lifecycle</h4>
+      <div class="run-lifecycle">
+        ${FT_LIFECYCLE_STEPS.map((step, index) => {
+          const classes = ['flow-step'];
+          if (activeIndex > index || job.status === 'succeeded') {
+            classes.push('is-complete');
+          }
+          if (step.key === progressKey && job.status !== 'succeeded') {
+            classes.push('is-active', statusClassFor(job.status === 'failed' ? 'failed' : step.key));
+          }
+          return `
+            <article class="${classes.join(' ')}">
+              <p class="stat-label">${escapeHtml(step.label)}</p>
+              <p class="detail-copy">${escapeHtml(step.description)}</p>
+            </article>
+          `;
+        }).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderFtArtifactPathCards(artifactPaths) {
+  const pathEntries = [
+    ['Dataset export', artifactPaths.dataset_export_dir || '—'],
+    ['Adapter directory', artifactPaths.adapter_dir || '—'],
+    ['Training report', artifactPaths.training_report_path || '—'],
+    ['Training log', artifactPaths.training_log_path || '—'],
+    ['Publish manifest', artifactPaths.publish_manifest_path || '—'],
+  ];
+  return `
+    <section class="detail-stack">
+      <h4 class="subsection-title">Artifact path summary</h4>
+      <div class="ft-artifact-path-list">
+        ${pathEntries
+          .map(
+            ([label, value]) => `
+              <section class="callout ${value === '—' ? 'warning' : ''}">
+                <p class="callout-title">${escapeHtml(label)}</p>
+                <p class="ft-path-copy">${escapeHtml(value)}</p>
+              </section>
+            `,
+          )
+          .join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderFtRegisteredModelCards(models) {
+  const items = safeArray(models);
+  if (!items.length) {
+    return '';
+  }
+  return `
+    <section class="detail-stack">
+      <h4 class="subsection-title">Registered models</h4>
+      <div class="ft-registered-model-list">
+        ${items
+          .map((model) => {
+            const inferenceAction = modelInferenceActionState(model);
+            return `
+              <article class="ft-registered-model-card${model.readiness?.selectable ? '' : ' is-review-only'}">
+                <div class="inline-meta">
+                  ${renderStatusBadge(model.status || 'registered')}
+                  ${renderBadge(model.publish_status || 'publish n/a')}
+                  ${renderBadge(model.readiness?.selectable ? 'selectable' : 'artifact-only')}
+                  ${renderBadge(model.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}
+                </div>
+                <h4>${escapeHtml(modelDisplayName(model))}</h4>
+                <p class="meta-line">${escapeHtml(model.id || 'unknown model')} · ${escapeHtml(modelRegistrySubtitle(model))}</p>
+                <p class="detail-copy">${escapeHtml(model.readiness?.selectable ? 'This model can be promoted separately for inference in Models.' : `${inferenceAction.reason} Use the review-only handoff to inspect it in Models without changing inference selection.`)}</p>
+                <div class="button-row ft-review-handoff-row">
+                  <button type="button" class="secondary-button" data-ft-review-model-id="${escapeHtml(model.id)}">Review in Models</button>
+                </div>
+              </article>
+            `;
+          })
+          .join('')}
+      </div>
+    </section>
+  `;
+}
+
 function renderFtTrainingJobs() {
   if (!state.ft.trainingJobs.length) {
     dom.ft.trainingList.className = 'stack-list empty';
@@ -2692,8 +2917,14 @@ function renderFtTrainingJobDetail() {
   const artifactValidation = job.artifact_validation || null;
   const publishReadiness = job.publish_readiness || null;
   const artifactPaths = job.artifact_paths || {};
+  const statusNarrative = ftStatusNarrative(job);
   dom.ft.trainingDetail.innerHTML = `
     <div class="inline-meta">${renderStatusBadge(job.status)}${renderBadge(job.base_model_name || 'base model n/a')}${renderBadge(job.training_method || 'training')}</div>
+    <section class="callout ${statusNarrative.tone}">
+      <p class="callout-title">${escapeHtml(statusNarrative.title)}</p>
+      <p>${escapeHtml(statusNarrative.body)}</p>
+    </section>
+    ${renderFtTrainingLifecycle(job)}
     ${renderDetailGrid([
       { label: 'Training job ID', value: job.id },
       { label: 'Dataset', value: job.dataset_name || '—' },
@@ -2713,9 +2944,11 @@ function renderFtTrainingJobDetail() {
       { label: 'Finished', value: formatDateTime(job.finished_at) },
     ])}
     ${job.lineage_warning ? `<section class="callout warning"><p class="callout-title">Trainer/source mismatch</p><p>${escapeHtml(job.lineage_warning)}</p></section>` : ''}
+    ${renderFtArtifactPathCards(artifactPaths)}
     ${artifactValidation ? `<section class="callout ${artifactValidation.artifact_valid ? 'success' : 'failure'}"><p class="callout-title">Artifact validation</p><div class="badge-row">${renderBadge(artifactValidation.artifact_valid ? 'validated' : 'invalid')}${renderBadge(job.artifact_paths?.adapter_dir ? 'adapter path ready' : 'adapter path missing')}${renderBadge(job.artifact_paths?.training_report_path ? 'report path ready' : 'report path missing')}</div><p>${escapeHtml(artifactValidation.artifact_valid ? 'Adapter/report/log artifacts passed structural validation before the job was marked succeeded.' : `Artifact validation failed: ${safeArray(artifactValidation.missing).join(', ') || 'unknown issue'}`)}</p>${safeArray(artifactValidation.warnings).length ? `<p>${safeArray(artifactValidation.warnings).map((warning) => escapeHtml(warning)).join(' ')}</p>` : ''}</section>` : ''}
     ${publishReadiness ? `<section class="callout ${publishReadiness.runtime_ready ? 'success' : 'warning'}"><p class="callout-title">Publish readiness</p><div class="badge-row">${renderBadge(publishReadiness.publish_status || 'publish n/a')}${renderBadge(publishReadiness.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}${renderBadge(publishReadiness.candidate_published_model_name || 'candidate serving name pending')}</div><p>${escapeHtml(publishReadiness.runtime_ready ? 'A serving model is available for inference.' : publishReadiness.runtime_ready_reason || publishReadiness.selectable_reason || 'A serving model is not available yet.')}</p></section>` : ''}
     ${job.log_text ? `<section class="callout"><p class="callout-title">Training log</p><p>${escapeHtml(job.log_text)}</p></section>` : ''}
+    ${renderFtRegisteredModelCards(job.registered_models)}
     ${renderJsonDetails('Training hyperparameters', job.hyperparams_json || {}, { summaryDetail: 'Submitted hyperparameter payload' })}
     ${renderJsonDetails('Artifact paths', artifactPaths, { summaryDetail: 'Adapter, report, log, and manifest locations' })}
     ${job.format_summary_json ? renderJsonDetails('Dataset formatting summary', job.format_summary_json, { summaryDetail: 'Prepared training snapshot' }) : ''}
@@ -2726,6 +2959,18 @@ function renderFtTrainingJobDetail() {
     ${safeArray(job.artifacts).length ? renderJsonDetails('Artifacts', job.artifacts, { summaryDetail: `${job.artifacts.length} persisted artifact entries` }) : ''}
     ${safeArray(job.registered_models).length ? renderJsonDetails('Registered models', job.registered_models, { summaryDetail: `${job.registered_models.length} model registry entries` }) : ''}
   `;
+
+  dom.ft.trainingDetail.querySelectorAll('[data-ft-review-model-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        await setMode(MODES.MODELS);
+        await loadModelDetail(button.dataset.ftReviewModelId);
+        setModelsHint('Opened the registered artifact in Models with a review-only handoff. Inference selection did not change.');
+      } catch (error) {
+        setFtTrainingHint(error.message);
+      }
+    });
+  });
 }
 
 function clearFtSelections() {
@@ -2837,18 +3082,104 @@ async function loadFtVersion(versionId, { preserveRow = false } = {}) {
   renderFtRowDetail();
 }
 
+function beginFtTrainingPolling(trainingJobId) {
+  if (!trainingJobId) {
+    stopFtTrainingPolling();
+    return;
+  }
+  if (state.ft.pollTrainingJobId === trainingJobId && state.ft.pollHandle) {
+    return;
+  }
+
+  stopFtTrainingPolling();
+  state.ft.pollTrainingJobId = trainingJobId;
+  state.ft.pollHandle = window.setInterval(async () => {
+    try {
+      const [trainingJob, trainingJobs] = await Promise.all([
+        fetchJson(`/ft-training-jobs/${encodeURIComponent(trainingJobId)}`),
+        fetchJson('/ft-training-jobs'),
+      ]);
+      state.ft.trainingJobs = Array.isArray(trainingJobs) ? trainingJobs : [];
+      state.ft.selectedTrainingJobId = trainingJob.id;
+      state.ft.selectedTrainingJob = trainingJob;
+      renderFtTrainingJobs();
+      renderFtTrainingJobDetail();
+
+      if (TERMINAL_JOB_STATUSES.has(trainingJob.status)) {
+        stopFtTrainingPolling();
+        dom.ft.enqueueTrainingButton.disabled = false;
+        if (dom.ft.enqueueSmokeTrainingButton) {
+          renderFtSmokeActions();
+        }
+        setFtTrainingHint(
+          trainingJob.status === 'succeeded'
+            ? `Training job ${trainingJob.id} completed. Review the artifact paths below or use the review-only handoff to Models.`
+            : `Training job ${trainingJob.id} failed${trainingJob.error_json?.phase ? ` during ${trainingJob.error_json.phase}` : ''}.`,
+        );
+      }
+    } catch (error) {
+      stopFtTrainingPolling();
+      dom.ft.enqueueTrainingButton.disabled = false;
+      if (dom.ft.enqueueSmokeTrainingButton) {
+        renderFtSmokeActions();
+      }
+      setFtTrainingHint(error.message);
+    }
+  }, 1500);
+}
+
+async function enqueueFtTrainingJob({ version, baseModelName, trainingMethod, hyperparamsJson, queuedHint }) {
+  const created = await fetchJson('/ft-training-jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      dataset_version_id: version.id,
+      base_model_name: baseModelName,
+      training_method: trainingMethod,
+      hyperparams_json: hyperparamsJson,
+    }),
+  });
+  await refreshFtTrainingJobs({ preferredTrainingJobId: created.id });
+  beginFtTrainingPolling(created.id);
+  setFtTrainingHint(queuedHint || `Training job ${created.id} queued for ${version.version_label || version.id}. Polling the active job now.`);
+  return created;
+}
+
+function preferredFtTrainingJobId(trainingJobs, preferredTrainingJobId = null) {
+  if (preferredTrainingJobId && trainingJobs.some((job) => job.id === preferredTrainingJobId)) {
+    return preferredTrainingJobId;
+  }
+
+  if (state.ft.selectedTrainingJobId) {
+    const activeSelectedJob = trainingJobs.find(
+      (job) => job.id === state.ft.selectedTrainingJobId && ACTIVE_FT_JOB_STATUSES.has(job.status),
+    );
+    if (activeSelectedJob) {
+      return activeSelectedJob.id;
+    }
+  }
+
+  const newestActiveJob = trainingJobs.find((job) => ACTIVE_FT_JOB_STATUSES.has(job.status));
+  if (newestActiveJob) {
+    return newestActiveJob.id;
+  }
+
+  if (state.ft.selectedTrainingJobId && trainingJobs.some((job) => job.id === state.ft.selectedTrainingJobId)) {
+    return state.ft.selectedTrainingJobId;
+  }
+
+  return trainingJobs[0]?.id || null;
+}
+
 async function refreshFtTrainingJobs({ preferredTrainingJobId = null } = {}) {
   state.ft.trainingJobs = await fetchJson('/ft-training-jobs');
-  state.ft.selectedTrainingJobId = preferredTrainingJobId && state.ft.trainingJobs.some((job) => job.id === preferredTrainingJobId)
-    ? preferredTrainingJobId
-    : state.ft.trainingJobs.some((job) => job.id === state.ft.selectedTrainingJobId)
-      ? state.ft.selectedTrainingJobId
-      : state.ft.trainingJobs[0]?.id || null;
+  state.ft.selectedTrainingJobId = preferredFtTrainingJobId(state.ft.trainingJobs, preferredTrainingJobId);
 
   renderFtTrainingJobs();
 
   if (!state.ft.selectedTrainingJobId) {
     state.ft.selectedTrainingJob = null;
+    stopFtTrainingPolling();
     renderFtTrainingJobDetail();
     return;
   }
@@ -2860,6 +3191,7 @@ async function loadFtTrainingJob(trainingJobId) {
   if (!trainingJobId) {
     state.ft.selectedTrainingJobId = null;
     state.ft.selectedTrainingJob = null;
+    stopFtTrainingPolling();
     renderFtTrainingJobs();
     renderFtTrainingJobDetail();
     return;
@@ -2873,12 +3205,18 @@ async function loadFtTrainingJob(trainingJobId) {
 
   state.ft.selectedTrainingJobId = trainingJob.id;
   state.ft.selectedTrainingJob = trainingJob;
+  if (ACTIVE_FT_JOB_STATUSES.has(trainingJob.status)) {
+    beginFtTrainingPolling(trainingJob.id);
+  } else {
+    stopFtTrainingPolling();
+  }
   renderFtTrainingJobs();
   renderFtTrainingJobDetail();
 }
 
 async function ensureFtInitialized({ force = false } = {}) {
   if (state.ft.hasLoadedInitialData && !force) {
+    await refreshFtTrainingJobs({ preferredTrainingJobId: state.ft.selectedTrainingJobId });
     return;
   }
 
@@ -3525,6 +3863,12 @@ dom.modeButtons.forEach((button) => {
   });
 });
 
+window.addEventListener('beforeunload', () => {
+  stopWorkflowPolling();
+  stopPlcRunPolling();
+  stopFtTrainingPolling();
+});
+
 dom.workflow.runButton.addEventListener('click', async () => {
   const prompt = dom.workflow.promptInput.value.trim();
   if (!state.workflow.selectedWorkflowKey) {
@@ -4064,15 +4408,47 @@ dom.ft.prepareSmokeDatasetButton.addEventListener('click', async () => {
       body: JSON.stringify({ status: 'locked' }),
     });
     await refreshFtDatasets({ preferredDatasetId: dataset.id, preferredVersionId: locked.id });
+    applySmokeTrainingDefaults();
     setFtDatasetHint(`Prepared smoke dataset ${dataset.name}.`);
     setFtVersionHint(`${locked.version_label || locked.id} is locked and ready for a smoke training job.`);
-    setFtTrainingHint('Smoke dataset is ready. Use the smoke hyperparameter preset to fill the tiny trainer payload before enqueueing training.');
+    setFtTrainingHint('Smoke dataset is ready. Enqueue smoke training uses the locked selected version and the smoke preset defaults while keeping the artifact review-only until a serving model exists.');
   } catch (error) {
     setFtDatasetHint(error.message);
     setFtVersionHint(error.message);
     setFtTrainingHint(error.message);
   } finally {
     dom.ft.prepareSmokeDatasetButton.disabled = false;
+  }
+});
+
+dom.ft.enqueueSmokeTrainingButton?.addEventListener('click', async () => {
+  const version = selectedFtVersion();
+  if (!version) {
+    setFtTrainingHint('Select a locked version before enqueueing smoke training.');
+    return;
+  }
+  if (version.status !== 'locked') {
+    setFtTrainingHint('Smoke training requires the selected version to be locked first. Prepare the smoke dataset or lock the version before enqueueing.');
+    return;
+  }
+
+  dom.ft.enqueueSmokeTrainingButton.disabled = true;
+  dom.ft.enqueueTrainingButton.disabled = true;
+  setFtTrainingHint(`Enqueueing smoke training for ${version.version_label || version.id}...`);
+  try {
+    applySmokeTrainingDefaults();
+    await enqueueFtTrainingJob({
+      version,
+      baseModelName: SMOKE_BASE_MODEL_NAME,
+      trainingMethod: 'sft_lora',
+      hyperparamsJson: SMOKE_HYPERPARAMETER_PRESET,
+      queuedHint: `Smoke training job queued for ${version.version_label || version.id}. The active job is now selected and polling.`,
+    });
+  } catch (error) {
+    setFtTrainingHint(error.message);
+  } finally {
+    dom.ft.enqueueTrainingButton.disabled = false;
+    renderFtSmokeActions();
   }
 });
 
@@ -4088,30 +4464,32 @@ dom.ft.enqueueTrainingButton.addEventListener('click', async () => {
     return;
   }
 
+  const trainingMethod = dom.ft.trainingMethod.value.trim() || 'stub_adapter';
+  if (trainingMethod === 'sft_lora' && version.status !== 'locked') {
+    setFtTrainingHint('Real sft_lora training requires the selected dataset version to be locked first.');
+    return;
+  }
+
   dom.ft.enqueueTrainingButton.disabled = true;
   setFtTrainingHint(`Enqueueing training for ${version.version_label || version.id}...`);
   try {
-    const created = await fetchJson('/ft-training-jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        dataset_version_id: version.id,
-        base_model_name: baseModelName,
-        training_method: dom.ft.trainingMethod.value.trim() || 'stub_adapter',
-        hyperparams_json: parseOptionalJsonValue(dom.ft.trainingHyperparamsJson.value, {
-          allowStringFallback: false,
-          fallbackValue: {},
-          requireObject: true,
-          fieldLabel: 'Training hyperparameters',
-        }),
+    await enqueueFtTrainingJob({
+      version,
+      baseModelName,
+      trainingMethod,
+      hyperparamsJson: parseOptionalJsonValue(dom.ft.trainingHyperparamsJson.value, {
+        allowStringFallback: false,
+        fallbackValue: {},
+        requireObject: true,
+        fieldLabel: 'Training hyperparameters',
       }),
+      queuedHint: `Training job queued for ${version.version_label || version.id}. The active job is now selected and polling.`,
     });
-    await refreshFtTrainingJobs({ preferredTrainingJobId: created.id });
-    setFtTrainingHint(`Training job ${created.id} queued for ${version.version_label || version.id}.`);
   } catch (error) {
     setFtTrainingHint(error.message);
   } finally {
     dom.ft.enqueueTrainingButton.disabled = false;
+    renderFtSmokeActions();
   }
 });
 
@@ -4308,6 +4686,7 @@ dom.rag.previewButton.addEventListener('click', async () => {
 
 async function boot() {
   renderMode();
+  renderFtSmokeActions();
   try {
     await Promise.all([refreshWorkflowDatasets(), refreshWorkflowCatalog()]);
     setWorkflowHint('Ready. Choose a dataset, select a workflow, and run the demo.');

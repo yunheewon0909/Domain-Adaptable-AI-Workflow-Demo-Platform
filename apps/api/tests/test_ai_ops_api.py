@@ -299,6 +299,8 @@ def test_training_job_model_registry_and_inference_flow(
             },
         )
         assert training_response.status_code == 202
+        assert training_response.json()["status"] == "queued"
+        assert training_response.json()["registered_models"] == []
         training_job_id = training_response.json()["id"]
         backing_job_id = training_response.json()["backing_job_id"]
 
@@ -355,6 +357,7 @@ def test_training_job_model_registry_and_inference_flow(
         assert publish_response.status_code == 200
         assert publish_response.json()["publish_status"] == "publish_ready"
         assert publish_response.json()["serving_model_name"] is None
+        assert publish_response.json()["readiness"]["selectable"] is False
         assert (
             publish_response.json()["candidate_published_model_name"]
             == f"demo/{training_job_id}"

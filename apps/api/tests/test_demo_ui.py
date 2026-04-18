@@ -24,6 +24,7 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert "Smoke test guide" in text
     assert "Fill smoke hyperparameter preset" in text
     assert "Prepare smoke dataset" in text
+    assert "Enqueue smoke training" in text
     assert "./scripts/ft_smoke_test.sh" in text
     assert "artifact_ready" in text
     assert "publish_ready" in text
@@ -58,3 +59,9 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "Artifact-only models stay reviewable here" in text
     assert "demo-ui-smoke-dataset" in text
     assert "Preparing smoke dataset" in text
+    assert "preparing_data" in text
+    assert "packaging" in text
+    assert "registering" in text
+    assert "Enqueueing smoke training for" in text
+    assert "Review in Models" in text
+    assert "review-only handoff" in text
