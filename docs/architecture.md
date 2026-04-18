@@ -67,6 +67,7 @@ Important boundaries in this milestone:
 - fine-tuned models are visible in the registry immediately after adapter/report/manifest validation, artifact-only rows stay reviewable, and inference stays blocked until a real serving model exists
 - the Models cards split Review details from Use for inference actions, and the in-panel inference summary makes artifact-only, publish-ready, and inference-selectable state explicit
 - the Fine-tuning panel can prepare a smoke dataset, version, rows, validation, and lock flow using the existing endpoints already described in the API docs, so the demo UI does not rely on a hidden import wizard or invented backend shortcut
+- the Fine-tuning panel now also supports guided smoke enqueue, auto-selection of the active FT job, phase-aware polling across backend lifecycle states, and a review-only handoff into Models after the artifact is registered
 - the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
 
 ## AI Ops Flow
@@ -81,7 +82,8 @@ Important boundaries in this milestone:
 8. Artifact rows are written for dataset export, adapter bundle, training report, and publish manifest.
 9. A `model_registry` row is created as `artifact_ready` with `publish_status=publish_ready` and explicit trainer/serving lineage metadata.
 10. The current publish seam does not run a real Ollama import, so the fine-tuned row remains artifact-only until an external serving/import step exists.
-11. The `/demo` Models panel exposes separate Review details and Use for inference actions, with a clearer in-panel summary that keeps artifact-only rows out of inference selection.
+11. The `/demo` Fine-tuning panel can auto-follow the active smoke-training job through `queued`, `running`, `preparing_data`, `training`, `packaging`, `registering`, and terminal states while surfacing artifact paths, structured failures, and registered-model review handoff.
+12. The `/demo` Models panel exposes separate Review details and Use for inference actions, with a clearer in-panel summary that keeps artifact-only rows out of inference selection.
 
 ## Fine-tuning lineage and readiness semantics
 

@@ -2,6 +2,25 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.2] - 2026-04-19
+
+### Added
+
+- `/demo` Fine-tuning now includes an `Enqueue smoke training` helper that applies the tiny smoke preset defaults and targets the selected locked dataset version
+- FT training detail now renders a guided lifecycle view for `queued`, `running`, `preparing_data`, `training`, `packaging`, `registering`, `succeeded`, and `failed`
+- successful FT smoke runs now expose a review-only Models handoff CTA directly from the Fine-tuning detail panel
+
+### Changed
+
+- `/demo` Fine-tuning now auto-selects and polls the active training job instead of leaving smoke progress as a manual refresh-only flow
+- FT success and failure detail now emphasizes artifact paths, structured `error_json` payloads, and registered model review context more clearly
+- README and architecture docs now describe the guided smoke flow, active-job polling, and review-only Models handoff explicitly
+
+### Notes
+
+- artifact-only fine-tuned rows remain reviewable but not inference-selectable
+- automatic Ollama create/import is still not implemented; `publish_ready` remains a truthful artifact/package seam rather than serving readiness
+
 ## [0.7.1] - 2026-04-18
 
 ### Added

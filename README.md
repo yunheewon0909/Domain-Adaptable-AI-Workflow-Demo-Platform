@@ -4,7 +4,7 @@
 
 This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review. The Models cards now expose explicit Review details and Use for inference actions, and the in-panel inference summary is clearer.
 
-The current milestone is best understood as **v0.7.1: a reviewer-first local AI ops hardening pass for the real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
+The current milestone is best understood as **v0.7.2: a reviewer-first guided smoke-training UX hardening pass for the real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
 
 The key message of the repo is now threefold:
 
@@ -160,7 +160,7 @@ Rough expectations for a local smoke test:
 
 ### Smoke-test guide in `/demo`
 
-The Fine-tuning page can stage the smoke dataset, create the version, add rows, move the version through validated and locked, and enqueue the job using the same existing endpoints documented below. That keeps the demo flow truthful, because it does not depend on a fake import path or a separate backend shortcut.
+The Fine-tuning page can now stage the smoke dataset, create the version, add rows, move the version through validated and locked, enqueue the smoke job with preset defaults, auto-select and poll the active training job through its backend phases, and hand the resulting artifact over to Models through a review-only CTA. That keeps the demo flow truthful, because it uses the same existing endpoints documented below instead of a fake import path or a separate backend shortcut.
 
 ## When can inference use a fine-tuned model?
 
@@ -779,5 +779,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.6.0`: fine-tuning dataset management, queue-backed training scaffolding, model registry plus model-selectable inference, separate RAG collection management, and expanded reviewer modes
 - `v0.7.0`: real local SFT + LoRA runner, dataset export formatting, artifact-ready vs published model readiness, publish-ready serving seam, richer FT/model APIs, and reviewer/UI hardening
 - `v0.7.1`: smoke-test hardening, trainer/serving lineage clarity, adapter artifact validation, and more explicit readiness documentation
+- `v0.7.2`: guided smoke training in `/demo`, FT lifecycle polling, clearer artifact/error emphasis, and review-only Models handoff after successful fine-tuning smoke runs
 
 See `CHANGELOG.md` for the current milestone notes.
