@@ -8,6 +8,7 @@ All notable changes to this repository will be documented in this file.
 
 - added `scripts/ft_smoke_preflight.sh` plus a testable Python preflight helper for local fine-tuning smoke validation
 - preflight output now distinguishes API health, worker-runtime topology, dependency imports, device visibility, artifact-directory writability, and tiny-model download expectations with `[ok]`, `[warn]`, and `[fail]` statuses
+- preflight execution now runs in the target worker runtime instead of the caller shell, so host and Docker checks inspect the same interpreter boundary the worker uses
 
 ### Changed
 

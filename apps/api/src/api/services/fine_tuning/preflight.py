@@ -14,6 +14,8 @@ import urllib.request
 
 EXPECTED_DEPENDENCIES = ("torch", "transformers", "peft", "datasets", "accelerate")
 EXPECTED_TINY_MODEL = "hf-internal/testing-tiny-random-gpt2"
+SUPPORTED_TRAINER_BACKENDS = {"local_peft"}
+SUPPORTED_TRAINING_METHODS = {"sft_lora"}
 
 
 @dataclass(frozen=True)
@@ -222,6 +224,46 @@ def _append(results: list[CheckResult], level: str, summary: str, detail: str) -
     results.append(CheckResult(level=level, summary=summary, detail=detail))
 
 
+def _validate_runtime_config(config: PreflightConfig) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    if config.trainer_backend in SUPPORTED_TRAINER_BACKENDS:
+        _append(
+            results,
+            "ok",
+            "Trainer backend",
+            f"FT_TRAINER_BACKEND={config.trainer_backend} matches the supported local training backend.",
+        )
+    else:
+        _append(
+            results,
+            "fail",
+            "Trainer backend",
+            (
+                f"FT_TRAINER_BACKEND={config.trainer_backend} is not supported by the local smoke trainer. "
+                f"Supported values: {', '.join(sorted(SUPPORTED_TRAINER_BACKENDS))}."
+            ),
+        )
+
+    if config.default_training_method in SUPPORTED_TRAINING_METHODS:
+        _append(
+            results,
+            "ok",
+            "Training method",
+            f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method} matches the supported smoke-training method.",
+        )
+    else:
+        _append(
+            results,
+            "fail",
+            "Training method",
+            (
+                f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method} is not supported by the local smoke trainer. "
+                f"Supported values: {', '.join(sorted(SUPPORTED_TRAINING_METHODS))}."
+            ),
+        )
+    return results
+
+
 def run_preflight(
     config: PreflightConfig | None = None,
     *,
@@ -413,6 +455,8 @@ def run_preflight(
         "Training environment variables",
         "; ".join(env_details),
     )
+
+    results.extend(_validate_runtime_config(config))
 
     try:
         parsed_model_map = json.loads(config.trainer_model_map_json)

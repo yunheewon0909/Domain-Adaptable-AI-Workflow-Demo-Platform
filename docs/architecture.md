@@ -114,6 +114,7 @@ The new `scripts/ft_smoke_preflight.sh` entrypoint is intentionally topology-awa
 
 - it checks `GET /health`
 - it reports whether you are validating a host or Docker worker path
+- it runs through the same app/runtime boundary the worker uses: host checks run via `uv --project apps/api`, while Docker checks execute inside the worker container
 - it verifies the local Python dependency stack, device visibility, artifact-directory writability, and trainer-model-map configuration for the runtime being inspected
 - it warns that the tiny Hugging Face smoke model may need network access on the first run if it is not already cached
 

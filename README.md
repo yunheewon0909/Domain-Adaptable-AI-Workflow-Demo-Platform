@@ -136,7 +136,7 @@ Included helper assets:
 
 - sample dataset: `examples/ft_smoke_instruction_dataset.jsonl`
 - helper script: `scripts/ft_smoke_test.sh`
-- preflight checker: `scripts/ft_smoke_preflight.sh`
+- preflight checker: `scripts/ft_smoke_preflight.sh` (runs through the target worker runtime: host `uv --project apps/api` for host checks, worker-container execution for `--worker-runtime docker`)
 
 Smoke hyperparameter preset:
 
@@ -177,6 +177,7 @@ docker compose up -d postgres api worker
 ```
 
 This validates the Docker stack shape, but it does **not** turn a Docker Linux worker into an Apple Silicon MPS runtime.
+The preflight command above executes inside the worker container so dependency and device checks reflect the Docker worker runtime instead of the caller shell.
 
 ### 2. Mixed Docker API + host worker validation
 
@@ -223,6 +224,7 @@ Use the existing host-only API and worker instructions below when you want both 
 
 - `GET /health` fails: the API is not reachable yet, so smoke enqueueing will fail before any worker/device logic matters
 - `TRAINING_DEVICE=mps` fails in preflight: MPS must be validated from a host worker runtime, and `torch.backends.mps.is_available()` must be true in that host Python
+- Docker preflight disagrees with your host shell: trust the runtime that will actually execute the worker subprocess; `--worker-runtime docker` inspects the worker container, while the default host path uses `uv --project apps/api`
 - dependency import failures: install the training stack in the runtime that will execute the worker subprocess, not just in the shell where you happen to run curl
 - artifact directory write failures: fix `MODEL_ARTIFACT_DIR` before enqueueing, because the smoke flow writes dataset exports, adapter artifacts, reports, logs, and publish manifests there
 - tiny model download failures: the first run may need network access to resolve `hf-internal/testing-tiny-random-gpt2` if it is not already cached

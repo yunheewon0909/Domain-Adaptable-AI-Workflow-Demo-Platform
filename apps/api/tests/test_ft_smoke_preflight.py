@@ -196,3 +196,71 @@ def test_preflight_output_uses_tagged_lines() -> None:
     assert "[ok] API health: ready" in formatted
     assert "[warn] Worker/container status: host" in formatted
     assert "[fail] Python dependencies: missing torch" in formatted
+
+
+def test_preflight_fails_for_unsupported_backend(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
+    monkeypatch.setenv("TRAINING_DEVICE", "auto")
+    monkeypatch.setenv("TRAINING_ALLOW_CPU", "true")
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("FT_TRAINER_BACKEND", "mystery_backend")
+    monkeypatch.setenv("FT_DEFAULT_TRAINING_METHOD", "sft_lora")
+    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
+    monkeypatch.setattr(
+        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
+    )
+
+    config = load_config()
+    results = run_preflight(
+        config,
+        api_health_checker=lambda _: (True, '{"status":"ok"}'),
+        dependency_inspector=lambda: _package_statuses(),
+        device_inspector=lambda: DeviceStatus(
+            torch_available=True,
+            cuda_available=False,
+            mps_available=False,
+            detail="torch ok",
+        ),
+        compose_inspector=lambda _: _compose_status(),
+    )
+
+    backend_result = next(
+        result for result in results if result.summary == "Trainer backend"
+    )
+    assert backend_result.level == "fail"
+    assert "local_peft" in backend_result.detail
+
+
+def test_preflight_fails_for_unsupported_training_method(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
+    monkeypatch.setenv("TRAINING_DEVICE", "auto")
+    monkeypatch.setenv("TRAINING_ALLOW_CPU", "true")
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("FT_TRAINER_BACKEND", "local_peft")
+    monkeypatch.setenv("FT_DEFAULT_TRAINING_METHOD", "full_finetune")
+    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
+    monkeypatch.setattr(
+        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
+    )
+
+    config = load_config()
+    results = run_preflight(
+        config,
+        api_health_checker=lambda _: (True, '{"status":"ok"}'),
+        dependency_inspector=lambda: _package_statuses(),
+        device_inspector=lambda: DeviceStatus(
+            torch_available=True,
+            cuda_available=False,
+            mps_available=False,
+            detail="torch ok",
+        ),
+        compose_inspector=lambda _: _compose_status(),
+    )
+
+    method_result = next(
+        result for result in results if result.summary == "Training method"
+    )
+    assert method_result.level == "fail"
+    assert "sft_lora" in method_result.detail
