@@ -54,6 +54,8 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert "Only runtime-ready/selectable models can run inference." in text
     assert "Create RAG collection" in text
     assert "Retrieval preview" in text
+    assert "delete collection-managed files" in text
+    assert "delete the selected collection-managed document" in text
 
 
 def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -> None:
@@ -98,3 +100,5 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "do not expect Ollama model publishing from the smoke job" in text
     assert "RAG index is not ready" in text
     assert "Evidence is unavailable until the legacy RAG index is initialized." in text
+    assert "Delete document" in text
+    assert "Retrieval preview was cleared after document deletion." in text

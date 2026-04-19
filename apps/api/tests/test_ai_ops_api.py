@@ -550,6 +550,26 @@ def test_rag_collection_document_and_preview_flow(client: TestClient) -> None:
         assert stored_document is not None
         assert stored_document.status == "parsed"
 
+    storage_path = Path(txt_upload.json()["metadata_json"]["storage_path"])
+    assert storage_path.exists()
+
+    delete_response = client.delete(f"/rag-documents/{document_id}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["document_id"] == document_id
+    assert delete_response.json()["deleted"] is True
+    assert delete_response.json()["storage_deleted"] is True
+    assert storage_path.exists() is False
+
+    deleted_detail = client.get(f"/rag-documents/{document_id}")
+    assert deleted_detail.status_code == 404
+
+    list_after_delete = client.get(f"/rag-collections/{collection_id}/documents")
+    assert list_after_delete.status_code == 200
+    assert all(item["id"] != document_id for item in list_after_delete.json())
+
+    missing_delete_response = client.delete("/rag-documents/rag-doc-missing")
+    assert missing_delete_response.status_code == 404
+
 
 def test_training_failure_is_classified_for_ui(
     client: TestClient, monkeypatch, tmp_path: Path
