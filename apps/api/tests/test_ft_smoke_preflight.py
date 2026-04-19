@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from api.services.fine_tuning.preflight import (
@@ -8,11 +7,37 @@ from api.services.fine_tuning.preflight import (
     ComposeStatus,
     DeviceStatus,
     PackageStatus,
+    PreflightConfig,
     exit_code_for_results,
     format_results,
-    load_config,
     run_preflight,
 )
+
+
+def _config(
+    tmp_path: Path,
+    *,
+    api_base_url: str = "http://127.0.0.1:8000",
+    worker_runtime: str = "host",
+    current_runtime: str = "host",
+    training_device: str = "auto",
+    training_allow_cpu: bool = False,
+    trainer_model_map_json: str = '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}',
+    trainer_backend: str = "local_peft",
+    default_training_method: str = "sft_lora",
+) -> PreflightConfig:
+    return PreflightConfig(
+        api_base_url=api_base_url,
+        worker_runtime=worker_runtime,
+        current_runtime=current_runtime,
+        training_device=training_device,
+        training_allow_cpu=training_allow_cpu,
+        artifact_dir=tmp_path / "artifacts",
+        trainer_backend=trainer_backend,
+        default_training_method=default_training_method,
+        trainer_model_map_json=trainer_model_map_json,
+        project_root=tmp_path,
+    )
 
 
 def _package_statuses(*, missing: tuple[str, ...] = ()) -> list[PackageStatus]:
@@ -24,6 +49,21 @@ def _package_statuses(*, missing: tuple[str, ...] = ()) -> list[PackageStatus]:
         )
         for name in ("torch", "transformers", "peft", "datasets", "accelerate")
     ]
+
+
+def _device_status(
+    *,
+    torch_available: bool = True,
+    cuda_available: bool = False,
+    mps_available: bool = False,
+    detail: str = "torch ok",
+) -> DeviceStatus:
+    return DeviceStatus(
+        torch_available=torch_available,
+        cuda_available=cuda_available,
+        mps_available=mps_available,
+        detail=detail,
+    )
 
 
 def _compose_status(*, running_services: tuple[str, ...] = ()) -> ComposeStatus:
@@ -38,148 +78,171 @@ def _compose_status(*, running_services: tuple[str, ...] = ()) -> ComposeStatus:
     )
 
 
-def test_preflight_accepts_host_mps_runtime(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("API_BASE_URL", "http://127.0.0.1:8000")
-    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
-    monkeypatch.setenv("TRAINING_DEVICE", "mps")
-    monkeypatch.setenv("TRAINING_ALLOW_CPU", "false")
-    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
-    monkeypatch.setenv(
-        "FT_TRAINER_MODEL_MAP_JSON",
-        json.dumps(
-            {"qwen2.5:7b-instruct-q4_K_M": "hf-internal/testing-tiny-random-gpt2"}
-        ),
-    )
-    monkeypatch.setattr(
-        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
-    )
-
-    config = load_config()
-    results = run_preflight(
+def _run_preflight(
+    config: PreflightConfig,
+    *,
+    api_ok: bool = True,
+    api_detail: str = '{"status":"ok"}',
+    missing_dependencies: tuple[str, ...] = (),
+    device_status: DeviceStatus | None = None,
+    compose_status: ComposeStatus | None = None,
+    artifact_ok: bool = True,
+    artifact_detail: str | None = None,
+) -> list[CheckResult]:
+    device_status = device_status or _device_status()
+    compose_status = compose_status or _compose_status()
+    return run_preflight(
         config,
-        api_health_checker=lambda _: (True, '{"status":"ok"}'),
-        dependency_inspector=lambda: _package_statuses(),
-        device_inspector=lambda: DeviceStatus(
-            torch_available=True,
-            cuda_available=False,
-            mps_available=True,
-            detail="torch ok",
+        api_health_checker=lambda _: (api_ok, api_detail),
+        dependency_inspector=lambda: _package_statuses(missing=missing_dependencies),
+        device_inspector=lambda: device_status,
+        compose_inspector=lambda _: compose_status,
+        artifact_dir_checker=lambda _: (
+            artifact_ok,
+            artifact_detail
+            or (
+                f"artifact directory is writable: {config.artifact_dir}"
+                if artifact_ok
+                else "artifact directory is not writable"
+            ),
         ),
-        compose_inspector=lambda _: _compose_status(),
     )
 
-    assert exit_code_for_results(results) == 0
-    formatted = format_results(results)
-    assert "[ok] MPS availability" in formatted
-    assert "host-worker smoke path" in formatted
-    assert "[ok] Artifact directory" in formatted
+
+def _result(results: list[CheckResult], summary: str) -> CheckResult:
+    return next(result for result in results if result.summary == summary)
 
 
-def test_preflight_fails_for_docker_mps_runtime(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "docker")
-    monkeypatch.setenv("TRAINING_DEVICE", "mps")
-    monkeypatch.setenv("TRAINING_ALLOW_CPU", "false")
-    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
-    monkeypatch.setattr(
-        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
-    )
+def test_preflight_fails_when_api_health_check_fails(tmp_path: Path) -> None:
+    config = _config(tmp_path)
 
-    config = load_config()
-    results = run_preflight(
+    results = _run_preflight(
         config,
-        api_health_checker=lambda _: (True, '{"status":"ok"}'),
-        dependency_inspector=lambda: _package_statuses(),
-        device_inspector=lambda: DeviceStatus(
-            torch_available=True,
-            cuda_available=False,
-            mps_available=True,
-            detail="torch ok",
-        ),
-        compose_inspector=lambda _: _compose_status(
-            running_services=("postgres", "api", "worker")
-        ),
+        api_ok=False,
+        api_detail="connection refused",
     )
 
+    api_result = _result(results, "API health")
+    assert api_result.level == "fail"
+    assert "connection refused" in api_result.detail
     assert exit_code_for_results(results) == 1
-    assert any(
-        result.level == "fail" and result.summary == "MPS worker topology"
-        for result in results
-    )
-    assert any(
-        result.level == "warn" and result.summary == "Runtime mismatch"
-        for result in results
-    )
 
 
-def test_preflight_fails_when_required_dependencies_are_missing(
-    monkeypatch, tmp_path: Path
+def test_preflight_fails_when_required_dependencies_are_missing(tmp_path: Path) -> None:
+    config = _config(tmp_path, training_allow_cpu=True)
+
+    results = _run_preflight(config, missing_dependencies=("torch",))
+
+    dependency_result = _result(results, "Python dependencies")
+    assert dependency_result.level == "fail"
+    assert "torch" in dependency_result.detail
+
+
+def test_preflight_fails_for_docker_mps_runtime(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        worker_runtime="docker",
+        current_runtime="host",
+        training_device="mps",
+    )
+
+    results = _run_preflight(
+        config,
+        device_status=_device_status(mps_available=True),
+        compose_status=_compose_status(running_services=("postgres", "api", "worker")),
+    )
+
+    topology_result = _result(results, "MPS worker topology")
+    assert topology_result.level == "fail"
+    assert (
+        "Docker Linux workers should not be treated as MPS-capable"
+        in topology_result.detail
+    )
+    assert _result(results, "Runtime mismatch").level == "warn"
+
+
+def test_preflight_fails_when_host_mps_is_unavailable(tmp_path: Path) -> None:
+    config = _config(tmp_path, training_device="mps")
+
+    results = _run_preflight(
+        config,
+        device_status=_device_status(mps_available=False),
+    )
+
+    mps_result = _result(results, "MPS availability")
+    assert mps_result.level == "fail"
+    assert "torch.backends.mps.is_available() is false" in mps_result.detail
+
+
+def test_preflight_fails_when_cpu_runtime_is_not_explicitly_enabled(
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
-    monkeypatch.setenv("TRAINING_DEVICE", "auto")
-    monkeypatch.setenv("TRAINING_ALLOW_CPU", "true")
-    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
-    monkeypatch.setattr(
-        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
-    )
+    config = _config(tmp_path, training_device="cpu", training_allow_cpu=False)
 
-    config = load_config()
-    results = run_preflight(
-        config,
-        api_health_checker=lambda _: (True, '{"status":"ok"}'),
-        dependency_inspector=lambda: _package_statuses(
-            missing=("peft", "transformers")
-        ),
-        device_inspector=lambda: DeviceStatus(
-            torch_available=True,
-            cuda_available=False,
-            mps_available=False,
-            detail="torch ok",
-        ),
-        compose_inspector=lambda _: _compose_status(),
-    )
+    results = _run_preflight(config)
 
-    assert exit_code_for_results(results) == 1
-    failure = next(
-        result for result in results if result.summary == "Python dependencies"
-    )
-    assert failure.level == "fail"
-    assert "peft, transformers" in failure.detail
+    cpu_result = _result(results, "CPU fallback policy")
+    assert cpu_result.level == "fail"
+    assert "TRAINING_DEVICE=cpu was requested" in cpu_result.detail
 
 
 def test_preflight_fails_auto_mode_without_accelerator_or_cpu_opt_in(
-    monkeypatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
-    monkeypatch.setenv("TRAINING_DEVICE", "auto")
-    monkeypatch.setenv("TRAINING_ALLOW_CPU", "false")
-    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
-    monkeypatch.setattr(
-        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
-    )
+    config = _config(tmp_path, training_device="auto", training_allow_cpu=False)
 
-    config = load_config()
-    results = run_preflight(
+    results = _run_preflight(
         config,
-        api_health_checker=lambda _: (True, '{"status":"ok"}'),
-        dependency_inspector=lambda: _package_statuses(),
-        device_inspector=lambda: DeviceStatus(
-            torch_available=True,
-            cuda_available=False,
-            mps_available=False,
-            detail="torch ok",
-        ),
-        compose_inspector=lambda _: _compose_status(),
+        device_status=_device_status(cuda_available=False, mps_available=False),
     )
 
-    assert exit_code_for_results(results) == 1
-    auto_result = next(
-        result for result in results if result.summary == "Auto device resolution"
-    )
+    auto_result = _result(results, "Auto device resolution")
     assert auto_result.level == "fail"
     assert "TRAINING_ALLOW_CPU=false" in auto_result.detail
+
+
+def test_preflight_fails_when_artifact_directory_is_not_writable(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+
+    results = _run_preflight(
+        config,
+        artifact_ok=False,
+        artifact_detail="permission denied",
+    )
+
+    artifact_result = _result(results, "Artifact directory")
+    assert artifact_result.level == "fail"
+    assert artifact_result.detail == "permission denied"
+
+
+def test_preflight_warns_when_trainer_model_map_is_empty(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        trainer_model_map_json="{}",
+        training_allow_cpu=True,
+    )
+
+    results = _run_preflight(config)
+
+    model_map_result = _result(results, "Trainer model map")
+    assert model_map_result.level == "warn"
+    assert "supplied explicitly in the enqueue payload" in model_map_result.detail
+
+
+def test_preflight_accepts_host_mps_runtime(tmp_path: Path) -> None:
+    config = _config(tmp_path, training_device="mps")
+
+    results = _run_preflight(
+        config,
+        device_status=_device_status(mps_available=True),
+    )
+
+    assert exit_code_for_results(results) == 0
+    assert _result(results, "MPS availability").level == "ok"
+    assert _result(results, "Artifact directory").level == "ok"
+    assert not any(result.level == "fail" for result in results)
 
 
 def test_preflight_output_uses_tagged_lines() -> None:
@@ -198,69 +261,29 @@ def test_preflight_output_uses_tagged_lines() -> None:
     assert "[fail] Python dependencies: missing torch" in formatted
 
 
-def test_preflight_fails_for_unsupported_backend(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
-    monkeypatch.setenv("TRAINING_DEVICE", "auto")
-    monkeypatch.setenv("TRAINING_ALLOW_CPU", "true")
-    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("FT_TRAINER_BACKEND", "mystery_backend")
-    monkeypatch.setenv("FT_DEFAULT_TRAINING_METHOD", "sft_lora")
-    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
-    monkeypatch.setattr(
-        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
+def test_preflight_fails_for_unsupported_backend(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        training_allow_cpu=True,
+        trainer_backend="mystery_backend",
     )
 
-    config = load_config()
-    results = run_preflight(
-        config,
-        api_health_checker=lambda _: (True, '{"status":"ok"}'),
-        dependency_inspector=lambda: _package_statuses(),
-        device_inspector=lambda: DeviceStatus(
-            torch_available=True,
-            cuda_available=False,
-            mps_available=False,
-            detail="torch ok",
-        ),
-        compose_inspector=lambda _: _compose_status(),
-    )
+    results = _run_preflight(config)
 
-    backend_result = next(
-        result for result in results if result.summary == "Trainer backend"
-    )
+    backend_result = _result(results, "Trainer backend")
     assert backend_result.level == "fail"
     assert "local_peft" in backend_result.detail
 
 
-def test_preflight_fails_for_unsupported_training_method(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("FT_SMOKE_WORKER_RUNTIME", "host")
-    monkeypatch.setenv("TRAINING_DEVICE", "auto")
-    monkeypatch.setenv("TRAINING_ALLOW_CPU", "true")
-    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("FT_TRAINER_BACKEND", "local_peft")
-    monkeypatch.setenv("FT_DEFAULT_TRAINING_METHOD", "full_finetune")
-    monkeypatch.setenv("FT_TRAINER_MODEL_MAP_JSON", "{}")
-    monkeypatch.setattr(
-        "api.services.fine_tuning.preflight._detect_current_runtime", lambda: "host"
+def test_preflight_fails_for_unsupported_training_method(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        training_allow_cpu=True,
+        default_training_method="full_finetune",
     )
 
-    config = load_config()
-    results = run_preflight(
-        config,
-        api_health_checker=lambda _: (True, '{"status":"ok"}'),
-        dependency_inspector=lambda: _package_statuses(),
-        device_inspector=lambda: DeviceStatus(
-            torch_available=True,
-            cuda_available=False,
-            mps_available=False,
-            detail="torch ok",
-        ),
-        compose_inspector=lambda _: _compose_status(),
-    )
+    results = _run_preflight(config)
 
-    method_result = next(
-        result for result in results if result.summary == "Training method"
-    )
+    method_result = _result(results, "Training method")
     assert method_result.level == "fail"
     assert "sft_lora" in method_result.detail
