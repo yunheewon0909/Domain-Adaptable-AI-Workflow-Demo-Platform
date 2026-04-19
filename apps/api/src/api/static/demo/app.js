@@ -932,7 +932,7 @@ function buildSmokeDatasetRows() {
 
 function fillSmokeHyperparameterPreset() {
   dom.ft.trainingHyperparamsJson.value = JSON.stringify(SMOKE_HYPERPARAMETER_PRESET, null, 2);
-  setFtTrainingHint(`Filled the smoke-test hyperparameter preset for ${SMOKE_TRAINER_MODEL_NAME}. Base model lineage stays separate from the tiny trainer model.`);
+  setFtTrainingHint(`Filled the smoke-test hyperparameter preset for ${SMOKE_TRAINER_MODEL_NAME}. Run preflight first before enqueueing a new runtime, keep Apple Silicon MPS on a host worker, make CPU fallback an explicit opt-in, and do not expect Ollama model publishing from the smoke job.`);
 }
 
 function applySmokeTrainingDefaults() {
@@ -3835,7 +3835,7 @@ dom.modeButtons.forEach((button) => {
       if (button.dataset.mode === MODES.FT) {
         setFtDatasetHint('Fine-tuning datasets ready. Create or inspect a dataset version here.');
         setFtVersionHint('Review row validity, apply status transitions, and prepare the selected version for training.');
-        setFtTrainingHint('Training enqueue is ready. Use the selected version to create or review jobs.');
+        setFtTrainingHint('Run preflight first before enqueueing a new runtime. Use a host worker for Apple Silicon MPS, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker worker checks, and treat smoke jobs as artifact-only review flows rather than Ollama publishing.');
         return;
       }
       if (button.dataset.mode === MODES.MODELS) {
@@ -4411,7 +4411,7 @@ dom.ft.prepareSmokeDatasetButton.addEventListener('click', async () => {
     applySmokeTrainingDefaults();
     setFtDatasetHint(`Prepared smoke dataset ${dataset.name}.`);
     setFtVersionHint(`${locked.version_label || locked.id} is locked and ready for a smoke training job.`);
-    setFtTrainingHint('Smoke dataset is ready. Enqueue smoke training uses the locked selected version and the smoke preset defaults while keeping the artifact review-only until a serving model exists.');
+    setFtTrainingHint('Smoke dataset is ready. Run preflight first before enqueueing on a new runtime, prefer a host worker for Apple Silicon MPS, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker checks, and expect adapter artifacts only, not Ollama publishing.');
   } catch (error) {
     setFtDatasetHint(error.message);
     setFtVersionHint(error.message);
@@ -4442,7 +4442,7 @@ dom.ft.enqueueSmokeTrainingButton?.addEventListener('click', async () => {
       baseModelName: SMOKE_BASE_MODEL_NAME,
       trainingMethod: 'sft_lora',
       hyperparamsJson: SMOKE_HYPERPARAMETER_PRESET,
-      queuedHint: `Smoke training job queued for ${version.version_label || version.id}. The active job is now selected and polling.`,
+      queuedHint: `Smoke training job queued for ${version.version_label || version.id}. The active job is now selected and polling. Smoke training validates adapter artifact creation, not Ollama serving readiness.`,
     });
   } catch (error) {
     setFtTrainingHint(error.message);
@@ -4694,7 +4694,7 @@ async function boot() {
     setPlcRunHint('Switch to PLC testing mode to load suites, review testcases, and enqueue runs.');
     setFtDatasetHint('Switch to Fine-tuning mode to manage datasets and versions.');
     setFtVersionHint('Fine-tuning version detail will appear here after you select a dataset version.');
-    setFtTrainingHint('Training jobs will appear here after you enqueue or refresh them.');
+    setFtTrainingHint('Run preflight first before enqueueing a new runtime. Use a host worker for Apple Silicon MPS, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker worker checks, and remember smoke jobs validate adapter artifacts rather than Ollama serving readiness.');
     setModelsHint('Switch to Models mode to inspect registered models and run inference.');
     setRagCollectionHint('Switch to RAG mode to manage collections and document grounding data.');
     setRagDocumentHint('Select a RAG collection to inspect or upload documents.');

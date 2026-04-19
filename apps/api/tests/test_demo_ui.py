@@ -20,15 +20,27 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert "failed lifecycle state" in text
     assert "Create fine-tuning dataset" in text
     assert "Training jobs" in text
-    assert "Trainer model mapping for smoke tests" in text
+    assert "run preflight first for any new worker runtime" in text
     assert "Smoke test guide" in text
     assert "Fill smoke hyperparameter preset" in text
     assert "Prepare smoke dataset" in text
     assert "Enqueue smoke training" in text
+    assert "Run preflight first" in text
+    assert "Runtime preflight" in text
+    assert "Host worker recommended for Apple Silicon MPS" in text
+    assert "Docker worker is not macOS MPS-capable" in text
+    assert "CPU fallback must be explicitly enabled" in text
+    assert "./scripts/ft_smoke_preflight.sh --worker-runtime host" in text
+    assert "./scripts/ft_smoke_preflight.sh --worker-runtime docker" in text
     assert "./scripts/ft_smoke_test.sh" in text
     assert "artifact_ready" in text
     assert "publish_ready" in text
     assert "not inference-selectable" in text
+    assert (
+        "Smoke training validates adapter artifact creation, not Ollama serving readiness"
+        in text
+    )
+    assert "Artifact-ready rows remain review-only" in text
     assert "Model registry" in text
     assert "Model selection status" in text
     assert "Reviewing model" in text
@@ -65,3 +77,9 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "Enqueueing smoke training for" in text
     assert "Review in Models" in text
     assert "review-only handoff" in text
+    assert "Run preflight first before enqueueing a new runtime" in text
+    assert (
+        "use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker checks"
+        in text
+    )
+    assert "do not expect Ollama model publishing from the smoke job" in text

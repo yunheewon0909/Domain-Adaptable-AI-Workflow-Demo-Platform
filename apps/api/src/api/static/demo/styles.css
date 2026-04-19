@@ -523,6 +523,16 @@ textarea {
   margin-bottom: var(--space-3);
 }
 
+.smoke-guide-stack,
+.smoke-guide-command-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.smoke-guide-command-list .mono {
+  margin-bottom: 0;
+}
+
 .smoke-guide-copy,
 .ft-path-copy {
   margin: 0;

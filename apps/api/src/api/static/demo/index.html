@@ -477,7 +477,7 @@
                 <textarea id="ft-training-hyperparams-json" rows="4" placeholder='{"epochs":1}'>{}</textarea>
               </div>
               <button id="ft-enqueue-training-button" type="button" class="run-button">Enqueue training job</button>
-              <p id="ft-training-hint" class="hint">Select a locked dataset version, provide the serving base model lineage plus trainer mapping/config, then enqueue a real local training job. Trainer model mapping for smoke tests belongs in the JSON payload or env mapping.</p>
+              <p id="ft-training-hint" class="hint">Select a locked dataset version, run preflight first for any new worker runtime, use a host worker for Apple Silicon MPS or <code>./scripts/ft_smoke_preflight.sh --worker-runtime docker</code> for Docker checks, then enqueue training. Smoke jobs validate adapter artifacts and do not publish an Ollama model.</p>
             </div>
           </article>
 
@@ -500,7 +500,7 @@
           <div class="section-heading">
             <div>
               <h2>Smoke test guide</h2>
-              <p class="section-copy">Use the local helper script or the reviewer UI helpers to verify the SFT + LoRA artifact path without implying that a serving-ready Ollama model exists.</p>
+                <p class="section-copy">Use the local helper script or the reviewer UI helpers to verify the SFT + LoRA artifact path. Run preflight first for the worker runtime you plan to use, then keep smoke outcomes in review-only artifact territory until a real serving model exists.</p>
             </div>
             <div class="button-row">
               <button id="ft-fill-smoke-preset-button" type="button" class="secondary-button">Fill smoke hyperparameter preset</button>
@@ -508,12 +508,24 @@
               <button id="ft-enqueue-smoke-training-button" type="button" class="secondary-button">Enqueue smoke training</button>
             </div>
           </div>
-          <p class="section-copy smoke-guide-copy">Prepare a smoke dataset to create and lock the version automatically, then use Enqueue smoke training to queue the tiny preset and auto-follow the active job until the artifact is ready for a review-only handoff to Models.</p>
+          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
           <div class="smoke-guide-grid">
+            <section class="callout warning">
+              <p class="callout-title">Runtime preflight</p>
+              <div class="smoke-guide-stack">
+                <p>Run preflight first. Host worker recommended for Apple Silicon MPS.</p>
+                <p>Docker worker is not macOS MPS-capable.</p>
+                <p>CPU fallback must be explicitly enabled.</p>
+                <div class="smoke-guide-command-list">
+                  <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime host</pre>
+                  <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime docker</pre>
+                </div>
+              </div>
+            </section>
             <section class="callout">
               <p class="callout-title">Local script command</p>
               <pre class="mono">./scripts/ft_smoke_test.sh</pre>
-              <p>The script creates a small instruction_sft dataset, locks a smoke version, and queues a tiny local training job against <code>hf-internal/testing-tiny-random-gpt2</code>.</p>
+              <p>After preflight, the script creates a small instruction_sft dataset, locks a smoke version, and queues a tiny local training job against <code>hf-internal/testing-tiny-random-gpt2</code>.</p>
             </section>
             <section class="callout">
               <p class="callout-title">Expected artifacts</p>
@@ -524,7 +536,7 @@
                 <span class="tag">publish/publish_manifest.json</span>
                 <span class="tag">Modelfile.template</span>
               </div>
-              <p>Expect adapter, report, log, and publish-manifest files under <code>data/model_artifacts/&lt;job_id&gt;/</code> after a successful smoke run.</p>
+              <p>Expect adapter, report, log, and publish-manifest files under <code>data/model_artifacts/&lt;job_id&gt;/</code> after a successful smoke run. Smoke training validates adapter artifact creation, not Ollama serving readiness.</p>
             </section>
             <section class="callout warning">
               <p class="callout-title">Registry expectations</p>
@@ -533,7 +545,7 @@
                 <span class="tag">publish_ready</span>
                 <span class="tag">not inference-selectable</span>
               </div>
-              <p>Smoke-test outputs stay reviewable as validated adapter artifacts. They may become publish_ready, but they remain non-selectable for inference until a real serving model exists.</p>
+              <p>Artifact-ready rows remain review-only. Smoke-test outputs stay reviewable as validated adapter artifacts. They may become publish_ready, but they remain non-selectable for inference until a real serving model exists.</p>
             </section>
           </div>
         </section>
