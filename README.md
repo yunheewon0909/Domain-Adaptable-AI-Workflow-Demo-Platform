@@ -4,7 +4,7 @@
 
 This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review. The Models cards now expose explicit Review details and Use for inference actions, and the in-panel inference summary is clearer.
 
-The current milestone is best understood as **v0.7.4: a runtime-preflight UX and test-hardening pass for the real local SFT + LoRA smoke-training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, runtime-aware preflight guidance in the same reviewer surface, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
+The current milestone is best understood as **v0.7.5: a Docker-first demo reliability and RAG management pass for the real local SFT + LoRA smoke-training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, runtime-aware preflight guidance in the same reviewer surface, clearer fine-tuning troubleshooting messages, graceful workflow guidance when the legacy RAG index is not initialized, and separate RAG data operations with document deletion, while keeping artifact-only rows reviewable and not inference-selectable.
 
 The key message of the repo is now threefold:
 
@@ -177,7 +177,7 @@ docker compose up -d postgres api worker
 ./scripts/ft_smoke_preflight.sh --worker-runtime docker
 ```
 
-This validates the Docker stack shape, but it does **not** turn a Docker Linux worker into an Apple Silicon MPS runtime.
+This validates the Docker stack shape, and the Compose defaults now make that Docker path CPU-friendly for tiny smoke tests. It does **not** turn a Docker Linux worker into an Apple Silicon MPS runtime.
 The preflight command above executes inside the worker container so dependency and device checks reflect the Docker worker runtime instead of the caller shell.
 `API_BASE_URL` defaults to `http://api:8000` for this Docker path unless you override it explicitly.
 
@@ -232,6 +232,7 @@ For the host path, `API_BASE_URL` defaults to `http://127.0.0.1:8000` unless you
 - dependency import failures: install the training stack in the runtime that will execute the worker subprocess, not just in the shell where you happen to run curl
 - artifact directory write failures: fix `MODEL_ARTIFACT_DIR` before enqueueing, because the smoke flow writes dataset exports, adapter artifacts, reports, logs, and publish manifests there
 - tiny model download failures: the first run may need network access to resolve `hf-internal/testing-tiny-random-gpt2` if it is not already cached
+- `/demo` training failure cards now split the user-facing summary, technical phase, next-step remediation, and raw technical detail so the reviewer can distinguish CPU fallback policy, Docker MPS mismatch, dependency/import issues, trainer-model download failures, dataset locking problems, and artifact validation failures without reading raw logs first
 
 ### Smoke-test guide in `/demo`
 
@@ -356,7 +357,17 @@ docker compose exec -T ollama ollama pull nomic-embed-text
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 ```
 
-5. Check the core routes.
+5. Optional but recommended: initialize the legacy workflow RAG index.
+
+The original workflow reviewer still uses the legacy dataset-backed `data/rag_index/rag.db` path. `/demo` now fails gracefully when that index is missing, but retrieval-backed workflow evidence will stay unavailable until you initialize it.
+
+```bash
+docker compose exec -T api uv run rag-ingest
+# or the one-shot helper service
+docker compose run --rm rag_ingest
+```
+
+6. Check the core routes.
 
 ```bash
 curl -s http://127.0.0.1:8000/health
@@ -364,6 +375,13 @@ curl -s http://127.0.0.1:8000/workflows
 curl -s http://127.0.0.1:8000/plc-dashboard/summary
 curl -s http://127.0.0.1:8000/demo
 ```
+
+## Docker-first demo readiness notes
+
+- **Workflow reviewer legacy RAG index**: Workflow mode still depends on the legacy dataset-backed `rag.db` index. If it is missing, `/demo` now shows `RAG index is not ready`, explains that you should run `rag-ingest` or enqueue a RAG reindex, and keeps the job result readable instead of surfacing a noisy subprocess failure.
+- **RAG collection-managed documents are different**: the RAG tab manages `rag_collections` / `rag_documents` metadata, text previews, retrieval preview, and document deletion. Those collection-managed documents are separate from the legacy workflow `rag.db` index.
+- **Docker CPU smoke profile**: `compose.yml` now pins the API and worker demo path to CPU-friendly smoke defaults (`TRAINING_DEVICE=cpu`, `TRAINING_ALLOW_CPU=true`, `FT_MAX_SEQ_LENGTH=256`, artifact-only publish seam off) so Mac/Windows Docker Compose runs can validate tiny smoke jobs without pretending a large-model CPU training path is practical.
+- **Host Apple Silicon MPS profile**: use the host-worker path when you want actual MPS validation. Docker Linux workers should still be treated as non-MPS runtimes even on Apple Silicon hosts.
 
 ## Host-Only Run
 
@@ -593,7 +611,7 @@ curl -sS -X POST http://127.0.0.1:8000/inference/run \
   }'
 ```
 
-Create a RAG collection, upload a document, and preview retrieval:
+Create a RAG collection, upload a document, preview retrieval, and delete a document:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/rag-collections \
@@ -606,6 +624,8 @@ curl -sS -X POST http://127.0.0.1:8000/rag-collections/rag-collection-1/document
 curl -sS -X POST http://127.0.0.1:8000/rag-retrieval/preview \
   -H "Content-Type: application/json" \
   -d '{"collection_id":"rag-collection-1","query":"maintenance automation","top_k":3}'
+
+curl -sS -X DELETE http://127.0.0.1:8000/rag-documents/rag-doc-1
 ```
 
 ## Stub Executor vs Future C++ Adapter
@@ -860,5 +880,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.7.2`: guided smoke training in `/demo`, FT lifecycle polling, clearer artifact/error emphasis, and review-only Models handoff after successful fine-tuning smoke runs
 - `v0.7.3`: topology-aware smoke preflight checks, host-worker Apple Silicon MPS guidance, and clearer Docker-versus-host troubleshooting for local fine-tuning validation
 - `v0.7.4`: `/demo` runtime preflight guidance, stronger smoke-runtime boundary copy, and deterministic preflight unit-test coverage
+- `v0.7.5`: graceful workflow RAG-index readiness guidance, Docker CPU-smoke defaults for Compose, clearer fine-tuning failure classification, and RAG document deletion/management improvements
 
 See `CHANGELOG.md` for the current milestone notes.

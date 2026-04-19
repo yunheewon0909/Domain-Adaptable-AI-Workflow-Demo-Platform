@@ -2,6 +2,22 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.5] - 2026-04-20
+
+### Added
+
+- `DELETE /rag-documents/{document_id}` plus stored-file cleanup and collection timestamp refresh for collection-managed RAG documents
+- `/demo` RAG document-management detail with clearer document metadata, preview length, text preview, and delete controls
+- workflow readiness guidance that returns a structured `RAG index is not ready` result when the legacy `rag.db` index is missing instead of surfacing a noisy subprocess failure
+- a one-shot `rag_ingest` Compose helper service for Docker-first index initialization
+
+### Changed
+
+- Docker Compose API/worker defaults now use a CPU-friendly smoke profile for tiny fine-tuning validation on Mac/Windows Docker demos
+- fine-tuning failures now store category/user-message/remediation metadata and `/demo` renders those failures as reviewer-friendly troubleshooting cards with raw technical detail kept below
+- worker subprocess failure reporting now prioritizes the actionable failure line instead of leading with dependency-download noise such as NVIDIA package resolution logs
+- README and architecture docs now explain the legacy workflow `rag.db` boundary versus collection-managed RAG documents, the Docker CPU-smoke profile, the new `rag-ingest` helper path, and the improved `/demo` troubleshooting UX
+
 ## [0.7.4] - 2026-04-19
 
 ### Added
