@@ -14,6 +14,7 @@ from api.services.datasets.resolver import (
     resolve_dataset,
 )
 from api.services.rag.embedding_client import EmbeddingClient
+from api.services.rag.query import RAGIndexNotReadyError
 from api.services.retrieval.service import build_grounding_context, retrieve_evidence
 from api.services.workflows.catalog import WorkflowDefinition, get_workflow_definition
 from api.services.workflows.contracts import (
@@ -28,6 +29,52 @@ WORKFLOW_MAX_TOKENS = 512
 
 class WorkflowExecutionError(RuntimeError):
     pass
+
+
+def _rag_index_not_ready_result(
+    *, workflow_key: str, dataset_key: str | None, user_prompt: str, db_path: str
+) -> dict[str, Any]:
+    title = "RAG index is not ready"
+    remediation = (
+        "Run rag-ingest or enqueue RAG reindex before using retrieval-backed workflow."
+    )
+    docker_hint = "Docker demo can initialize the index with `docker compose exec -T api uv run rag-ingest`."
+    meta = {
+        "degraded": True,
+        "rag_status": "not_ready",
+        "db_path": db_path,
+        "dataset_key": dataset_key,
+        "prompt": user_prompt,
+        "warnings": [title, remediation, docker_hint],
+    }
+    if workflow_key == "recommendation":
+        return {
+            "recommendations": [remediation, docker_hint],
+            "rationale": (
+                f"{title}. Retrieval-backed evidence is unavailable until the legacy index at {db_path} is initialized."
+            ),
+            "evidence": [],
+            "meta": meta,
+        }
+    if workflow_key == "report_generator":
+        return {
+            "title": title,
+            "executive_summary": (
+                f"Workflow execution continued without retrieval evidence because the legacy RAG index at {db_path} is not initialized."
+            ),
+            "findings": [title, f"Legacy index path: {db_path}"],
+            "actions": [remediation, docker_hint],
+            "evidence": [],
+            "meta": meta,
+        }
+    return {
+        "summary": (
+            f"Workflow execution continued without retrieval evidence because the legacy RAG index at {db_path} is not initialized."
+        ),
+        "key_points": [title, remediation, docker_hint],
+        "evidence": [],
+        "meta": meta,
+    }
 
 
 def create_workflow_job_payload(
@@ -226,12 +273,20 @@ def execute_workflow(
     if not user_prompt:
         raise WorkflowExecutionError("workflow prompt must not be empty")
 
-    evidence = retrieve_evidence(
-        dataset=dataset,
-        query_text=user_prompt,
-        top_k=top_k,
-        embedding_client=embedding_client,
-    )
+    try:
+        evidence = retrieve_evidence(
+            dataset=dataset,
+            query_text=user_prompt,
+            top_k=top_k,
+            embedding_client=embedding_client,
+        )
+    except RAGIndexNotReadyError as exc:
+        return _rag_index_not_ready_result(
+            workflow_key=workflow.key,
+            dataset_key=dataset.key,
+            user_prompt=user_prompt,
+            db_path=str(exc.db_path),
+        )
     if not evidence:
         raise WorkflowExecutionError("workflow execution produced no evidence")
 

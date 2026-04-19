@@ -538,7 +538,9 @@ def _run_job_subprocess(
         raise RuntimeError(f"{job_type} timed out after {int(exc.timeout)}s") from exc
 
     if completed.returncode != 0:
-        stderr = completed.stderr.strip() or completed.stdout.strip()
+        stderr = _summarize_subprocess_error(
+            completed.stderr.strip() or completed.stdout.strip()
+        )
         stderr_first_line = stderr.splitlines()[0] if stderr else "<empty>"
         print(
             (
@@ -565,6 +567,38 @@ def _run_job_subprocess(
     if not isinstance(parsed, dict):
         raise RuntimeError(f"{job_type} subprocess payload must be an object")
     return parsed
+
+
+def _looks_like_subprocess_noise(line: str) -> bool:
+    normalized = line.strip().lower()
+    return bool(normalized) and (
+        normalized.startswith("downloading ")
+        or normalized.startswith("installed ")
+        or normalized.startswith("resolving ")
+        or normalized.startswith("prepared ")
+    )
+
+
+def _summarize_subprocess_error(raw_error: str) -> str:
+    lines = [line.strip() for line in raw_error.splitlines() if line.strip()]
+    if not lines:
+        return raw_error
+    priority_markers = (
+        "failed:",
+        "rag index is not ready",
+        "rag index file not found",
+        "runtimeerror:",
+        "valueerror:",
+        "error:",
+    )
+    for line in lines:
+        lowered = line.lower()
+        if any(marker in lowered for marker in priority_markers):
+            return line
+    for line in lines:
+        if not _looks_like_subprocess_noise(line):
+            return line
+    return lines[-1]
 
 
 def _run_reindex_subprocess(

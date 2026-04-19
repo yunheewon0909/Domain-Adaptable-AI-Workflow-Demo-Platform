@@ -15,6 +15,15 @@ from api.services.rag.sqlite_store import load_sqlite_chunks
 from api.services.rag.types import QueryHit
 
 
+class RAGIndexNotReadyError(FileNotFoundError):
+    def __init__(self, *, db_path: Path, init_command: str) -> None:
+        self.db_path = db_path
+        self.init_command = init_command
+        super().__init__(
+            f"RAG index is not ready: {db_path}. Run {init_command} or enqueue RAG reindex before using retrieval-backed workflow."
+        )
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -34,12 +43,16 @@ def _load_index_records(index_dir: Path) -> list[dict[str, object]]:
     payload = json.loads(index_file.read_text(encoding="utf-8"))
     records = payload.get("records")
     if not isinstance(records, list):
-        raise ValueError(f"Invalid index payload in {index_file}: 'records' must be a list")
+        raise ValueError(
+            f"Invalid index payload in {index_file}: 'records' must be a list"
+        )
 
     return records
 
 
-def _search_json_index(*, index_dir: Path, query_text: str, top_k: int) -> list[QueryHit]:
+def _search_json_index(
+    *, index_dir: Path, query_text: str, top_k: int
+) -> list[QueryHit]:
     records = _load_index_records(index_dir)
     if not records:
         return []
@@ -120,8 +133,11 @@ def search_index(
         return hits[: max(1, top_k)]
 
     if (index_dir / "index.json").exists():
-        return _search_json_index(index_dir=index_dir, query_text=normalized_query, top_k=top_k)
+        return _search_json_index(
+            index_dir=index_dir, query_text=normalized_query, top_k=top_k
+        )
 
-    raise FileNotFoundError(
-        f"RAG index file not found: {resolved_db_path}. Run `uv run --project apps/api rag-ingest` first."
+    raise RAGIndexNotReadyError(
+        db_path=resolved_db_path,
+        init_command="`uv run --project apps/api rag-ingest`",
     )

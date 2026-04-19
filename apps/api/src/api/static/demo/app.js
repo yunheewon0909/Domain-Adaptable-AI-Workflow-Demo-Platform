@@ -1111,7 +1111,16 @@ function renderWorkflowResult(job) {
   }
 
   const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const workflowMeta = result.meta && typeof result.meta === 'object' ? result.meta : null;
   const fragments = [];
+  if (Array.isArray(workflowMeta?.warnings) && workflowMeta.warnings.length) {
+    fragments.push(`
+      <section class="callout warning">
+        <p class="callout-title">${escapeHtml(workflowMeta.rag_status === 'not_ready' ? 'RAG index is not ready' : 'Workflow warning')}</p>
+        ${workflowMeta.warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join('')}
+      </section>
+    `);
+  }
   if (result.summary) {
     fragments.push(`<section class="result-group"><h3>Summary</h3><p>${escapeHtml(result.summary)}</p></section>`);
   }
@@ -1143,7 +1152,11 @@ function renderWorkflowResult(job) {
   dom.workflow.resultPanel.className = 'result-panel';
   dom.workflow.resultPanel.innerHTML = fragments.join('');
   dom.workflow.evidencePanel.className = evidence.length ? 'evidence-list' : 'evidence-list empty';
-  dom.workflow.evidencePanel.innerHTML = evidence.length ? evidence.map(renderWorkflowEvidenceCard).join('') : 'No evidence returned.';
+  dom.workflow.evidencePanel.innerHTML = evidence.length
+    ? evidence.map(renderWorkflowEvidenceCard).join('')
+    : workflowMeta?.rag_status === 'not_ready'
+      ? 'Evidence is unavailable until the legacy RAG index is initialized.'
+      : 'No evidence returned.';
 }
 
 async function refreshWorkflowDatasets() {
@@ -1173,7 +1186,12 @@ function beginWorkflowPolling(jobId) {
       if (TERMINAL_JOB_STATUSES.has(job.status)) {
         stopWorkflowPolling();
         dom.workflow.runButton.disabled = false;
-        setWorkflowHint(job.status === 'succeeded' ? 'Workflow completed.' : `Workflow failed: ${job.error || 'unknown error'}`);
+        const warnings = Array.isArray(job.result_json?.meta?.warnings) ? job.result_json.meta.warnings : [];
+        setWorkflowHint(
+          job.status === 'succeeded'
+            ? warnings[0] || 'Workflow completed.'
+            : `Workflow failed: ${job.error || 'unknown error'}`,
+        );
       }
     } catch (error) {
       stopWorkflowPolling();

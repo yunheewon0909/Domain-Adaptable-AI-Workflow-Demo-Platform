@@ -219,6 +219,48 @@ def test_execute_workflow_returns_typed_output_with_evidence(
     )
 
 
+def test_execute_workflow_returns_guidance_when_rag_index_is_not_ready(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    index_dir = tmp_path / "rag_index"
+    source_dir = tmp_path / "sample_docs"
+    source_dir.mkdir(parents=True)
+    (source_dir / "brief.md").write_text("workflow evidence source", encoding="utf-8")
+
+    monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
+    monkeypatch.setenv("RAG_DB_PATH", str(index_dir / "rag.db"))
+    monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
+    get_settings.cache_clear()
+
+    llm = FakeWorkflowLLM('{"summary":"unused","key_points":["unused"]}')
+
+    with Session(get_engine()) as session:
+        result = execute_workflow(
+            session=session,
+            payload={
+                "workflow_key": "briefing",
+                "dataset_key": "industrial_demo",
+                "prompt": "Prepare a short briefing",
+                "k": 3,
+            },
+            llm_client=llm,
+            embedding_client=FakeEmbeddingClient(),
+        )
+
+    assert result["meta"]["rag_status"] == "not_ready"
+    assert result["meta"]["degraded"] is True
+    assert result["evidence"] == []
+    assert "RAG index is not ready" in result["key_points"]
+    assert any(
+        "Run rag-ingest or enqueue RAG reindex" in item for item in result["key_points"]
+    )
+    assert any(
+        "docker compose exec -T api uv run rag-ingest" in item
+        for item in result["key_points"]
+    )
+    assert llm.calls == []
+
+
 def test_execute_workflow_normalizes_report_generator_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

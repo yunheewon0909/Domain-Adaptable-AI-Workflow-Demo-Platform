@@ -83,3 +83,5 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
         in text
     )
     assert "do not expect Ollama model publishing from the smoke job" in text
+    assert "RAG index is not ready" in text
+    assert "Evidence is unavailable until the legacy RAG index is initialized." in text

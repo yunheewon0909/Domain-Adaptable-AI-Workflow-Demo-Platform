@@ -13,6 +13,7 @@ from worker.main import (
     _coerce_job_id,
     _process_claimed_job,
     _run_job_subprocess,
+    _summarize_subprocess_error,
 )
 
 
@@ -591,3 +592,35 @@ def test_run_job_subprocess_raises_clear_timeout_for_workflow(
 
     with pytest.raises(RuntimeError, match="workflow_run timed out after 60s"):
         _run_job_subprocess("workflow_run", {"prompt": "hello"})
+
+
+def test_summarize_subprocess_error_prefers_actionable_failure_line() -> None:
+    raw_error = "\n".join(
+        [
+            "Downloading nvidia-cusparselt-cu13 ...",
+            "Downloading nvidia-cublas-cu13 ...",
+            "[workflow-job-runner] failed: RAG index is not ready: /workspace/data/rag_index/rag.db. Run `uv run --project apps/api rag-ingest` or enqueue RAG reindex before using retrieval-backed workflow.",
+        ]
+    )
+
+    assert (
+        _summarize_subprocess_error(raw_error)
+        == "[workflow-job-runner] failed: RAG index is not ready: /workspace/data/rag_index/rag.db. Run `uv run --project apps/api rag-ingest` or enqueue RAG reindex before using retrieval-backed workflow."
+    )
+
+
+def test_summarize_subprocess_error_skips_download_noise_when_no_explicit_failure_marker() -> (
+    None
+):
+    raw_error = "\n".join(
+        [
+            "Downloading nvidia-cusparselt-cu13 ...",
+            "Resolving 112 packages...",
+            "torch is required for real fine-tuning. Install training dependencies first.",
+        ]
+    )
+
+    assert (
+        _summarize_subprocess_error(raw_error)
+        == "torch is required for real fine-tuning. Install training dependencies first."
+    )
