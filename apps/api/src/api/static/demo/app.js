@@ -2742,6 +2742,115 @@ function ftLifecycleProgressKey(job) {
   return lifecycleKeys.has(job?.status) ? job.status : 'queued';
 }
 
+function classifyFtTrainingFailure(job) {
+  const error = job?.error_json && typeof job.error_json === 'object' ? job.error_json : {};
+  const rawError = String(error.raw_error || error.message || job?.log_text || '').trim();
+  const phase = String(error.phase || 'training');
+  const lowered = rawError.toLowerCase();
+  if (error.category && error.user_message && error.remediation) {
+    return {
+      category: error.category,
+      phase,
+      summary: String(error.user_message),
+      remediation: String(error.remediation),
+      rawError,
+    };
+  }
+  if (lowered.includes('rag index') || lowered.includes('rag.db')) {
+    return {
+      category: 'rag_unrelated_failure',
+      phase,
+      summary: 'Training failed because the worker reported a RAG/index problem. That is unrelated to fine-tuning artifacts.',
+      remediation: 'Fix the retrieval/index issue first, then rerun the fine-tuning job.',
+      rawError,
+    };
+  }
+  if (lowered.includes('locked dataset version') || lowered.includes('dataset version must be validated or locked')) {
+    return {
+      category: 'dataset_version_not_locked',
+      phase,
+      summary: 'Training failed because the selected dataset version was not locked for real training.',
+      remediation: 'Validate the dataset version, lock it, and queue the smoke job again.',
+      rawError,
+    };
+  }
+  if (lowered.includes('artifacts failed validation')) {
+    return {
+      category: 'artifact_validation_failed',
+      phase,
+      summary: 'Training failed during artifact validation. The trainer ran, but expected adapter files were missing or incomplete.',
+      remediation: 'Inspect the artifact directory and retry after fixing the packaging or validation issue.',
+      rawError,
+    };
+  }
+  if (lowered.includes('torch is required') || lowered.includes('dependencies are missing')) {
+    return {
+      category: 'dependency_missing',
+      phase,
+      summary: 'Training failed because required fine-tuning dependencies are missing in the worker runtime.',
+      remediation: 'Install the training dependencies in the runtime that executes the worker subprocess, then rerun preflight.',
+      rawError,
+    };
+  }
+  if (lowered.includes('training_device=mps') && lowered.includes('mps is not available')) {
+    return {
+      category: 'docker_mps_invalid',
+      phase,
+      summary: 'Training failed because this worker cannot use Apple Silicon MPS. Docker Linux workers should use CPU smoke defaults instead.',
+      remediation: 'Use the Docker CPU smoke profile for container runs or switch to a host worker for Apple Silicon MPS validation.',
+      rawError,
+    };
+  }
+  if (lowered.includes('cpu training is disabled') || lowered.includes('training_allow_cpu')) {
+    return {
+      category: 'cpu_fallback_disabled',
+      phase,
+      summary: 'Training failed because this Docker worker has no accelerator and CPU fallback is disabled.',
+      remediation: 'Enable tiny CPU fallback for Docker smoke tests or run a host worker with Apple Silicon MPS.',
+      rawError,
+    };
+  }
+  if (lowered.includes('cuda is not available') || lowered.includes('no gpu accelerator is available')) {
+    return {
+      category: 'device_unavailable',
+      phase,
+      summary: 'Training failed because the requested accelerator is unavailable in the current worker runtime.',
+      remediation: 'Rerun preflight for the target runtime and use the Docker CPU smoke profile when no accelerator is available.',
+      rawError,
+    };
+  }
+  if (lowered.includes('huggingface') || lowered.includes('from_pretrained') || lowered.includes('repositorynotfounderror') || lowered.includes("couldn't connect") || lowered.includes('401 client error') || lowered.includes('404 client error')) {
+    return {
+      category: 'hf_model_download_failure',
+      phase,
+      summary: 'Training failed while downloading the tiny trainer model. Check network access or use a locally cached trainer_model_name.',
+      remediation: 'Verify connectivity or configure a locally available trainer model before retrying.',
+      rawError,
+    };
+  }
+  return {
+    category: 'unknown',
+    phase,
+    summary: `Training failed during ${phase}. Review the technical details below for the captured worker error.`,
+    remediation: 'Check the raw error, confirm the runtime configuration, and retry after fixing the reported issue.',
+    rawError,
+  };
+}
+
+function renderFtFailureSummary(job) {
+  const failure = classifyFtTrainingFailure(job);
+  return `
+    <section class="callout failure">
+      <p class="callout-title">User-facing summary</p>
+      <p>${escapeHtml(failure.summary)}</p>
+      <div class="badge-row">${renderBadge(failure.category || 'unknown')}${renderBadge(`phase: ${failure.phase || 'training'}`)}</div>
+      <p class="callout-title">What to do next</p>
+      <p>${escapeHtml(failure.remediation)}</p>
+      ${failure.rawError ? `<details><summary>Technical detail</summary><pre class="json-block">${escapeHtml(failure.rawError)}</pre></details>` : ''}
+    </section>
+  `;
+}
+
 function ftStatusNarrative(job) {
   const status = job?.status || 'queued';
   if (status === 'queued') {
@@ -2787,11 +2896,11 @@ function ftStatusNarrative(job) {
     };
   }
   if (status === 'failed') {
-    const failurePhase = job?.error_json?.phase ? ` during ${job.error_json.phase}` : '';
+    const failure = classifyFtTrainingFailure(job);
     return {
       tone: 'failure',
       title: 'Training failed',
-      body: `The fine-tuning job failed${failurePhase}. Review the structured error payload and artifact paths below to see how far the run progressed.`,
+      body: `${failure.summary} ${failure.remediation}`,
     };
   }
   return {
@@ -2962,6 +3071,7 @@ function renderFtTrainingJobDetail() {
       { label: 'Finished', value: formatDateTime(job.finished_at) },
     ])}
     ${job.lineage_warning ? `<section class="callout warning"><p class="callout-title">Trainer/source mismatch</p><p>${escapeHtml(job.lineage_warning)}</p></section>` : ''}
+    ${job.status === 'failed' ? renderFtFailureSummary(job) : ''}
     ${renderFtArtifactPathCards(artifactPaths)}
     ${artifactValidation ? `<section class="callout ${artifactValidation.artifact_valid ? 'success' : 'failure'}"><p class="callout-title">Artifact validation</p><div class="badge-row">${renderBadge(artifactValidation.artifact_valid ? 'validated' : 'invalid')}${renderBadge(job.artifact_paths?.adapter_dir ? 'adapter path ready' : 'adapter path missing')}${renderBadge(job.artifact_paths?.training_report_path ? 'report path ready' : 'report path missing')}</div><p>${escapeHtml(artifactValidation.artifact_valid ? 'Adapter/report/log artifacts passed structural validation before the job was marked succeeded.' : `Artifact validation failed: ${safeArray(artifactValidation.missing).join(', ') || 'unknown issue'}`)}</p>${safeArray(artifactValidation.warnings).length ? `<p>${safeArray(artifactValidation.warnings).map((warning) => escapeHtml(warning)).join(' ')}</p>` : ''}</section>` : ''}
     ${publishReadiness ? `<section class="callout ${publishReadiness.runtime_ready ? 'success' : 'warning'}"><p class="callout-title">Publish readiness</p><div class="badge-row">${renderBadge(publishReadiness.publish_status || 'publish n/a')}${renderBadge(publishReadiness.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}${renderBadge(publishReadiness.candidate_published_model_name || 'candidate serving name pending')}</div><p>${escapeHtml(publishReadiness.runtime_ready ? 'A serving model is available for inference.' : publishReadiness.runtime_ready_reason || publishReadiness.selectable_reason || 'A serving model is not available yet.')}</p></section>` : ''}
@@ -3132,7 +3242,7 @@ function beginFtTrainingPolling(trainingJobId) {
         setFtTrainingHint(
           trainingJob.status === 'succeeded'
             ? `Training job ${trainingJob.id} completed. Review the artifact paths below or use the review-only handoff to Models.`
-            : `Training job ${trainingJob.id} failed${trainingJob.error_json?.phase ? ` during ${trainingJob.error_json.phase}` : ''}.`,
+            : classifyFtTrainingFailure(trainingJob).summary,
         );
       }
     } catch (error) {

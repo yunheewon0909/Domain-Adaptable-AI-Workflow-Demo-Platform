@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
+import pytest
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
@@ -548,6 +549,81 @@ def test_rag_collection_document_and_preview_flow(client: TestClient) -> None:
         stored_document = session.get(RAGDocumentRecord, document_id)
         assert stored_document is not None
         assert stored_document.status == "parsed"
+
+
+def test_training_failure_is_classified_for_ui(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
+    get_settings.cache_clear()
+
+    def _failing_run_training_backend(*args, **kwargs):
+        raise RuntimeError(
+            "torch is required for real fine-tuning. Install training dependencies first."
+        )
+
+    monkeypatch.setattr(
+        "api.services.model_registry.service.run_training_backend",
+        _failing_run_training_backend,
+    )
+
+    dataset_id = client.post(
+        "/ft-datasets",
+        json={
+            "name": "Failure classification demo",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+        },
+    ).json()["id"]
+    version_id = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={"version_label": "v1"},
+    ).json()["id"]
+    client.post(
+        f"/ft-dataset-versions/{version_id}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {"instruction": "summarize", "input": "alpha"},
+                    "target_json": {"output": "beta"},
+                }
+            ]
+        },
+    )
+    client.post(
+        f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+    )
+    client.post(f"/ft-dataset-versions/{version_id}/status", json={"status": "locked"})
+    training_job_id = client.post(
+        "/ft-training-jobs",
+        json={
+            "dataset_version_id": version_id,
+            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "training_method": "sft_lora",
+            "hyperparams_json": {
+                "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
+            },
+        },
+    ).json()["id"]
+
+    with Session(get_engine()) as session:
+        with pytest.raises(RuntimeError, match="torch is required"):
+            complete_training_job(session, training_job_id=training_job_id)
+
+    detail_response = client.get(f"/ft-training-jobs/{training_job_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "failed"
+    assert detail_response.json()["error_json"]["phase"] == "training"
+    assert detail_response.json()["error_json"]["category"] == "dependency_missing"
+    assert (
+        "required fine-tuning dependencies are missing"
+        in detail_response.json()["error_json"]["user_message"]
+    )
+    assert (
+        "Install the training dependencies"
+        in detail_response.json()["error_json"]["remediation"]
+    )
 
 
 def test_model_registry_default_entries_are_seeded(client: TestClient) -> None:

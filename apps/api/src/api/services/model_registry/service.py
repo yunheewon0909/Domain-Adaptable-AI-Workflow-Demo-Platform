@@ -233,6 +233,71 @@ def _resolve_training_job_publish_readiness(
     }
 
 
+def _classify_training_failure(*, failure_phase: str, raw_error: str) -> dict[str, Any]:
+    normalized_error = raw_error.strip() or "Unknown training failure"
+    lowered = normalized_error.lower()
+    category = "unknown"
+    user_message = f"Training failed during {failure_phase}. Review the technical details below for the captured worker error."
+    remediation = "Review the raw error, confirm the selected runtime, and retry the smoke job after fixing the reported issue."
+
+    if "rag index" in lowered or "rag.db" in lowered:
+        category = "rag_unrelated_failure"
+        user_message = "Training failed because the worker reported a RAG/index issue. This is unrelated to fine-tuning artifacts and should be fixed in the retrieval setup first."
+        remediation = "Initialize or repair the RAG index path, then retry the fine-tuning job only after the unrelated retrieval problem is resolved."
+    elif (
+        "locked dataset version" in lowered
+        or "dataset version must be validated or locked" in lowered
+    ):
+        category = "dataset_version_not_locked"
+        user_message = "Training failed because the selected dataset version was not locked for real training."
+        remediation = "Validate the dataset version, lock it, and then enqueue the smoke job again."
+    elif "artifacts failed validation" in lowered:
+        category = "artifact_validation_failed"
+        user_message = "Training failed during artifact validation. The trainer ran, but the expected adapter/report package was incomplete."
+        remediation = "Inspect the artifact directory, confirm adapter/report files were written, and retry after fixing the packaging or validation issue."
+    elif "torch is required" in lowered or "dependencies are missing" in lowered:
+        category = "dependency_missing"
+        user_message = "Training failed because required fine-tuning dependencies are missing in the worker runtime."
+        remediation = "Install the training dependencies in the runtime that actually executes the worker subprocess, then rerun preflight."
+    elif "training_device=mps" in lowered and "mps is not available" in lowered:
+        category = "docker_mps_invalid"
+        user_message = "Training failed because this worker cannot use Apple Silicon MPS. Docker Linux workers should use the tiny CPU smoke profile, while host workers can validate MPS directly."
+        remediation = "Use the Docker CPU smoke defaults for container runs, or switch to a host worker if you specifically need Apple Silicon MPS validation."
+    elif "cpu training is disabled" in lowered or "training_allow_cpu" in lowered:
+        category = "cpu_fallback_disabled"
+        user_message = "Training failed because this worker has no accelerator and CPU fallback is disabled."
+        remediation = "Enable the tiny CPU smoke fallback for Docker demo runs or move the job to a host worker with a validated accelerator runtime."
+    elif (
+        "cuda is not available" in lowered
+        or "no gpu accelerator is available" in lowered
+    ):
+        category = "device_unavailable"
+        user_message = "Training failed because the requested accelerator is unavailable in the current worker runtime."
+        remediation = "Check the selected device, rerun preflight for the target runtime, and use the Docker CPU smoke profile when no accelerator is available."
+    elif (
+        "huggingface" in lowered
+        or "from_pretrained" in lowered
+        or "repositorynotfounderror" in lowered
+        or "couldn't connect" in lowered
+        or "401 client error" in lowered
+        or "404 client error" in lowered
+    ):
+        category = "hf_model_download_failure"
+        user_message = (
+            "Training failed while downloading or resolving the tiny trainer model."
+        )
+        remediation = "Check network access, model credentials if needed, or use a locally cached trainer_model_name before retrying the smoke job."
+
+    return {
+        "phase": failure_phase,
+        "category": category,
+        "message": user_message,
+        "user_message": user_message,
+        "remediation": remediation,
+        "raw_error": normalized_error,
+    }
+
+
 def _serialize_artifact(
     artifact: FTModelArtifactRecord | None,
 ) -> dict[str, Any] | None:
@@ -949,10 +1014,10 @@ def complete_training_job(
         if failed_job is not None:
             failed_job.status = "failed"
             failed_job.finished_at = datetime.now(timezone.utc)
-            failed_job.error_json = {
-                "phase": failure_phase,
-                "message": str(exc),
-            }
+            failed_job.error_json = _classify_training_failure(
+                failure_phase=failure_phase,
+                raw_error=str(exc),
+            )
             failed_job.log_text = (
                 (failed_job.log_text or "")
                 + f"\nTraining failed during {failure_phase}: {exc}"

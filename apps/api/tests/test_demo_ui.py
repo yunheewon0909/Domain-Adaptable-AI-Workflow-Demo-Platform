@@ -82,6 +82,15 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "review-only handoff" in text
     assert "Run preflight first before enqueueing a new runtime" in text
     assert "Docker demo defaults are CPU-friendly for tiny smoke tests" in text
+    assert "classifyFtTrainingFailure" in text
+    assert "User-facing summary" in text
+    assert "What to do next" in text
+    assert (
+        "Training failed because required fine-tuning dependencies are missing in the worker runtime."
+        in text
+    )
+    assert "Training failed while downloading the tiny trainer model." in text
+    assert "Training failed during artifact validation." in text
     assert (
         "use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker checks"
         in text
