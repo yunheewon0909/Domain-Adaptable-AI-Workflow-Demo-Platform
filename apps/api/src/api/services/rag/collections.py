@@ -81,6 +81,8 @@ def _serialize_document(document: RAGDocumentRecord) -> dict[str, Any]:
         "metadata_json": metadata,
         "text_preview": metadata.get("text_preview", ""),
         "preview_excerpt": metadata.get("text_preview", "")[:500],
+        "preview_length": metadata.get("text_length", 0),
+        "parse_method": metadata.get("parse_method"),
         "created_at": document.created_at.isoformat()
         if document.created_at is not None
         else None,
@@ -238,6 +240,35 @@ def get_document(session: Session, document_id: str) -> dict[str, Any] | None:
     if document is None:
         return None
     return _serialize_document(document)
+
+
+def delete_document(session: Session, document_id: str) -> dict[str, Any]:
+    document = session.get(RAGDocumentRecord, document_id)
+    if document is None:
+        raise KeyError(document_id)
+
+    metadata = dict(document.metadata_json or {})
+    storage_path_raw = str(metadata.get("storage_path") or "").strip()
+    storage_deleted = False
+    if storage_path_raw:
+        storage_path = Path(storage_path_raw)
+        if storage_path.exists():
+            storage_path.unlink()
+            storage_deleted = True
+
+    collection = session.get(RAGCollectionRecord, document.collection_id)
+    now = datetime.now(timezone.utc)
+    if collection is not None:
+        collection.updated_at = now
+    response = {
+        "document_id": document.id,
+        "collection_id": document.collection_id,
+        "deleted": True,
+        "storage_deleted": storage_deleted,
+    }
+    session.delete(document)
+    session.commit()
+    return response
 
 
 def preview_collection_retrieval(

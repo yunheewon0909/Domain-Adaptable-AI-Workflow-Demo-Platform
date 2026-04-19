@@ -3789,10 +3789,12 @@ function renderRagDocuments() {
       <button type="button" class="list-card${document.id === state.rag.selectedDocumentId ? ' active' : ''}" data-rag-document-id="${escapeHtml(document.id)}">
         <div class="inline-meta">
           ${renderStatusBadge(document.status || 'uploaded')}
+          ${renderBadge(document.source_type || 'source n/a')}
           ${renderBadge(document.mime_type || 'mime n/a')}
         </div>
         <h3>${escapeHtml(document.filename || document.id)}</h3>
-        <p class="meta-line">${escapeHtml(document.id)} · ${escapeHtml(document.source_type || 'unknown source')}</p>
+        <p class="meta-line">${escapeHtml(document.id)} · created ${escapeHtml(formatDateTime(document.created_at) || 'n/a')}</p>
+        <p class="meta-line">Preview length: ${escapeHtml(String(document.preview_length ?? 0))}</p>
         ${document.preview_excerpt ? `<p class="meta-line">${escapeHtml(document.preview_excerpt)}</p>` : ''}
       </button>
     `)
@@ -3820,13 +3822,34 @@ function renderRagDocumentDetail() {
       { label: 'Document ID', value: document.id },
       { label: 'Collection ID', value: document.collection_id },
       { label: 'Filename', value: document.filename },
+      { label: 'MIME type', value: document.mime_type || '—' },
+      { label: 'Status', value: document.status || '—' },
+      { label: 'Source type', value: document.source_type || '—' },
       { label: 'Checksum', value: document.checksum || '—' },
+      { label: 'Preview length', value: document.preview_length ?? 0 },
+      { label: 'Parse method', value: document.parse_method || '—' },
       { label: 'Created', value: formatDateTime(document.created_at) },
       { label: 'Updated', value: formatDateTime(document.updated_at) },
     ])}
     ${document.preview_excerpt ? `<section class="callout success"><p class="callout-title">Preview excerpt</p><p>${escapeHtml(document.preview_excerpt)}</p></section>` : ''}
+    ${document.text_preview ? `<section class="callout"><p class="callout-title">Text preview</p><p>${escapeHtml(document.text_preview)}</p></section>` : ''}
+    <div class="button-row"><button type="button" class="secondary-button" data-rag-delete-document-id="${escapeHtml(document.id)}">Delete document</button></div>
     ${renderJsonDetails('Document metadata', document.metadata_json || {}, { summaryDetail: 'Parse, storage, and chunk preview metadata' })}
   `;
+
+  dom.rag.documentDetail.querySelectorAll('[data-rag-delete-document-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const confirmed = window.confirm(`Delete document ${document.filename || document.id}?`);
+      if (!confirmed) {
+        return;
+      }
+      try {
+        await deleteRagDocument(button.dataset.ragDeleteDocumentId);
+      } catch (error) {
+        setRagDocumentHint(error.message);
+      }
+    });
+  });
 }
 
 function renderRagPreviewResult() {
@@ -3942,6 +3965,21 @@ async function loadRagDocument(documentId) {
   renderRagDocumentDetail();
 }
 
+async function deleteRagDocument(documentId) {
+  const collection = selectedRagCollection();
+  const response = await fetchJson(`/rag-documents/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+  });
+  state.rag.retrievalPreview = null;
+  await loadRagCollection(response.collection_id || collection?.id || state.rag.selectedCollectionId, { preferredDocumentId: null });
+  state.rag.selectedDocumentId = null;
+  state.rag.selectedDocument = null;
+  renderRagDocumentDetail();
+  renderRagPreviewResult();
+  setRagDocumentHint(`Deleted document ${response.document_id}.`);
+  setRagPreviewHint('Retrieval preview was cleared after document deletion. Run it again to inspect the updated collection context.');
+}
+
 async function ensureRagInitialized({ force = false } = {}) {
   if (state.rag.hasLoadedInitialData && !force) {
     return;
@@ -3972,7 +4010,7 @@ dom.modeButtons.forEach((button) => {
       }
       if (button.dataset.mode === MODES.RAG) {
         setRagCollectionHint('RAG collections ready. Create or inspect retrieval collections here.');
-        setRagDocumentHint('Upload or review collection documents here.');
+        setRagDocumentHint('Upload, review, or delete collection-managed documents here.');
         setRagPreviewHint('Run retrieval preview to inspect grounding context before inference.');
       }
     } catch (error) {
@@ -4825,7 +4863,7 @@ async function boot() {
     setFtTrainingHint('Run preflight first before enqueueing a new runtime. Use a host worker for Apple Silicon MPS, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker worker checks, and remember smoke jobs validate adapter artifacts rather than Ollama serving readiness.');
     setModelsHint('Switch to Models mode to inspect registered models and run inference.');
     setRagCollectionHint('Switch to RAG mode to manage collections and document grounding data.');
-    setRagDocumentHint('Select a RAG collection to inspect or upload documents.');
+    setRagDocumentHint('Select a RAG collection to inspect, upload, or delete documents.');
     setRagPreviewHint('Select a RAG collection and run retrieval preview here.');
     renderInferenceResult();
     renderRagPreviewResult();

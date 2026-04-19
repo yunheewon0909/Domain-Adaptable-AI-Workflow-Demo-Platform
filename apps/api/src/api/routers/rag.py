@@ -17,6 +17,7 @@ from api.services.retrieval.service import retrieve_evidence
 from api.services.rag.collections import (
     add_collection_document,
     create_collection,
+    delete_document,
     get_collection,
     get_document,
     list_collection_documents,
@@ -184,6 +185,22 @@ def get_rag_document(document_id: str) -> dict[str, Any]:
     if document is None:
         raise HTTPException(status_code=404, detail="RAG document not found")
     return document
+
+
+@router.delete("/rag-documents/{document_id}")
+def delete_rag_document(document_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return delete_document(session, document_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG document not found"
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to delete stored document content: {exc}",
+            ) from exc
 
 
 @router.post("/rag-retrieval/preview")
