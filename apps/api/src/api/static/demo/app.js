@@ -3853,7 +3853,7 @@ dom.modeButtons.forEach((button) => {
       if (button.dataset.mode === MODES.FT) {
         setFtDatasetHint('Fine-tuning datasets ready. Create or inspect a dataset version here.');
         setFtVersionHint('Review row validity, apply status transitions, and prepare the selected version for training.');
-        setFtTrainingHint('Run preflight first before enqueueing a new runtime. Use a host worker for Apple Silicon MPS, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker worker checks, and treat smoke jobs as artifact-only review flows rather than Ollama publishing.');
+        setFtTrainingHint('Run preflight first before enqueueing a new runtime. Docker demo defaults are CPU-friendly for tiny smoke tests, a host worker is still recommended for Apple Silicon MPS validation, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker worker checks, and treat smoke jobs as artifact-only review flows rather than Ollama publishing.');
         return;
       }
       if (button.dataset.mode === MODES.MODELS) {

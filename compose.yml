@@ -35,6 +35,15 @@ services:
       OLLAMA_TIMEOUT_SECONDS: "120"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
+      TRAINING_DEVICE: cpu
+      TRAINING_ALLOW_CPU: "true"
+      MODEL_ARTIFACT_DIR: /workspace/data/model_artifacts
+      FT_MAX_SEQ_LENGTH: "256"
+      FT_DEFAULT_TRAINING_METHOD: sft_lora
+      FT_TRAINER_BACKEND: local_peft
+      FT_TRAINER_MODEL_MAP_JSON: '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+      OLLAMA_PUBLISH_ENABLED: "false"
+      OLLAMA_MODEL_NAMESPACE: demo
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-api
       UV_CACHE_DIR: /tmp/uv-cache
     depends_on:
@@ -82,6 +91,15 @@ services:
       OLLAMA_TIMEOUT_SECONDS: "120"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
+      TRAINING_DEVICE: cpu
+      TRAINING_ALLOW_CPU: "true"
+      MODEL_ARTIFACT_DIR: /workspace/data/model_artifacts
+      FT_MAX_SEQ_LENGTH: "256"
+      FT_DEFAULT_TRAINING_METHOD: sft_lora
+      FT_TRAINER_BACKEND: local_peft
+      FT_TRAINER_MODEL_MAP_JSON: '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+      OLLAMA_PUBLISH_ENABLED: "false"
+      OLLAMA_MODEL_NAMESPACE: demo
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-worker
       UV_CACHE_DIR: /tmp/uv-cache
     depends_on:

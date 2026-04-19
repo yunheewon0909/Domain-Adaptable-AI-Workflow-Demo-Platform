@@ -261,6 +261,20 @@ def test_preflight_output_uses_tagged_lines() -> None:
     assert "[fail] Python dependencies: missing torch" in formatted
 
 
+def test_docker_demo_defaults_are_documented_in_compose_and_env_example() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    compose_text = (project_root / "compose.yml").read_text(encoding="utf-8")
+    env_example_text = (project_root / ".env.example").read_text(encoding="utf-8")
+
+    assert "TRAINING_DEVICE: cpu" in compose_text
+    assert 'TRAINING_ALLOW_CPU: "true"' in compose_text
+    assert 'FT_MAX_SEQ_LENGTH: "256"' in compose_text
+    assert "MODEL_ARTIFACT_DIR: /workspace/data/model_artifacts" in compose_text
+    assert 'OLLAMA_PUBLISH_ENABLED: "false"' in compose_text
+    assert "Docker CPU smoke profile" in env_example_text
+    assert "Host Apple Silicon MPS profile" in env_example_text
+
+
 def test_preflight_fails_for_unsupported_backend(tmp_path: Path) -> None:
     config = _config(
         tmp_path,

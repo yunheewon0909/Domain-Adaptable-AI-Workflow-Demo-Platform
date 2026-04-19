@@ -27,9 +27,12 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert "Enqueue smoke training" in text
     assert "Run preflight first" in text
     assert "Runtime preflight" in text
+    assert "Docker demo defaults are CPU-friendly for tiny smoke tests" in text
     assert "Host worker recommended for Apple Silicon MPS" in text
     assert "Docker worker is not macOS MPS-capable" in text
-    assert "CPU fallback must be explicitly enabled" in text
+    assert (
+        "Do not treat CPU smoke defaults as guidance for large-model training" in text
+    )
     assert "./scripts/ft_smoke_preflight.sh --worker-runtime host" in text
     assert "./scripts/ft_smoke_preflight.sh --worker-runtime docker" in text
     assert "./scripts/ft_smoke_test.sh" in text
@@ -78,6 +81,7 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "Review in Models" in text
     assert "review-only handoff" in text
     assert "Run preflight first before enqueueing a new runtime" in text
+    assert "Docker demo defaults are CPU-friendly for tiny smoke tests" in text
     assert (
         "use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker checks"
         in text

@@ -508,14 +508,15 @@
               <button id="ft-enqueue-smoke-training-button" type="button" class="secondary-button">Enqueue smoke training</button>
             </div>
           </div>
-          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
+          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Docker demo defaults are CPU-friendly for tiny smoke tests, while a host worker is still recommended for Apple Silicon MPS validation. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
           <div class="smoke-guide-grid">
             <section class="callout warning">
               <p class="callout-title">Runtime preflight</p>
               <div class="smoke-guide-stack">
-                <p>Run preflight first. Host worker recommended for Apple Silicon MPS.</p>
+                <p>Run preflight first. Docker demo defaults are CPU-friendly for tiny smoke tests.</p>
+                <p>Host worker recommended for Apple Silicon MPS validation.</p>
                 <p>Docker worker is not macOS MPS-capable.</p>
-                <p>CPU fallback must be explicitly enabled.</p>
+                <p>Do not treat CPU smoke defaults as guidance for large-model training.</p>
                 <div class="smoke-guide-command-list">
                   <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime host</pre>
                   <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime docker</pre>
