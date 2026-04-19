@@ -107,6 +107,29 @@ services:
         condition: service_healthy
     command: ["uv", "run", "python", "-m", "worker.main"]
 
+  rag_ingest:
+    image: ghcr.io/astral-sh/uv:python3.11-bookworm
+    working_dir: /workspace/apps/api
+    profiles: ["ops"]
+    volumes:
+      - ./:/workspace
+      - uv-venv-api:/tmp/uv-venv-api
+    environment:
+      RAG_SOURCE_DIR: /workspace/data/sample_docs
+      RAG_INDEX_DIR: /workspace/data/rag_index
+      RAG_DB_PATH: /workspace/data/rag_index/rag.db
+      OLLAMA_EMBED_BASE_URL: http://ollama:11434/v1
+      OLLAMA_EMBED_MODEL: nomic-embed-text
+      OLLAMA_TIMEOUT_SECONDS: "120"
+      RAG_EXPECTED_EMBED_DIM: "768"
+      RAG_VERIFY_SAMPLE_QUERY: maintenance automation
+      UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-api
+      UV_CACHE_DIR: /tmp/uv-cache
+    depends_on:
+      ollama:
+        condition: service_started
+    command: ["uv", "run", "rag-ingest"]
+
 volumes:
   postgres-data:
   uv-venv-api:

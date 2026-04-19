@@ -271,6 +271,7 @@ def test_docker_demo_defaults_are_documented_in_compose_and_env_example() -> Non
     assert 'FT_MAX_SEQ_LENGTH: "256"' in compose_text
     assert "MODEL_ARTIFACT_DIR: /workspace/data/model_artifacts" in compose_text
     assert 'OLLAMA_PUBLISH_ENABLED: "false"' in compose_text
+    assert "rag_ingest:" in compose_text
     assert "Docker CPU smoke profile" in env_example_text
     assert "Host Apple Silicon MPS profile" in env_example_text
 
