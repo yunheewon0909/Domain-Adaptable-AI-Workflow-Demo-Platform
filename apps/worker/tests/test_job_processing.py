@@ -404,7 +404,7 @@ def test_run_job_subprocess_uses_workspace_root_from_api_project_dir(
     assert command[2] == "--project"
     assert command[3] == str(api_project_dir)
     assert env["WORKER_API_PROJECT_DIR"] == str(api_project_dir)
-    assert captured["timeout"] == 135
+    assert captured["timeout"] == 255
 
 
 def test_worker_claims_and_processes_workflow_run_job_with_evidence(tmp_path) -> None:
@@ -535,6 +535,36 @@ def test_run_job_subprocess_sets_workflow_timeout(monkeypatch, tmp_path) -> None
 
     def fake_run(command, **kwargs):
         captured["command"] = command
+        captured["kwargs"] = kwargs
+        return _Completed()
+
+    monkeypatch.setattr("worker.main.subprocess.run", fake_run)
+
+    result = _run_job_subprocess("workflow_run", {"prompt": "hello"})
+
+    assert result == {"ok": True}
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["timeout"] == 255
+
+
+def test_run_job_subprocess_uses_single_model_timeout_when_fallback_matches_default(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("WORKER_API_PROJECT_DIR", str(tmp_path / "apps" / "api"))
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+    monkeypatch.setenv("OLLAMA_FALLBACK_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = '{"ok": true}\n'
+            self.stderr = ""
+
+    def fake_run(command, **kwargs):
         captured["kwargs"] = kwargs
         return _Completed()
 

@@ -61,8 +61,19 @@ def _get_default_max_attempts() -> int:
 
 
 def _get_workflow_run_timeout_seconds() -> int:
+    override = os.getenv("WORKFLOW_RUN_TIMEOUT_SECONDS")
+    if override is not None:
+        return max(60, int(float(override)))
+
     ollama_timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
-    return max(60, int(ollama_timeout) + 15)
+    primary_model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M").strip()
+    fallback_model = os.getenv(
+        "OLLAMA_FALLBACK_MODEL", "qwen2.5:3b-instruct-q4_K_M"
+    ).strip()
+    candidate_count = 1
+    if fallback_model and fallback_model != primary_model:
+        candidate_count += 1
+    return max(60, int(ollama_timeout * candidate_count) + 15)
 
 
 def _get_retry_base_seconds() -> float:
@@ -331,21 +342,46 @@ def _sync_ft_training_job_status(
             SET status = CAST(:status AS VARCHAR),
                 started_at = CASE
                     WHEN CAST(:status AS VARCHAR) = 'queued' THEN NULL
+                    WHEN started_at IS NULL THEN CURRENT_TIMESTAMP
                     ELSE started_at
                 END,
                 finished_at = CASE
                     WHEN CAST(:status AS VARCHAR) = 'queued' THEN NULL
                     WHEN CAST(:status AS VARCHAR) IN ('succeeded', 'failed') THEN CURRENT_TIMESTAMP
                     ELSE finished_at
-                END,
-                log_text = CASE
-                    WHEN :error_message IS NOT NULL THEN COALESCE(log_text, '') || CASE WHEN COALESCE(log_text, '') = '' THEN '' ELSE '\n' END || :error_message
-                    ELSE log_text
                 END
             WHERE CAST(backing_job_id AS TEXT) = CAST(:job_id AS TEXT)
             """
         ),
-        {"job_id": job_id, "status": status, "error_message": error_message},
+        {"job_id": job_id, "status": status},
+    )
+    if error_message is None:
+        return
+
+    current_log = connection.execute(
+        text(
+            """
+            SELECT log_text
+            FROM ft_training_jobs
+            WHERE CAST(backing_job_id AS TEXT) = CAST(:job_id AS TEXT)
+            """
+        ),
+        {"job_id": job_id},
+    ).scalar_one_or_none()
+    next_log = (
+        f"{current_log}\n{error_message}"
+        if isinstance(current_log, str) and current_log.strip()
+        else error_message
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE ft_training_jobs
+            SET log_text = :log_text
+            WHERE CAST(backing_job_id AS TEXT) = CAST(:job_id AS TEXT)
+            """
+        ),
+        {"job_id": job_id, "log_text": next_log},
     )
 
 
@@ -429,6 +465,7 @@ def _build_subprocess_env(api_project_dir: str) -> dict[str, str]:
         "OLLAMA_BASE_URL",
         "OLLAMA_MODEL",
         "OLLAMA_FALLBACK_MODEL",
+        "WORKFLOW_RUN_TIMEOUT_SECONDS",
         "OLLAMA_EMBED_BASE_URL",
         "OLLAMA_EMBED_MODEL",
         "OLLAMA_TIMEOUT_SECONDS",

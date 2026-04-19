@@ -81,6 +81,7 @@ def create_plc_run(
         error_count=0,
     )
     session.add(run)
+    session.flush()
     session.add_all(
         [
             PLCTestRunItemRecord(

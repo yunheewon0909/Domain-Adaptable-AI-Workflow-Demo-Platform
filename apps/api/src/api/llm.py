@@ -52,6 +52,7 @@ class OllamaChatClient:
         temperature: float = 0,
         max_tokens: int | None = None,
     ) -> ChatResult:
+        last_error: Exception | None = None
         for candidate_model, used_fallback in self._model_candidates(model):
             try:
                 content = self._chat_completion(
@@ -62,6 +63,7 @@ class OllamaChatClient:
                     max_tokens=max_tokens,
                 )
             except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
                 if used_fallback:
                     raise LLMClientError(str(exc)) from exc
                 continue
@@ -70,6 +72,8 @@ class OllamaChatClient:
                 answer=content, model=candidate_model, used_fallback=used_fallback
             )
 
+        if last_error is not None:
+            raise LLMClientError(str(last_error)) from last_error
         raise LLMClientError("No model candidates configured")
 
     def _model_candidates(
