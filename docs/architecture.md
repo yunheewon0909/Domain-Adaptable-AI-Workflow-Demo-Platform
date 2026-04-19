@@ -103,6 +103,20 @@ For local Mac verification, the intended target is a **small-model smoke test**:
 - validate the pipeline by checking job success, adapter output, report/log files, and the resulting `artifact_ready` registry row
 - do not treat that smoke path as evidence that large-model training is practical on a MacBook Air-class machine
 
+The critical runtime boundary is the worker subprocess:
+
+- the API can run on the host or in Docker, but the training-device check happens where the worker launches `api.services.model_registry.job_runner`
+- a host-run worker can validate Apple Silicon `mps`
+- a standard Docker Linux worker should be treated as a non-MPS runtime even when the Docker host itself is an Apple Silicon Mac
+- mixed topology is therefore valid: Docker-hosted API plus host-run worker is the practical smoke-test path for Apple Silicon `mps`
+
+The new `scripts/ft_smoke_preflight.sh` entrypoint is intentionally topology-aware:
+
+- it checks `GET /health`
+- it reports whether you are validating a host or Docker worker path
+- it verifies the local Python dependency stack, device visibility, artifact-directory writability, and trainer-model-map configuration for the runtime being inspected
+- it warns that the tiny Hugging Face smoke model may need network access on the first run if it is not already cached
+
 ## PLC Flow
 
 1. User uploads CSV/XLSX suite

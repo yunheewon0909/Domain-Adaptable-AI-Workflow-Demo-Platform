@@ -29,7 +29,8 @@ Fine-tuning smoke test helper
 
 Prerequisites:
 - API and worker must already be running.
-- Recommended on Apple Silicon: TRAINING_DEVICE=mps
+- Run ./scripts/ft_smoke_preflight.sh first so the worker runtime/device path is clear.
+- Recommended on Apple Silicon: TRAINING_DEVICE=mps with a host worker runtime
 - CPU smoke tests stay opt-in: TRAINING_ALLOW_CPU=true
 - This flow validates adapter/report/registry output only. It does not create an Ollama serving model.
 

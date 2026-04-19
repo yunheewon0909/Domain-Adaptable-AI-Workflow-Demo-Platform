@@ -2,6 +2,24 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.3] - 2026-04-19
+
+### Added
+
+- added `scripts/ft_smoke_preflight.sh` plus a testable Python preflight helper for local fine-tuning smoke validation
+- preflight output now distinguishes API health, worker-runtime topology, dependency imports, device visibility, artifact-directory writability, and tiny-model download expectations with `[ok]`, `[warn]`, and `[fail]` statuses
+
+### Changed
+
+- README, architecture docs, and `.env.example` now describe the real runtime boundary more explicitly: the worker subprocess decides whether Apple Silicon `mps`, CUDA, or CPU fallback are actually valid
+- smoke-test documentation now separates Docker stack validation from the mixed Docker API + host worker path that is required for truthful Apple Silicon `mps` smoke checks
+- `scripts/ft_smoke_test.sh` now points users at the new preflight step before enqueueing a smoke job
+
+### Notes
+
+- Docker Linux workers should not be described as MPS-capable
+- successful smoke runs still end at validated adapter/report/manifest artifacts and `artifact_ready` / `publish_ready` registry state, not serving readiness
+
 ## [0.7.2] - 2026-04-19
 
 ### Added

@@ -4,7 +4,7 @@
 
 This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review. The Models cards now expose explicit Review details and Use for inference actions, and the in-panel inference summary is clearer.
 
-The current milestone is best understood as **v0.7.2: a reviewer-first guided smoke-training UX hardening pass for the real local SFT + LoRA training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
+The current milestone is best understood as **v0.7.3: a runtime-validation and troubleshooting hardening pass for the real local SFT + LoRA smoke-training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
 
 The key message of the repo is now threefold:
 
@@ -126,10 +126,17 @@ Recommended environment:
 - only enable `TRAINING_ALLOW_CPU=true` for a tiny fallback smoke run
 - map a serving lineage to a tiny trainer model through `FT_TRAINER_MODEL_MAP_JSON`
 
+Important runtime boundary:
+
+- the **worker runtime** is where the training subprocess actually runs, so that is the environment that must satisfy `torch`, `transformers`, `peft`, `datasets`, `accelerate`, artifact-directory permissions, and device checks
+- a **Docker-hosted API** can still work with a **host-run worker**; in that mixed setup, the host worker is the place where Apple Silicon `mps` validation matters
+- a standard **Docker Linux worker** should be treated as a non-MPS path even on an Apple Silicon Mac
+
 Included helper assets:
 
 - sample dataset: `examples/ft_smoke_instruction_dataset.jsonl`
 - helper script: `scripts/ft_smoke_test.sh`
+- preflight checker: `scripts/ft_smoke_preflight.sh`
 
 Smoke hyperparameter preset:
 
@@ -157,6 +164,68 @@ Rough expectations for a local smoke test:
 - `training_report.json` exists
 - `/models` shows a fine-tuned row with `artifact_ready` / `publish_ready`
 - artifact-only rows stay reviewable, but inference remains blocked until a serving-ready selectable model exists
+
+## Fine-tuning smoke runtime validation paths
+
+### 1. Docker stack validation
+
+Use this path to confirm that the queue-backed API/worker wiring is alive:
+
+```bash
+docker compose up -d postgres api worker
+./scripts/ft_smoke_preflight.sh --worker-runtime docker
+```
+
+This validates the Docker stack shape, but it does **not** turn a Docker Linux worker into an Apple Silicon MPS runtime.
+
+### 2. Mixed Docker API + host worker validation
+
+Use this path for Apple Silicon smoke runs where the API is reachable through Docker but the training subprocess needs to run on the host:
+
+```bash
+docker compose up -d postgres api
+
+export WORKER_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
+export WORKER_ID=worker-local
+export WORKER_HEARTBEAT_SECONDS=30
+export WORKER_POLL_SECONDS=5
+export JOB_MAX_ATTEMPTS=3
+export WORKER_API_PROJECT_DIR="$(pwd)/apps/api"
+export TRAINING_DEVICE=mps
+export TRAINING_ALLOW_CPU=false
+export MODEL_ARTIFACT_DIR="$(pwd)/data/model_artifacts"
+export FT_DEFAULT_TRAINING_METHOD=sft_lora
+export FT_TRAINER_BACKEND=local_peft
+export FT_MAX_SEQ_LENGTH=1024
+export FT_TRAINER_MODEL_MAP_JSON='{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+export OLLAMA_PUBLISH_ENABLED=false
+export OLLAMA_MODEL_NAMESPACE=demo
+
+./scripts/ft_smoke_preflight.sh --worker-runtime host
+uv run --project apps/worker python -m worker.main
+```
+
+Once the preflight is clean and the worker is running, enqueue the smoke flow with:
+
+```bash
+./scripts/ft_smoke_test.sh
+```
+
+### 3. Full host-run validation
+
+Use the existing host-only API and worker instructions below when you want both services to run outside Docker. Run the preflight before enqueueing the smoke job:
+
+```bash
+./scripts/ft_smoke_preflight.sh --worker-runtime host
+```
+
+## Fine-tuning smoke troubleshooting
+
+- `GET /health` fails: the API is not reachable yet, so smoke enqueueing will fail before any worker/device logic matters
+- `TRAINING_DEVICE=mps` fails in preflight: MPS must be validated from a host worker runtime, and `torch.backends.mps.is_available()` must be true in that host Python
+- dependency import failures: install the training stack in the runtime that will execute the worker subprocess, not just in the shell where you happen to run curl
+- artifact directory write failures: fix `MODEL_ARTIFACT_DIR` before enqueueing, because the smoke flow writes dataset exports, adapter artifacts, reports, logs, and publish manifests there
+- tiny model download failures: the first run may need network access to resolve `hf-internal/testing-tiny-random-gpt2` if it is not already cached
 
 ### Smoke-test guide in `/demo`
 
@@ -733,6 +802,7 @@ Training environment defaults are documented in `.env.example`. The most importa
 Quick local smoke-test sequence:
 
 ```bash
+./scripts/ft_smoke_preflight.sh
 ./scripts/ft_smoke_test.sh
 curl -sS http://127.0.0.1:8000/ft-training-jobs/<job_id>
 curl -sS http://127.0.0.1:8000/models
@@ -780,5 +850,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.7.0`: real local SFT + LoRA runner, dataset export formatting, artifact-ready vs published model readiness, publish-ready serving seam, richer FT/model APIs, and reviewer/UI hardening
 - `v0.7.1`: smoke-test hardening, trainer/serving lineage clarity, adapter artifact validation, and more explicit readiness documentation
 - `v0.7.2`: guided smoke training in `/demo`, FT lifecycle polling, clearer artifact/error emphasis, and review-only Models handoff after successful fine-tuning smoke runs
+- `v0.7.3`: topology-aware smoke preflight checks, host-worker Apple Silicon MPS guidance, and clearer Docker-versus-host troubleshooting for local fine-tuning validation
 
 See `CHANGELOG.md` for the current milestone notes.
