@@ -2,6 +2,23 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.4] - 2026-04-19
+
+### Added
+
+- deterministic `apps/api/tests/test_ft_smoke_preflight.py` coverage for API health failures, missing dependencies, MPS topology and availability checks, CPU fallback policy, auto-device resolution, artifact-directory failures, and empty trainer-model-map warnings
+
+### Changed
+
+- `/demo` Fine-tuning smoke guide now surfaces runtime preflight commands and concise worker-boundary warnings before the reviewer queues a smoke run
+- Fine-tuning helper hints now point users at host-worker Apple Silicon MPS validation, `--worker-runtime docker` checks for Docker workers, explicit CPU fallback opt-in, and the artifact-only boundary of smoke jobs
+- README and architecture docs now describe the `/demo` runtime-preflight guidance and the deterministic preflight-test coverage alongside the existing host-vs-docker runtime boundary notes
+
+### Notes
+
+- Docker workers remain non-MPS paths even on Apple Silicon hosts
+- smoke jobs still validate adapter artifacts and review-only registry state rather than Ollama serving readiness
+
 ## [0.7.3] - 2026-04-19
 
 ### Added

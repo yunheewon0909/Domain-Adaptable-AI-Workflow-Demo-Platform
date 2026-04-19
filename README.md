@@ -4,7 +4,7 @@
 
 This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, and separate RAG collection/document review. The Models cards now expose explicit Review details and Use for inference actions, and the in-panel inference summary is clearer.
 
-The current milestone is best understood as **v0.7.3: a runtime-validation and troubleshooting hardening pass for the real local SFT + LoRA smoke-training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
+The current milestone is best understood as **v0.7.4: a runtime-preflight UX and test-hardening pass for the real local SFT + LoRA smoke-training path**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, runtime-aware preflight guidance in the same reviewer surface, and separate RAG data operations, while keeping artifact-only rows reviewable and not inference-selectable.
 
 The key message of the repo is now threefold:
 
@@ -137,6 +137,7 @@ Included helper assets:
 - sample dataset: `examples/ft_smoke_instruction_dataset.jsonl`
 - helper script: `scripts/ft_smoke_test.sh`
 - preflight checker: `scripts/ft_smoke_preflight.sh` (runs through the target worker runtime: host `uv --project apps/api` for host checks, worker-container execution for `--worker-runtime docker`)
+- `/demo` smoke guide: now surfaces the same host-vs-docker preflight commands plus short runtime-boundary warnings before the reviewer queues a smoke job
 
 Smoke hyperparameter preset:
 
@@ -178,6 +179,7 @@ docker compose up -d postgres api worker
 
 This validates the Docker stack shape, but it does **not** turn a Docker Linux worker into an Apple Silicon MPS runtime.
 The preflight command above executes inside the worker container so dependency and device checks reflect the Docker worker runtime instead of the caller shell.
+`API_BASE_URL` defaults to `http://api:8000` for this Docker path unless you override it explicitly.
 
 ### 2. Mixed Docker API + host worker validation
 
@@ -220,6 +222,8 @@ Use the existing host-only API and worker instructions below when you want both 
 ./scripts/ft_smoke_preflight.sh --worker-runtime host
 ```
 
+For the host path, `API_BASE_URL` defaults to `http://127.0.0.1:8000` unless you override it explicitly.
+
 ## Fine-tuning smoke troubleshooting
 
 - `GET /health` fails: the API is not reachable yet, so smoke enqueueing will fail before any worker/device logic matters
@@ -231,7 +235,9 @@ Use the existing host-only API and worker instructions below when you want both 
 
 ### Smoke-test guide in `/demo`
 
-The Fine-tuning page can now stage the smoke dataset, create the version, add rows, move the version through validated and locked, enqueue the smoke job with preset defaults, auto-select and poll the active training job through its backend phases, and hand the resulting artifact over to Models through a review-only CTA. That keeps the demo flow truthful, because it uses the same existing endpoints documented below instead of a fake import path or a separate backend shortcut.
+The Fine-tuning page can now stage the smoke dataset, create the version, add rows, move the version through validated and locked, enqueue the smoke job with preset defaults, auto-select and poll the active training job through its backend phases, and hand the resulting artifact over to Models through a review-only CTA. The same panel now also surfaces runtime-preflight commands and short boundary warnings so the reviewer sees host-worker Apple Silicon MPS guidance, Docker worker non-MPS guidance, and CPU fallback opt-in copy before enqueueing. That keeps the demo flow truthful, because it uses the same existing endpoints documented below instead of a fake import path or a separate backend shortcut.
+
+The preflight helper itself now has deterministic unit-test coverage for API health failures, missing Python dependencies, MPS topology and availability checks, CPU fallback policy, auto-device resolution, artifact-directory writability, and empty trainer-model-map warnings.
 
 ## When can inference use a fine-tuned model?
 
@@ -853,5 +859,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.7.1`: smoke-test hardening, trainer/serving lineage clarity, adapter artifact validation, and more explicit readiness documentation
 - `v0.7.2`: guided smoke training in `/demo`, FT lifecycle polling, clearer artifact/error emphasis, and review-only Models handoff after successful fine-tuning smoke runs
 - `v0.7.3`: topology-aware smoke preflight checks, host-worker Apple Silicon MPS guidance, and clearer Docker-versus-host troubleshooting for local fine-tuning validation
+- `v0.7.4`: `/demo` runtime preflight guidance, stronger smoke-runtime boundary copy, and deterministic preflight unit-test coverage
 
 See `CHANGELOG.md` for the current milestone notes.

@@ -68,6 +68,7 @@ Important boundaries in this milestone:
 - the Models cards split Review details from Use for inference actions, and the in-panel inference summary makes artifact-only, publish-ready, and inference-selectable state explicit
 - the Fine-tuning panel can prepare a smoke dataset, version, rows, validation, and lock flow using the existing endpoints already described in the API docs, so the demo UI does not rely on a hidden import wizard or invented backend shortcut
 - the Fine-tuning panel now also supports guided smoke enqueue, auto-selection of the active FT job, phase-aware polling across backend lifecycle states, and a review-only handoff into Models after the artifact is registered
+- the Fine-tuning panel now also exposes runtime-preflight commands and short worker-boundary warnings inside the smoke guide so host-worker Apple Silicon MPS, Docker worker non-MPS behavior, and CPU fallback opt-in rules are visible before queueing the job
 - the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
 
 ## AI Ops Flow
@@ -117,6 +118,8 @@ The new `scripts/ft_smoke_preflight.sh` entrypoint is intentionally topology-awa
 - it runs through the same app/runtime boundary the worker uses: host checks run via `uv --project apps/api`, while Docker checks execute inside the worker container
 - it verifies the local Python dependency stack, device visibility, artifact-directory writability, and trainer-model-map configuration for the runtime being inspected
 - it warns that the tiny Hugging Face smoke model may need network access on the first run if it is not already cached
+
+That runtime-preflight contract is now reinforced in two places: the shell entrypoint preserves the runtime-specific execution boundary, and the `/demo` smoke guide mirrors the same host-vs-docker decision with concise reviewer-facing warnings instead of leaving the topology explanation only in the docs.
 
 ## PLC Flow
 
