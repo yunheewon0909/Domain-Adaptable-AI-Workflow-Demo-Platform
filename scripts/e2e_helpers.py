@@ -509,7 +509,11 @@ def default_ft_rows() -> list[dict[str, object]]:
 
 
 def artifact_path(path_value: object) -> Path:
-    return Path(assert_non_empty_string(path_value, "artifact path"))
+    raw_path = Path(assert_non_empty_string(path_value, "artifact path"))
+    if str(raw_path).startswith("/workspace/"):
+        relative = raw_path.relative_to("/workspace")
+        return repo_root() / relative
+    return raw_path
 
 
 def run_main(main_func: Callable[[], None]) -> None:

@@ -55,7 +55,7 @@ def main() -> None:
         json_body={
             "dataset_key": None,
             "rag_collection_id": collection_id,
-            "prompt": "이 문서를 요약해",
+            "prompt": "Summarize the workflow reviewer evidence from this platform document.",
             "k": 4,
             "model_id": model_id,
         },
@@ -99,7 +99,7 @@ def main() -> None:
         f"/workflows/{workflow_key}/jobs",
         json_body={
             "rag_collection_id": empty_collection_id,
-            "prompt": "이 문서를 요약해",
+            "prompt": "Summarize the workflow reviewer evidence from this platform document.",
             "k": 4,
             "model_id": model_id,
         },

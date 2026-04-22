@@ -47,7 +47,7 @@ wait_for_health() {
 check_service_running() {
   local service="$1"
   local status
-  status="$(docker compose -f "$ROOT_DIR/compose.yml" ps --format json "$service" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data[0].get("State","")) if data else print("")')"
+  status="$(docker compose -f "$ROOT_DIR/compose.yml" ps --format json "$service" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("State", "") if isinstance(data, dict) else (data[0].get("State", "") if data else ""))')"
   if [[ -z "$status" ]]; then
     print_fail "Service ${service} was not found in docker compose ps"
     exit 1

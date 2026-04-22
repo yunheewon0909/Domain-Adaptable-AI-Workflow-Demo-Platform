@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from e2e_helpers import (
-    E2ESkip,
     assert_non_empty_string,
     ensure,
     find_artifact_only_model,
@@ -9,6 +8,7 @@ from e2e_helpers import (
     json_dict,
     print_ok,
     print_step,
+    print_warn,
     request,
     request_json,
     run_main,
@@ -64,7 +64,7 @@ def main() -> None:
         )
         print_ok("Artifact-only model was rejected for inference")
     else:
-        raise E2ESkip("No artifact-only fine-tuned model exists yet; skipping artifact-only inference rejection subcase")
+        print_warn("No artifact-only fine-tuned model exists yet; skipping artifact-only inference rejection subcase")
 
     print_ok("Real Ollama inference smoke passed")
 

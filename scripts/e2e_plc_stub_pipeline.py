@@ -59,7 +59,13 @@ def main() -> None:
     items = json_list(request_json("GET", f"/plc-test-runs/{run_id}/items", expected_status=200), "PLC run items")
     ensure(len(items) > 0, "PLC run did not produce run items")
     sample_item = json_dict(items[0], "PLC run item payload")
-    ensure(sample_item.get("status") in {"passed", "failed", "error"}, "PLC run item had an unexpected status")
+    sample_status = str(sample_item.get("status") or "")
+    if sample_status not in {"passed", "failed", "error"}:
+        fail_message = (
+            f"PLC run reached {run.get('status')} but sample run item {sample_item.get('id')} stayed in status={sample_status!r}; "
+            "this indicates relational run-item state did not finish cleanly"
+        )
+        ensure(False, fail_message)
     ensure("actual_output_json" in sample_item, "PLC run item did not include actual_output_json")
     ensure("expected_output_json" in sample_item, "PLC run item did not include expected_output_json")
 
