@@ -2,6 +2,21 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.7] - 2026-04-22
+
+### Added
+
+- `scripts/e2e_helpers.py` plus Docker/API E2E smoke scripts for stack startup, Ollama inference, workflow execution with explicit `model_id`, collection-managed RAG workflow evidence, fine-tuning smoke validation, artifact-only model gating, RAG document CRUD refresh, PLC stub execution, and queue processing smoke
+- `scripts/e2e_run_all.sh` as a wrapper for the main runtime-validation flow
+- `docs/runtime-validation.md` as a local runbook for the new runtime-validation layer
+- a deferred Playwright happy-path skeleton at `tests/e2e/playwright/demo_happy_path.spec.ts` so the intended browser flow is recorded without claiming a configured browser runner already exists
+
+### Changed
+
+- README and architecture docs now distinguish fast `pytest` coverage from the new live Docker/API/worker/Ollama runtime-validation scripts
+- documentation now makes the selectable-model skip/fail policy explicit, including the fact that artifact-only `artifact_ready` / `publish_ready` rows remain review-only and are not valid inference/workflow targets
+- runtime-validation docs now treat a structured `RAG index is not ready` workflow result as the success condition for graceful degradation when the legacy `rag.db` path is absent
+
 ## [0.7.6] - 2026-04-20
 
 ### Added

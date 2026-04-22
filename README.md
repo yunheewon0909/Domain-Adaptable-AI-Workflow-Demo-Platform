@@ -838,6 +838,82 @@ curl -sS http://127.0.0.1:8000/ft-training-jobs/<job_id>
 curl -sS http://127.0.0.1:8000/models
 ```
 
+## Runtime E2E validation
+
+The `pytest` suites in `apps/api/tests` and `apps/worker/tests` are still the fast contract layer. They intentionally do **not** replace live runtime validation of Docker, worker subprocesses, queue polling, real Ollama-backed inference, collection-managed workflow evidence, or artifact-only model gating.
+
+For that live path, use the `scripts/e2e_*` entrypoints.
+
+### What these E2E scripts validate
+
+- Docker stack startup and core route availability
+- real `/inference/run` requests against a runtime-ready/selectable model
+- workflow job enqueueing plus `/jobs/{job_id}` polling with explicit `model_id`
+- collection-managed RAG documents used as workflow evidence
+- queue-backed fine-tuning smoke jobs and artifact-path validation
+- artifact-only model rejection for inference and workflow selection
+- RAG document CRUD plus retrieval-preview refresh
+- PLC CSV import plus stub-local run polling and result review
+
+### Prerequisites
+
+Docker/full-stack validation:
+
+```bash
+docker volume create ollama-models || true
+docker compose up -d --build
+```
+
+If Ollama is running but the serving models are missing, pull them into the running runtime:
+
+```bash
+docker compose exec -T ollama ollama pull qwen2.5:3b-instruct-q4_K_M
+docker compose exec -T ollama ollama pull qwen2.5:7b-instruct-q4_K_M
+docker compose exec -T ollama ollama pull nomic-embed-text
+```
+
+### Selectable-model policy
+
+Inference-dependent E2E scripts expect `/models` to expose at least one `readiness.selectable == true` row.
+
+- default behavior: fail if no selectable model exists
+- optional skip behavior: `E2E_ALLOW_NO_MODEL_SKIP=true`
+
+This is deliberate. Artifact-only `artifact_ready` / `publish_ready` rows are reviewable, but they are **not** runtime-ready serving models.
+
+### Recommended execution order
+
+```bash
+./scripts/e2e_docker_stack_smoke.sh
+python scripts/e2e_ollama_inference_smoke.py
+python scripts/e2e_workflow_real_model_smoke.py
+python scripts/e2e_rag_collection_workflow_smoke.py
+python scripts/e2e_ft_smoke_fallback.py
+python scripts/e2e_model_gating_smoke.py
+python scripts/e2e_rag_document_management.py
+python scripts/e2e_plc_stub_pipeline.py
+python scripts/e2e_job_queue_processing.py
+```
+
+Or run the main bundle:
+
+```bash
+./scripts/e2e_run_all.sh
+```
+
+### Skip / fail behavior
+
+- no selectable model: fail by default, optional skip with `E2E_ALLOW_NO_MODEL_SKIP=true`
+- missing legacy `rag.db`: workflow E2E treats a structured `RAG index is not ready` result as success, because the goal is graceful degradation instead of subprocess failure
+- artifact-only fine-tuned model: must stay blocked from inference/workflow selection
+- FT smoke path: validates artifact/report/registry behavior and truthful readiness, not model quality or automatic Ollama import
+
+### Browser E2E status
+
+This repository does not currently include a configured Playwright toolchain. A deferred skeleton lives at `tests/e2e/playwright/demo_happy_path.spec.ts` so the intended browser happy path is recorded without pretending that a passing browser suite already exists.
+
+For the fuller runbook and troubleshooting notes, see `docs/runtime-validation.md`.
+
 ## Reviewer UI
 
 The co-hosted `/demo` surface still stays inside the existing static shell, but it now spans both PLC review and local AI ops review:
@@ -884,5 +960,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.7.4`: `/demo` runtime preflight guidance, stronger smoke-runtime boundary copy, and deterministic preflight unit-test coverage
 - `v0.7.5`: graceful workflow RAG-index readiness guidance, Docker CPU-smoke defaults for Compose, clearer fine-tuning failure classification, and RAG document deletion/management improvements
 - `v0.7.6`: deterministic smoke fallback docs, workflow source selection across legacy and collection-managed RAG, and tighter inference readiness gating for selectable models
+- `v0.7.7`: Docker/API/worker/Ollama runtime-validation scripts for stack smoke, inference, workflow model execution, collection-managed RAG workflow evidence, artifact-only model gating, RAG document CRUD refresh, PLC stub pipeline checks, and queue hardening
 
 See `CHANGELOG.md` for the current milestone notes.

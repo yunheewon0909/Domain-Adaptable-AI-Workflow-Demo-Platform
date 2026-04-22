@@ -33,6 +33,25 @@ The `jobs` table is still the queue. Jobs move through:
 
 The worker claims queued rows from Postgres, then dispatches runner modules via subprocess. That pattern is shared by reviewer workflows, PLC runs, and the new `ft_train_model` real training path.
 
+## Runtime validation layer
+
+The repository now has two distinct verification layers:
+
+- fast deterministic coverage under `apps/api/tests` and `apps/worker/tests`
+- live runtime validation under `scripts/e2e_*`
+
+The second layer exists because the repo has failure modes that only appear when the full Docker/API/worker/Ollama/job-polling path is exercised together. That runtime layer now validates:
+
+- Docker startup and route availability
+- real model selection and `/inference/run`
+- workflow job enqueue + `/jobs/{job_id}` polling with explicit `model_id`
+- collection-managed RAG workflow evidence
+- queue-backed FT smoke jobs, artifact path materialization, and artifact-only readiness gating
+- RAG document CRUD/retrieval refresh
+- PLC CSV import plus deterministic stub run polling
+
+This keeps the architecture truthful: unit tests prove contracts and branches, while the E2E scripts prove that the running slices still cooperate through the actual queue and serving seams.
+
 ### PLC Domain Slice
 
 The PLC slice now adds:
