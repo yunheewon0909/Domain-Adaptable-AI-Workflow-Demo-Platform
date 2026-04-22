@@ -77,6 +77,7 @@ def validate_training_artifacts(
         missing.append("training.log")
 
     warnings: list[str] = []
+    smoke_fallback_used = bool(training_artifacts.metrics.get("smoke_fallback_used"))
     if training_artifacts.trainer_model_name != base_model_name:
         warnings.append(
             "Serving lineage and trainer source differ. This is acceptable for smoke tests but does not mean the serving model itself was fine-tuned."
@@ -84,6 +85,14 @@ def validate_training_artifacts(
     if merged_model_dir is None:
         warnings.append(
             "No merged serving model was exported. The local output is a PEFT adapter artifact, not an Ollama model."
+        )
+    if smoke_fallback_used:
+        warnings.extend(
+            [
+                "Smoke fallback trainer was used.",
+                "This validates dataset/export/artifact/registry flow, not model quality.",
+                "Use host MPS/local_peft path for real trainer validation.",
+            ]
         )
 
     return {
@@ -94,6 +103,7 @@ def validate_training_artifacts(
         "trainer_backend": training_artifacts.trainer_backend,
         "device": training_artifacts.device,
         "smoke_test": smoke_test,
+        "smoke_fallback_used": smoke_fallback_used,
         "missing": missing,
         "warnings": warnings,
         "checks": checks,

@@ -19,7 +19,10 @@ from api.models import (
     ModelRegistryRecord,
     RAGDocumentRecord,
 )
-from api.services.fine_tuning.trainer import TrainingArtifacts
+from api.services.fine_tuning.trainer import (
+    DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME,
+    TrainingArtifacts,
+)
 from api.services.model_registry.service import complete_training_job
 
 
@@ -71,6 +74,38 @@ def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
         trainer_model_name="hf-internal/testing-tiny-random-gpt2",
         device="cpu",
     )
+
+
+def _create_locked_ft_version(client: TestClient, *, dataset_name: str) -> str:
+    dataset_id = client.post(
+        "/ft-datasets",
+        json={
+            "name": dataset_name,
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+        },
+    ).json()["id"]
+    version_id = client.post(
+        f"/ft-datasets/{dataset_id}/versions",
+        json={"version_label": "v1"},
+    ).json()["id"]
+    client.post(
+        f"/ft-dataset-versions/{version_id}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {"instruction": "summarize", "input": "alpha"},
+                    "target_json": {"output": "beta"},
+                }
+            ]
+        },
+    )
+    client.post(
+        f"/ft-dataset-versions/{version_id}/status", json={"status": "validated"}
+    )
+    client.post(f"/ft-dataset-versions/{version_id}/status", json={"status": "locked"})
+    return version_id
 
 
 def test_ft_dataset_version_and_rows_flow(client: TestClient) -> None:
@@ -477,6 +512,128 @@ def test_publish_disabled_returns_truthful_artifact_ready_status(
         publish_response.json()["candidate_published_model_name"]
         == f"demo/{training_job_id}"
     )
+
+
+def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
+    monkeypatch.setenv("FT_ALLOW_SMOKE_FALLBACK", "true")
+    monkeypatch.setenv("FT_SMOKE_FALLBACK_BACKEND", "deterministic_smoke")
+    get_settings.cache_clear()
+
+    hf_error = (
+        "RepositoryNotFoundError: 404 Client Error while resolving model files from "
+        "https://huggingface.co/hf-internal/testing-tiny-random-gpt2 via from_pretrained"
+    )
+
+    monkeypatch.setattr(
+        "api.services.fine_tuning.trainer._require_training_dependencies",
+        lambda: None,
+    )
+
+    def _raise_hf_resolution_failure(*args, **kwargs):
+        raise RuntimeError(hf_error)
+
+    monkeypatch.setattr(
+        "api.services.fine_tuning.trainer._run_local_peft_training",
+        _raise_hf_resolution_failure,
+    )
+
+    version_id = _create_locked_ft_version(
+        client, dataset_name="Smoke fallback success demo"
+    )
+    training_job_id = client.post(
+        "/ft-training-jobs",
+        json={
+            "dataset_version_id": version_id,
+            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "training_method": "sft_lora",
+            "hyperparams_json": {
+                "smoke_test": True,
+                "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
+            },
+        },
+    ).json()["id"]
+
+    with Session(get_engine()) as session:
+        result = complete_training_job(session, training_job_id=training_job_id)
+
+    assert result["status"] == "succeeded"
+    assert result["trainer_backend"] == "local_peft+smoke_fallback"
+    assert result["trainer_model_name"] == DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME
+    assert result["artifact_validation"]["artifact_valid"] is True
+    assert result["artifact_validation"]["smoke_fallback_used"] is True
+    assert "Smoke fallback trainer was used." in result["artifact_validation"]["warnings"]
+    assert (
+        "This validates dataset/export/artifact/registry flow, not model quality."
+        in result["artifact_validation"]["warnings"]
+    )
+    assert (
+        "Use host MPS/local_peft path for real trainer validation."
+        in result["artifact_validation"]["warnings"]
+    )
+    assert len(result["registered_models"]) == 1
+    registered_model = result["registered_models"][0]
+    assert registered_model["status"] == "artifact_ready"
+    assert registered_model["publish_status"] == "publish_ready"
+    assert registered_model["trainer_backend"] == "local_peft+smoke_fallback"
+    assert registered_model["trainer_model_name"] == DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME
+    assert registered_model["readiness"]["selectable"] is False
+    assert registered_model["serving_model_name"] is None
+
+
+def test_hf_resolution_failure_stays_classified_when_smoke_fallback_is_disabled(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
+    monkeypatch.setenv("FT_ALLOW_SMOKE_FALLBACK", "false")
+    get_settings.cache_clear()
+
+    hf_error = (
+        "RepositoryNotFoundError: 404 Client Error while resolving model files from "
+        "https://huggingface.co/hf-internal/testing-tiny-random-gpt2 via from_pretrained"
+    )
+
+    monkeypatch.setattr(
+        "api.services.fine_tuning.trainer._require_training_dependencies",
+        lambda: None,
+    )
+
+    def _raise_hf_resolution_failure(*args, **kwargs):
+        raise RuntimeError(hf_error)
+
+    monkeypatch.setattr(
+        "api.services.fine_tuning.trainer._run_local_peft_training",
+        _raise_hf_resolution_failure,
+    )
+
+    version_id = _create_locked_ft_version(
+        client, dataset_name="Smoke fallback disabled demo"
+    )
+    training_job_id = client.post(
+        "/ft-training-jobs",
+        json={
+            "dataset_version_id": version_id,
+            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "training_method": "sft_lora",
+            "hyperparams_json": {
+                "smoke_test": True,
+                "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
+            },
+        },
+    ).json()["id"]
+
+    with Session(get_engine()) as session:
+        with pytest.raises(RuntimeError, match="RepositoryNotFoundError"):
+            complete_training_job(session, training_job_id=training_job_id)
+
+    detail_response = client.get(f"/ft-training-jobs/{training_job_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "failed"
+    assert detail_response.json()["error_json"]["phase"] == "training"
+    assert detail_response.json()["error_json"]["category"] == "hf_model_download_failure"
+    assert detail_response.json()["registered_models"] == []
 
 
 def test_rag_collection_document_and_preview_flow(client: TestClient) -> None:

@@ -59,6 +59,8 @@ class Settings:
     ft_max_seq_length: int
     ft_default_training_method: str
     ft_trainer_backend: str
+    ft_allow_smoke_fallback: bool
+    ft_smoke_fallback_backend: str
     ft_trainer_model_map_json: str
     ollama_publish_enabled: bool
     ollama_model_namespace: str | None
@@ -126,6 +128,13 @@ def get_settings() -> Settings:
         or "sft_lora",
         ft_trainer_backend=os.getenv("FT_TRAINER_BACKEND", "local_peft").strip()
         or "local_peft",
+        ft_allow_smoke_fallback=_to_bool(
+            os.getenv("FT_ALLOW_SMOKE_FALLBACK"), default=False
+        ),
+        ft_smoke_fallback_backend=os.getenv(
+            "FT_SMOKE_FALLBACK_BACKEND", "deterministic_smoke"
+        ).strip()
+        or "deterministic_smoke",
         ft_trainer_model_map_json=os.getenv("FT_TRAINER_MODEL_MAP_JSON", "{}"),
         ollama_publish_enabled=_to_bool(
             os.getenv("OLLAMA_PUBLISH_ENABLED"), default=False

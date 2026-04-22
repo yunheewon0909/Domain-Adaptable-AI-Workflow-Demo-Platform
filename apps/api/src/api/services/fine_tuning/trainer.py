@@ -10,6 +10,25 @@ from api.services.fine_tuning.dataset_formatters import DatasetExportResult
 
 
 SUPPORTED_REAL_TRAINING_METHODS = {"sft_lora"}
+SUPPORTED_TRAINER_BACKENDS = {"local_peft", "deterministic_smoke"}
+DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME = "deterministic-smoke-trainer"
+HF_MODEL_RESOLUTION_ERROR_MARKERS = (
+    "huggingface.co",
+    "huggingface",
+    "hf_hub",
+    "hfhubhttp",
+    "from_pretrained",
+    "repositorynotfounderror",
+    "revisionnotfounderror",
+    "entrynotfounderror",
+    "gatedrepoerror",
+    "401 client error",
+    "404 client error",
+    "couldn't connect to 'https://huggingface.co'",
+    "can't load tokenizer",
+    "can't load the model",
+    "is not a local folder and is not a valid model identifier",
+)
 
 
 @dataclass
@@ -86,13 +105,18 @@ def build_training_config(
         raise RuntimeError(
             f"unsupported real training method: {normalized_method}. Supported methods: {sorted(SUPPORTED_REAL_TRAINING_METHODS)}"
         )
+    trainer_backend = settings.ft_trainer_backend.strip() or "local_peft"
+    if trainer_backend not in SUPPORTED_TRAINER_BACKENDS:
+        raise RuntimeError(
+            f"unsupported trainer backend: {trainer_backend}. Supported backends: {sorted(SUPPORTED_TRAINER_BACKENDS)}"
+        )
     return TrainingConfig(
         trainer_model_name=resolve_trainer_model_name(
             base_model_name, hyperparams_json, settings
         ),
         base_model_name=base_model_name,
         training_method=normalized_method,
-        trainer_backend=settings.ft_trainer_backend,
+        trainer_backend=trainer_backend,
         epochs=float(hyperparams_json.get("epochs", 1)),
         learning_rate=float(hyperparams_json.get("learning_rate", 2e-4)),
         batch_size=max(1, int(hyperparams_json.get("batch_size", 1))),
@@ -178,11 +202,152 @@ def run_training_backend(
         hyperparams_json=hyperparams_json,
         settings=settings,
     )
+    if config.trainer_backend == "deterministic_smoke":
+        return _run_deterministic_smoke_training(
+            export_result,
+            config=config,
+            output_dir=output_dir,
+            lineage_backend="deterministic_smoke",
+        )
     if config.trainer_backend != "local_peft":
         raise RuntimeError(f"unsupported trainer backend: {config.trainer_backend}")
-    _require_training_dependencies()
-    return _run_local_peft_training(
-        export_result, config=config, settings=settings, output_dir=output_dir
+    try:
+        _require_training_dependencies()
+        return _run_local_peft_training(
+            export_result, config=config, settings=settings, output_dir=output_dir
+        )
+    except Exception as exc:
+        if not _should_use_smoke_fallback(
+            exc, hyperparams_json=hyperparams_json, settings=settings
+        ):
+            raise
+        fallback_backend = (
+            settings.ft_smoke_fallback_backend.strip() or "deterministic_smoke"
+        )
+        if fallback_backend != "deterministic_smoke":
+            raise RuntimeError(
+                f"smoke fallback failed: unsupported fallback backend: {fallback_backend}"
+            ) from exc
+        try:
+            return _run_deterministic_smoke_training(
+                export_result,
+                config=config,
+                output_dir=output_dir,
+                lineage_backend="local_peft+smoke_fallback",
+                root_cause=str(exc),
+            )
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                f"smoke fallback failed after hf_model_download_failure: {fallback_exc}"
+            ) from fallback_exc
+
+
+def is_hf_model_resolution_error(error: str | Exception) -> bool:
+    lowered = str(error).strip().lower()
+    return any(marker in lowered for marker in HF_MODEL_RESOLUTION_ERROR_MARKERS)
+
+
+def _should_use_smoke_fallback(
+    exc: Exception, *, hyperparams_json: dict[str, Any], settings: Settings
+) -> bool:
+    if not bool(hyperparams_json.get("smoke_test", False)):
+        return False
+    if not settings.ft_allow_smoke_fallback:
+        return False
+    return is_hf_model_resolution_error(exc)
+
+
+def _run_deterministic_smoke_training(
+    export_result: DatasetExportResult,
+    *,
+    config: TrainingConfig,
+    output_dir: Path,
+    lineage_backend: str,
+    root_cause: str | None = None,
+) -> TrainingArtifacts:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    adapter_dir = output_dir / "adapter"
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / "training_report.json"
+    logs_path = output_dir / "training.log"
+
+    adapter_config = {
+        "base_model_name_or_path": config.base_model_name,
+        "peft_type": "LORA",
+        "task_type": "CAUSAL_LM",
+        "r": config.lora_r,
+        "lora_alpha": config.lora_alpha,
+        "lora_dropout": config.lora_dropout,
+        "bias": "none",
+        "target_modules": ["q_proj", "v_proj"],
+        "inference_mode": True,
+        "smoke_fallback": True,
+    }
+    (adapter_dir / "adapter_config.json").write_text(
+        json.dumps(adapter_config, indent=2), encoding="utf-8"
+    )
+    (adapter_dir / "adapter_model.safetensors").write_bytes(
+        b"deterministic-smoke-adapter-placeholder\n"
+    )
+
+    metrics = {
+        "train_runtime": 0.0,
+        "train_loss": 0.0,
+        "smoke_fallback_used": True,
+        "artifact_validation_only": True,
+    }
+    evaluation = {
+        "status": "not_run",
+        "baseline_comparison": "not_implemented",
+        "artifact_validation_only": True,
+    }
+    report_payload = {
+        "config": {
+            **asdict(config),
+            "trainer_backend": lineage_backend,
+            "trainer_model_name": DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME,
+        },
+        "device": "cpu",
+        "export": export_result.format_summary,
+        "metrics": metrics,
+        "evaluation": evaluation,
+        "artifacts": {
+            "adapter_dir": str(adapter_dir),
+            "merged_model_dir": None,
+        },
+        "smoke_fallback": {
+            "used": True,
+            "message": "Smoke fallback trainer was used",
+            "quality_note": "This validates dataset/export/artifact/registry flow, not model quality",
+            "runtime_note": "Use host MPS/local_peft path for real trainer validation",
+            "root_cause": root_cause,
+        },
+    }
+    report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+    log_lines = [
+        f"trainer_backend={lineage_backend}",
+        f"trainer_model_name={DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME}",
+        "device=cpu",
+        f"training_method={config.training_method}",
+        "smoke_fallback_used=true",
+        "Smoke fallback trainer was used",
+        "This validates dataset/export/artifact/registry flow, not model quality",
+        "Use host MPS/local_peft path for real trainer validation",
+    ]
+    if root_cause:
+        log_lines.append(f"fallback_trigger={root_cause}")
+    logs_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
+    return TrainingArtifacts(
+        adapter_dir=str(adapter_dir),
+        report_path=str(report_path),
+        merged_model_dir=None,
+        logs_path=str(logs_path),
+        metrics=metrics,
+        evaluation=evaluation,
+        trainer_backend=lineage_backend,
+        trainer_model_name=DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME,
+        device="cpu",
     )
 
 

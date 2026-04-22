@@ -41,6 +41,8 @@ services:
       FT_MAX_SEQ_LENGTH: "256"
       FT_DEFAULT_TRAINING_METHOD: sft_lora
       FT_TRAINER_BACKEND: local_peft
+      FT_ALLOW_SMOKE_FALLBACK: "true"
+      FT_SMOKE_FALLBACK_BACKEND: deterministic_smoke
       FT_TRAINER_MODEL_MAP_JSON: '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
       OLLAMA_PUBLISH_ENABLED: "false"
       OLLAMA_MODEL_NAMESPACE: demo
@@ -97,6 +99,8 @@ services:
       FT_MAX_SEQ_LENGTH: "256"
       FT_DEFAULT_TRAINING_METHOD: sft_lora
       FT_TRAINER_BACKEND: local_peft
+      FT_ALLOW_SMOKE_FALLBACK: "true"
+      FT_SMOKE_FALLBACK_BACKEND: deterministic_smoke
       FT_TRAINER_MODEL_MAP_JSON: '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
       OLLAMA_PUBLISH_ENABLED: "false"
       OLLAMA_MODEL_NAMESPACE: demo

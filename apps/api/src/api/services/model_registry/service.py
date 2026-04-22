@@ -26,7 +26,10 @@ from api.services.fine_tuning.artifacts import (
 from api.services.fine_tuning.dataset_formatters import (
     export_dataset_version_for_training,
 )
-from api.services.fine_tuning.trainer import run_training_backend
+from api.services.fine_tuning.trainer import (
+    is_hf_model_resolution_error,
+    run_training_backend,
+)
 
 BASE_MODEL_READY_STATUSES = {"active", "registered"}
 ALLOWED_TRAINING_STATUSES = {
@@ -192,11 +195,6 @@ def _resolve_training_job_trainer_model_name(
     artifacts: list[FTModelArtifactRecord],
     models: list[ModelRegistryRecord],
 ) -> str | None:
-    explicit = str(
-        training_job.hyperparams_json.get("trainer_model_name") or ""
-    ).strip()
-    if explicit:
-        return explicit
     for artifact in artifacts:
         metadata = dict(artifact.metadata_json or {})
         trainer_model_name = str(metadata.get("trainer_model_name") or "").strip()
@@ -208,6 +206,11 @@ def _resolve_training_job_trainer_model_name(
         ).strip()
         if trainer_model_name:
             return trainer_model_name
+    explicit = str(
+        training_job.hyperparams_json.get("trainer_model_name") or ""
+    ).strip()
+    if explicit:
+        return explicit
     return None
 
 
@@ -274,14 +277,11 @@ def _classify_training_failure(*, failure_phase: str, raw_error: str) -> dict[st
         category = "device_unavailable"
         user_message = "Training failed because the requested accelerator is unavailable in the current worker runtime."
         remediation = "Check the selected device, rerun preflight for the target runtime, and use the Docker CPU smoke profile when no accelerator is available."
-    elif (
-        "huggingface" in lowered
-        or "from_pretrained" in lowered
-        or "repositorynotfounderror" in lowered
-        or "couldn't connect" in lowered
-        or "401 client error" in lowered
-        or "404 client error" in lowered
-    ):
+    elif "smoke fallback failed" in lowered:
+        category = "smoke_fallback_failed"
+        user_message = "Training failed after the smoke fallback trainer was attempted. The demo fallback path could not finish artifact generation."
+        remediation = "Inspect the fallback artifact directory, confirm the deterministic smoke backend is configured, and retry the smoke job."
+    elif is_hf_model_resolution_error(normalized_error):
         category = "hf_model_download_failure"
         user_message = (
             "Training failed while downloading or resolving the tiny trainer model."
@@ -998,7 +998,10 @@ def complete_training_job(
                 ),
             },
             description=(
-                f"Real fine-tuning artifact for {dataset.name} {dataset_version.version_label}. "
+                f"Deterministic smoke fallback artifact for {dataset.name} {dataset_version.version_label}. "
+                "This validates the dataset/export/artifact/registry pipeline for demo smoke runs, but it does not validate model quality or create an Ollama serving model."
+                if artifact_validation.get("smoke_fallback_used")
+                else f"Real fine-tuning artifact for {dataset.name} {dataset_version.version_label}. "
                 "The local output is a validated PEFT adapter artifact with a publish-ready manifest, but no Ollama serving model has been created yet."
             ),
             updated_at=now,
