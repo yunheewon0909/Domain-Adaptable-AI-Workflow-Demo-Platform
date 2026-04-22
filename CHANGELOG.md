@@ -2,6 +2,20 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.7.6] - 2026-04-20
+
+### Added
+
+- workflow reviewer source selection that can point at the legacy dataset-backed `rag.db` index or collection-managed RAG sources, with the source choice kept separate from workflow model inference selection
+- workflow model inference selectors now show only runtime-ready selectable models, while artifact-only fine-tuned rows stay review-only
+
+### Changed
+
+- README and architecture docs now distinguish Docker smoke fallback from host-worker Apple Silicon `mps` validation, and make it clear that the Docker path is artifact-pipeline validation, not model quality validation
+- README and architecture docs now call out deterministic fine-tuning smoke fallback for Docker-first demos alongside the workflow source and model selection updates, making it clear that the Docker path validates the artifact pipeline rather than model quality
+- README and architecture docs now state that RAG retrieval preview uses stored text previews, PLC stub execution stays deterministic and non-LLM, and collection-managed RAG stays preview-based instead of claiming a full embedding lifecycle
+- the publish seam remains a truthful artifact-only boundary, with no claim of automatic real Ollama create/import
+
 ## [0.7.5] - 2026-04-20
 
 ### Added

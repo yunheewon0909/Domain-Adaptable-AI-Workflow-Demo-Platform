@@ -18,7 +18,7 @@ The FastAPI app assembles small routers under `apps/api/src/api/routers/` and in
 - datasets/workflows/jobs/rag from the original reviewer flow
 - plc routes for suite import, testcase listing, target-aware run enqueueing, run review, dashboard summary, normalization preview, and persisted suggestion review
 - fine-tuning routes for dataset registries, versioned rows, status transitions, training summaries, and training enqueueing
-- model routes for training job inspection, artifact/log inspection, publish seam control, model lineage inspection, and separate registry review versus inference selection
+- model routes for training job inspection, artifact/log inspection, publish seam control, model lineage inspection, and separate registry review versus inference selection, with only runtime-ready selectable models shown in the inference selector
 - rag collection/document routes for collection management, upload/preview, and retrieval preview
 - `/demo` for the co-hosted static reviewer UI
 
@@ -59,6 +59,7 @@ The AI ops expansion adds three deliberately separated surfaces:
 - `ft_training_jobs`, `ft_model_artifacts`, and `model_registry` for queue-backed real training runs, artifact registration, publish-ready seams, and model readiness
 - `rag_collections` and `rag_documents` for collection/document management that stays distinct from fine-tuning data and from the legacy dataset registry
 - the legacy workflow reviewer still retrieves from the dataset-backed `data/rag_index/rag.db` path; when that index is missing, workflow jobs now return structured readiness guidance instead of failing with a noisy subprocess error
+- workflow source selection is independent from model inference selection, so choosing a legacy `rag.db` source or a collection-managed RAG source does not change which models appear in the workflow inference selector
 
 Important boundaries in this milestone:
 
@@ -72,6 +73,7 @@ Important boundaries in this milestone:
 - the Fine-tuning panel now also exposes runtime-preflight commands and short worker-boundary warnings inside the smoke guide so host-worker Apple Silicon MPS, Docker worker non-MPS behavior, and CPU fallback opt-in rules are visible before queueing the job
 - the Fine-tuning panel now also classifies failed jobs into reviewer-friendly categories with explicit remediation, while still preserving raw technical detail for troubleshooting
 - the RAG panel now supports document deletion and refreshes collection-managed preview state independently from the legacy workflow `rag.db` lifecycle
+- RAG retrieval preview works from stored text previews, not from an LLM call, and PLC stub execution stays deterministic and non-LLM too
 - the co-hosted `/demo` shell now exposes workflow, PLC, fine-tuning, model, and RAG reviewer modes without introducing a second frontend app
 
 ## AI Ops Flow
@@ -97,6 +99,7 @@ Important boundaries in this milestone:
 - `artifact_ready` means the adapter/report/manifest package exists and passed structural validation
 - `publish_ready` means a reviewer-facing publish manifest/template exists
 - `runtime-ready` is still false until a real serving model exists
+- workflow source selection and workflow inference model selection are separate controls
 
 ## Apple Silicon smoke-test boundary
 
@@ -106,6 +109,7 @@ For local Mac verification, the intended target is a **small-model smoke test**:
 - keep CPU disabled by default unless `TRAINING_ALLOW_CPU=true` is set deliberately for a tiny fallback run
 - validate the pipeline by checking job success, adapter output, report/log files, and the resulting `artifact_ready` registry row
 - do not treat that smoke path as evidence that large-model training is practical on a MacBook Air-class machine
+- the Docker smoke fallback validates the artifact pipeline, not model quality
 
 For the Docker-first demo path, the repository now carries a separate CPU-smoke profile in `compose.yml`:
 
@@ -116,7 +120,7 @@ For the Docker-first demo path, the repository now carries a separate CPU-smoke 
 - `FT_TRAINER_BACKEND=local_peft`
 - `FT_TRAINER_MODEL_MAP_JSON={"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}`
 
-That Docker profile exists only to keep Mac/Windows Compose demos CPU-friendly for tiny smoke validation. It should not be described as a realistic large-model CPU training configuration.
+That Docker profile exists only to keep Mac/Windows Compose demos CPU-friendly for tiny smoke validation. It should not be described as a realistic large-model CPU training configuration, and it is distinct from the host-worker MPS validation path.
 
 The critical runtime boundary is the worker subprocess:
 
@@ -124,6 +128,7 @@ The critical runtime boundary is the worker subprocess:
 - a host-run worker can validate Apple Silicon `mps`
 - a standard Docker Linux worker should be treated as a non-MPS runtime even when the Docker host itself is an Apple Silicon Mac
 - mixed topology is therefore valid: Docker-hosted API plus host-run worker is the practical smoke-test path for Apple Silicon `mps`
+- the Docker smoke fallback checks artifact-pipeline behavior only, while the host-worker path is the real trainer-device validation path
 
 The new `scripts/ft_smoke_preflight.sh` entrypoint is intentionally topology-aware:
 
