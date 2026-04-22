@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from api.config import get_settings
 from api.db import Base, get_engine
 from api.main import app, get_embedding_client, get_llm_client
 from api.llm import ChatResult
-from api.models import JobRecord
+from api.models import JobRecord, ModelRegistryRecord
 from api.services.rag.ingest import ingest_documents
 from api.services.workflows.service import execute_workflow
 
@@ -138,12 +139,104 @@ def test_enqueue_workflow_job_and_filter_jobs(client: TestClient) -> None:
     ]
 
 
+def test_enqueue_workflow_job_accepts_rag_collection_and_model_selection(
+    client: TestClient,
+) -> None:
+    collection_response = client.post(
+        "/rag-collections",
+        json={"name": "Workflow docs", "description": "Reviewer workflow context"},
+    )
+    assert collection_response.status_code == 201
+    collection_id = collection_response.json()["id"]
+
+    model_response = client.get("/models")
+    assert model_response.status_code == 200
+    model_id = model_response.json()[0]["id"]
+
+    response = client.post(
+        "/workflows/briefing/jobs",
+        json={
+            "prompt": "Summarize the selected workflow collection.",
+            "rag_collection_id": collection_id,
+            "model_id": model_id,
+            "k": 3,
+        },
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body == {
+        "job_id": body["job_id"],
+        "status": "queued",
+        "workflow_key": "briefing",
+        "dataset_key": None,
+        "rag_collection_id": collection_id,
+        "model_id": model_id,
+    }
+
+    with Session(get_engine()) as session:
+        job = session.get(JobRecord, body["job_id"])
+
+    assert job is not None
+    assert job.payload_json == {
+        "workflow_key": "briefing",
+        "prompt": "Summarize the selected workflow collection.",
+        "rag_collection_id": collection_id,
+        "model_id": model_id,
+        "k": 3,
+    }
+
+
+def test_enqueue_workflow_job_rejects_artifact_only_model_selection(
+    client: TestClient,
+) -> None:
+    with Session(get_engine()) as session:
+        session.add(
+            ModelRegistryRecord(
+                id="model-artifact-only",
+                display_name="Artifact-only reviewer model",
+                source_type="fine_tuned",
+                base_model_name="qwen2.5:3b-instruct-q4_K_M",
+                ollama_model_name="artifact::ft-job-1",
+                published_model_name=None,
+                artifact_id=None,
+                status="artifact_ready",
+                publish_status="publish_ready",
+                tags_json=["fine_tuned"],
+                description="Not selectable for runtime inference.",
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/workflows/briefing/jobs",
+        json={
+            "prompt": "Summarize the active dataset for a reviewer.",
+            "dataset_key": "enterprise_docs",
+            "model_id": "model-artifact-only",
+            "k": 4,
+        },
+    )
+
+    assert response.status_code == 404
+    assert any(
+        fragment in response.json()["detail"]
+        for fragment in (
+            "artifact",
+            "serving model",
+            "publish manifest",
+        )
+    )
+
+
 def test_demo_route_serves_static_ui(client: TestClient) -> None:
     response = client.get("/demo")
 
     assert response.status_code == 200
     assert "Domain-Adaptable AI Workflow Demo API" in response.text
-    assert "dataset-select" in response.text
+    assert "workflow-source-select" in response.text
+    assert "workflow-model-select" in response.text
 
 
 @pytest.mark.parametrize(
@@ -219,8 +312,119 @@ def test_execute_workflow_returns_typed_output_with_evidence(
     )
 
 
+def test_execute_workflow_supports_rag_collection_source_and_model_metadata(
+    client: TestClient,
+) -> None:
+    collection_response = client.post(
+        "/rag-collections",
+        json={"name": "Workflow docs", "description": "Reviewer workflow context"},
+    )
+    assert collection_response.status_code == 201
+    collection_id = collection_response.json()["id"]
+
+    upload_response = client.post(
+        f"/rag-collections/{collection_id}/documents",
+        files={
+            "file": (
+                "workflow-notes.md",
+                b"workflow reviewer evidence should stay grounded in collection context",
+                "text/markdown",
+            )
+        },
+    )
+    assert upload_response.status_code == 201
+
+    model_response = client.get("/models")
+    assert model_response.status_code == 200
+    selected_model = model_response.json()[0]
+
+    llm = FakeWorkflowLLM(
+        '{"summary":"Collection grounded briefing","key_points":["Use collection evidence"]}'
+    )
+
+    with Session(get_engine()) as session:
+        result = execute_workflow(
+            session=session,
+            payload={
+                "workflow_key": "briefing",
+                "prompt": "Prepare a collection-backed briefing",
+                "rag_collection_id": collection_id,
+                "model_id": selected_model["id"],
+                "k": 3,
+            },
+            llm_client=llm,
+            embedding_client=FakeEmbeddingClient(),
+        )
+
+    assert result["summary"] == "Collection grounded briefing"
+    assert len(result["evidence"]) == 1
+    assert result["evidence"][0]["source_path"] == "workflow-notes.md"
+    assert result["meta"]["source_type"] == "rag_collection"
+    assert result["meta"]["source_id"] == collection_id
+    assert result["meta"]["source_label"] == "Workflow docs"
+    assert result["meta"]["rag_collection_id"] == collection_id
+    assert result["meta"]["model_id"] == selected_model["id"]
+    assert result["meta"]["model_display_name"] == selected_model["display_name"]
+    assert result["meta"]["selected_model"] == selected_model["serving_model_name"]
+    assert result["meta"]["used_fallback"] is False
+    assert llm.calls[-1]["model"] == selected_model["serving_model_name"]
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "query", "expected_status"),
+    [
+        (None, None, "Prepare a reviewer briefing", "empty"),
+        ("workflow-notes.md", b"totally unrelated source text", "workflow evidence", "no_match"),
+    ],
+)
+def test_execute_workflow_handles_collection_without_matching_context_gracefully(
+    client: TestClient,
+    filename: str | None,
+    content: bytes | None,
+    query: str,
+    expected_status: str,
+) -> None:
+    collection_response = client.post(
+        "/rag-collections",
+        json={"name": "Workflow docs", "description": "Reviewer workflow context"},
+    )
+    assert collection_response.status_code == 201
+    collection_id = collection_response.json()["id"]
+
+    if filename is not None and content is not None:
+        upload_response = client.post(
+            f"/rag-collections/{collection_id}/documents",
+            files={"file": (filename, content, "text/markdown")},
+        )
+        assert upload_response.status_code == 201
+
+    llm = FakeWorkflowLLM('{"summary":"unused","key_points":["unused"]}')
+
+    with Session(get_engine()) as session:
+        result = execute_workflow(
+            session=session,
+            payload={
+                "workflow_key": "briefing",
+                "prompt": query,
+                "rag_collection_id": collection_id,
+                "k": 3,
+            },
+            llm_client=llm,
+            embedding_client=FakeEmbeddingClient(),
+        )
+
+    assert result["evidence"] == []
+    assert result["meta"]["degraded"] is True
+    assert result["meta"]["rag_status"] == expected_status
+    assert result["meta"]["source_type"] == "rag_collection"
+    assert result["meta"]["rag_collection_id"] == collection_id
+    assert llm.calls == []
+
+
 def test_execute_workflow_returns_guidance_when_rag_index_is_not_ready(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     index_dir = tmp_path / "rag_index"
     source_dir = tmp_path / "sample_docs"
@@ -249,6 +453,9 @@ def test_execute_workflow_returns_guidance_when_rag_index_is_not_ready(
 
     assert result["meta"]["rag_status"] == "not_ready"
     assert result["meta"]["degraded"] is True
+    assert result["meta"]["db_path"] == str(index_dir / "rag.db")
+    assert result["meta"]["source_type"] == "dataset"
+    assert result["meta"]["source_id"] == "industrial_demo"
     assert result["evidence"] == []
     assert "RAG index is not ready" in result["key_points"]
     assert any(

@@ -18,6 +18,25 @@ class EvidenceItem(BaseModel):
     score: float
 
 
+class WorkflowResultMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    degraded: bool = False
+    rag_status: str | None = None
+    db_path: str | None = None
+    dataset_key: str | None = None
+    source_type: str | None = None
+    source_id: str | None = None
+    source_label: str | None = None
+    rag_collection_id: str | None = None
+    model_id: str | None = None
+    model_display_name: str | None = None
+    selected_model: str | None = None
+    used_fallback: bool | None = None
+    prompt: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class BriefingDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -26,7 +45,8 @@ class BriefingDraft(BaseModel):
 
 
 class BriefingResult(BriefingDraft):
-    evidence: list[EvidenceItem] = Field(min_length=1)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    meta: WorkflowResultMeta | None = None
 
 
 class RecommendationDraft(BaseModel):
@@ -37,7 +57,8 @@ class RecommendationDraft(BaseModel):
 
 
 class RecommendationResult(RecommendationDraft):
-    evidence: list[EvidenceItem] = Field(min_length=1)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    meta: WorkflowResultMeta | None = None
 
 
 class ReportGeneratorDraft(BaseModel):
@@ -50,11 +71,16 @@ class ReportGeneratorDraft(BaseModel):
 
 
 class ReportGeneratorResult(ReportGeneratorDraft):
-    evidence: list[EvidenceItem] = Field(min_length=1)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    meta: WorkflowResultMeta | None = None
 
 
-WorkflowDraftModel: TypeAlias = type[BriefingDraft] | type[RecommendationDraft] | type[ReportGeneratorDraft]
-WorkflowResultModel: TypeAlias = type[BriefingResult] | type[RecommendationResult] | type[ReportGeneratorResult]
+WorkflowDraftModel: TypeAlias = (
+    type[BriefingDraft] | type[RecommendationDraft] | type[ReportGeneratorDraft]
+)
+WorkflowResultModel: TypeAlias = (
+    type[BriefingResult] | type[RecommendationResult] | type[ReportGeneratorResult]
+)
 
 DRAFT_MODEL_BY_WORKFLOW_KEY: dict[str, WorkflowDraftModel] = {
     "briefing": BriefingDraft,

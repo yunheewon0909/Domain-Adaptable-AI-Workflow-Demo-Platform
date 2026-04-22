@@ -22,6 +22,8 @@ class WorkflowJobRequest(BaseModel):
 
     prompt: str = Field(min_length=1)
     dataset_key: str | None = None
+    rag_collection_id: str | None = None
+    model_id: str | None = None
     k: int = Field(default=4, ge=1, le=8)
 
 
@@ -50,18 +52,24 @@ def enqueue_workflow_job(
 
     with Session(get_engine()) as session:
         try:
-            dataset, payload = create_workflow_job_payload(
+            dataset_key, payload = create_workflow_job_payload(
                 session,
                 workflow_key=workflow_key,
                 prompt=request.prompt,
                 dataset_key=request.dataset_key,
+                rag_collection_id=request.rag_collection_id,
+                model_id=request.model_id,
                 top_k=request.k,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="workflow not found") from exc
         except WorkflowExecutionError as exc:
             message = str(exc)
-            status_code = 404 if "dataset" in message.lower() else 400
+            lowered = message.lower()
+            status_code = 404 if any(
+                token in lowered
+                for token in ("dataset", "model", "collection", "artifact-ready")
+            ) else 400
             raise HTTPException(status_code=status_code, detail=message) from exc
 
         job = create_job(
@@ -69,12 +77,17 @@ def enqueue_workflow_job(
             job_type="workflow_run",
             payload_json=payload,
             workflow_key=workflow_key,
-            dataset_key=dataset.key,
+            dataset_key=dataset_key,
             max_attempts=1,
         )
-    return {
+    response = {
         "job_id": job.id,
         "status": job.status,
         "workflow_key": workflow_key,
-        "dataset_key": dataset.key,
+        "dataset_key": dataset_key,
     }
+    if payload.get("rag_collection_id") is not None:
+        response["rag_collection_id"] = payload["rag_collection_id"]
+    if payload.get("model_id") is not None:
+        response["model_id"] = payload["model_id"]
+    return response

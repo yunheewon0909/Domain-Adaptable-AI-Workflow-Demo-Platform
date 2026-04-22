@@ -9,11 +9,8 @@ from api.config import get_settings
 from api.db import Base, get_engine
 from api.main import app, get_embedding_client
 from api.models import JobRecord
-from api.services.rag.chunker import chunk_documents
-from api.services.rag.embedder import embed_chunks
-from api.services.rag.index_store import persist_index
 from api.services.rag.ingest import ingest_documents
-from api.services.rag.loader import load_documents
+from api.services.rag.query import RAGIndexNotReadyError
 from api.services.rag.query import search_index
 
 
@@ -24,7 +21,9 @@ class FakeEmbeddingClient:
             normalized = text.lower()
             vectors.append(
                 [
-                    float(normalized.count("automation") + normalized.count("robotics")),
+                    float(
+                        normalized.count("automation") + normalized.count("robotics")
+                    ),
                     float(normalized.count("finance") + normalized.count("accounting")),
                 ]
             )
@@ -32,7 +31,9 @@ class FakeEmbeddingClient:
 
 
 @pytest.fixture
-def rag_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
+def rag_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[tuple[TestClient, Path]]:
     sqlite_db_path = tmp_path / "api-tests.db"
     index_dir = tmp_path / "rag_index"
     rag_db_path = index_dir / "rag.db"
@@ -92,7 +93,9 @@ def test_search_index_returns_ranked_hits(tmp_path: Path) -> None:
     assert hits[0].source_path == "robotics.txt"
 
 
-def test_rag_search_endpoint_returns_hits(rag_client: tuple[TestClient, Path], tmp_path: Path) -> None:
+def test_rag_search_endpoint_returns_hits(
+    rag_client: tuple[TestClient, Path], tmp_path: Path
+) -> None:
     client, index_dir = rag_client
 
     source_dir = tmp_path / "sample_docs"
@@ -117,7 +120,9 @@ def test_rag_search_endpoint_returns_hits(rag_client: tuple[TestClient, Path], t
     payload = response.json()
     assert isinstance(payload, list)
     assert len(payload) >= 1
-    assert {"chunk_id", "source_path", "title", "score", "text"}.issubset(payload[0].keys())
+    assert {"chunk_id", "source_path", "title", "score", "text"}.issubset(
+        payload[0].keys()
+    )
 
 
 def test_rag_search_endpoint_without_index_returns_503(
@@ -131,24 +136,16 @@ def test_rag_search_endpoint_without_index_returns_503(
     assert "rag-ingest" in response.json()["detail"]
 
 
-def test_search_index_falls_back_to_json_when_sqlite_missing(tmp_path: Path) -> None:
-    source_dir = tmp_path / "sample_docs"
-    source_dir.mkdir(parents=True)
-    (source_dir / "legacy.txt").write_text("legacy json index compatibility path", encoding="utf-8")
-
-    documents = load_documents(source_dir)
-    chunks = chunk_documents(documents, chunk_size=120, chunk_overlap=20)
-    embeddings = embed_chunks(chunks, dimensions=16)
+def test_search_index_requires_sqlite_rag_db_for_legacy_workflow_path(
+    tmp_path: Path,
+) -> None:
     index_dir = tmp_path / "rag_index"
-    persist_index(index_dir, chunks=chunks, embeddings=embeddings)
 
-    hits = search_index(
-        index_dir=index_dir,
-        db_path=index_dir / "rag.db",
-        query_text="legacy compatibility",
-        top_k=1,
-        embedding_client=FakeEmbeddingClient(),
-    )
-
-    assert len(hits) == 1
-    assert hits[0].source_path == "legacy.txt"
+    with pytest.raises(RAGIndexNotReadyError, match="RAG index is not ready"):
+        search_index(
+            index_dir=index_dir,
+            db_path=index_dir / "rag.db",
+            query_text="legacy compatibility",
+            top_k=1,
+            embedding_client=FakeEmbeddingClient(),
+        )

@@ -249,17 +249,11 @@ def delete_document(session: Session, document_id: str) -> dict[str, Any]:
 
     metadata = dict(document.metadata_json or {})
     storage_path_raw = str(metadata.get("storage_path") or "").strip()
-    storage_deleted = False
-    if storage_path_raw:
-        storage_path = Path(storage_path_raw)
-        if storage_path.exists():
-            storage_path.unlink()
-            storage_deleted = True
-
     collection = session.get(RAGCollectionRecord, document.collection_id)
     now = datetime.now(timezone.utc)
     if collection is not None:
         collection.updated_at = now
+    storage_deleted = False
     response = {
         "document_id": document.id,
         "collection_id": document.collection_id,
@@ -268,6 +262,12 @@ def delete_document(session: Session, document_id: str) -> dict[str, Any]:
     }
     session.delete(document)
     session.commit()
+    if storage_path_raw:
+        storage_path = Path(storage_path_raw)
+        if storage_path.exists():
+            storage_path.unlink()
+            storage_deleted = True
+            response["storage_deleted"] = True
     return response
 
 
@@ -303,6 +303,7 @@ def preview_collection_retrieval(
     return {
         "collection_id": collection.id,
         "collection_name": collection.name,
+        "document_count": len(documents),
         "query": query,
         "top_k": top_k,
         "results": scored_results[: max(1, min(int(top_k), 10))],

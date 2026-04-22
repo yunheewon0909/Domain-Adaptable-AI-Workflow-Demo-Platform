@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 
 from api.config import get_settings
-from api.services.rag.embedder import embed_text
 from api.services.rag.embedding_client import (
     EmbeddingClient,
     EmbeddingClientError,
@@ -31,62 +29,6 @@ def _cosine(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
-
-
-def _load_index_records(index_dir: Path) -> list[dict[str, object]]:
-    index_file = index_dir / "index.json"
-    if not index_file.exists():
-        raise FileNotFoundError(
-            f"RAG index file not found: {index_file}. Run `uv run --project apps/api rag-ingest` first."
-        )
-
-    payload = json.loads(index_file.read_text(encoding="utf-8"))
-    records = payload.get("records")
-    if not isinstance(records, list):
-        raise ValueError(
-            f"Invalid index payload in {index_file}: 'records' must be a list"
-        )
-
-    return records
-
-
-def _search_json_index(
-    *, index_dir: Path, query_text: str, top_k: int
-) -> list[QueryHit]:
-    records = _load_index_records(index_dir)
-    if not records:
-        return []
-
-    first_embedding = records[0].get("embedding")
-    if not isinstance(first_embedding, list) or not first_embedding:
-        raise ValueError("Invalid index payload: missing embedding vectors")
-
-    query_embedding = embed_text(query_text, dimensions=len(first_embedding))
-    hits: list[QueryHit] = []
-
-    for record in records:
-        embedding = record.get("embedding")
-        chunk_id = record.get("chunk_id")
-        source_path = record.get("source_path")
-        text = record.get("text")
-        if (
-            not isinstance(embedding, list)
-            or not isinstance(chunk_id, str)
-            or not isinstance(source_path, str)
-            or not isinstance(text, str)
-        ):
-            continue
-        hits.append(
-            QueryHit(
-                chunk_id=chunk_id,
-                source_path=source_path,
-                text=text,
-                score=_cosine(query_embedding, [float(value) for value in embedding]),
-            )
-        )
-
-    hits.sort(key=lambda hit: hit.score, reverse=True)
-    return hits[: max(1, top_k)]
 
 
 def search_index(
@@ -131,11 +73,6 @@ def search_index(
         ]
         hits.sort(key=lambda hit: hit.score, reverse=True)
         return hits[: max(1, top_k)]
-
-    if (index_dir / "index.json").exists():
-        return _search_json_index(
-            index_dir=index_dir, query_text=normalized_query, top_k=top_k
-        )
 
     raise RAGIndexNotReadyError(
         db_path=resolved_db_path,
