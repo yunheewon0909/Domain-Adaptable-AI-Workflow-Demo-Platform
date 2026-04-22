@@ -87,7 +87,7 @@ Validates:
 - `/inference/run` accepts the selected `model_id`
 - the response has a non-empty answer
 - the response model payload matches the selected registry row
-- artifact-only fine-tuned rows are rejected for inference
+- if an artifact-only fine-tuned row already exists, it is rejected for inference; the dedicated gating proof still lives in `python scripts/e2e_model_gating_smoke.py`
 
 ### `python scripts/e2e_workflow_real_model_smoke.py`
 
@@ -180,6 +180,7 @@ Runs the main P0/P1 scripts in order:
 6. Model gating
 7. RAG document management
 8. PLC stub pipeline
+9. Job queue processing smoke
 
 ## Recommended execution order
 

@@ -20,5 +20,6 @@ run_step "FT smoke fallback" python "$ROOT_DIR/scripts/e2e_ft_smoke_fallback.py"
 run_step "Model gating smoke" python "$ROOT_DIR/scripts/e2e_model_gating_smoke.py"
 run_step "RAG document management" python "$ROOT_DIR/scripts/e2e_rag_document_management.py"
 run_step "PLC stub pipeline" python "$ROOT_DIR/scripts/e2e_plc_stub_pipeline.py"
+run_step "Job queue processing" python "$ROOT_DIR/scripts/e2e_job_queue_processing.py"
 
 printf '[ok] All configured E2E scripts completed\n'
