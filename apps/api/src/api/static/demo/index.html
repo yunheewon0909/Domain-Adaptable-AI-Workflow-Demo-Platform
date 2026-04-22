@@ -30,10 +30,24 @@
 
       <section id="workflow-mode" class="demo-mode">
         <section class="panel controls">
-          <div class="field">
-            <label for="dataset-select">Dataset</label>
-            <select id="dataset-select"></select>
+          <div class="form-grid">
+            <div class="field">
+              <label for="workflow-source-select">Workflow source</label>
+              <select id="workflow-source-select"></select>
+            </div>
+
+            <div class="field">
+              <label for="workflow-model-select">Workflow inference model</label>
+              <select id="workflow-model-select"></select>
+            </div>
           </div>
+
+          <div class="button-row">
+            <button id="workflow-refresh-button" type="button" class="secondary-button">Refresh sources &amp; models</button>
+          </div>
+
+          <div id="workflow-source-summary" class="callout empty">Choose a legacy dataset or RAG collection source for workflow review.</div>
+          <div id="workflow-model-summary" class="callout empty">Workflow model status will appear here. Only runtime-ready/selectable models can be chosen here.</div>
 
           <div class="field">
             <span class="label">Workflow</span>
@@ -57,13 +71,13 @@
 
           <article class="panel">
             <h2>Result</h2>
-            <div id="result-panel" class="result-panel empty">Run a workflow to see structured output.</div>
+            <div id="result-panel" class="result-panel empty">Run a workflow to see structured output plus source and model metadata.</div>
           </article>
         </section>
 
         <section class="panel evidence-panel">
           <h2>Evidence</h2>
-          <div id="evidence-panel" class="evidence-list empty">Evidence will appear here after a successful run.</div>
+          <div id="evidence-panel" class="evidence-list empty">Evidence and source/model context will appear here after a successful run.</div>
         </section>
       </section>
 
@@ -212,7 +226,7 @@
             <div class="section-heading">
               <div>
                 <h2>Run controls</h2>
-                <p class="section-copy">Queue a suite-level run or scope execution to the currently selected testcase.</p>
+                <p class="section-copy">Queue a suite-level run or scope execution to the currently selected testcase. PLC stub execution does not call an LLM.</p>
               </div>
             </div>
             <div class="controls compact-controls">
@@ -227,6 +241,7 @@
               </label>
               <button id="plc-run-button" type="button" class="run-button">Enqueue PLC run</button>
               <p id="plc-run-hint" class="hint">Select a suite, optionally narrow the scope to one testcase, then enqueue the run.</p>
+              <p class="muted-line">The PLC stub path stays deterministic and rule-based. It does not call an LLM.</p>
             </div>
           </article>
 
@@ -508,7 +523,7 @@
               <button id="ft-enqueue-smoke-training-button" type="button" class="secondary-button">Enqueue smoke training</button>
             </div>
           </div>
-          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Docker demo defaults are CPU-friendly for tiny smoke tests, while a host worker is still recommended for Apple Silicon MPS validation. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
+          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Docker demo defaults are CPU-friendly for tiny smoke tests, while a host worker is still recommended for Apple Silicon MPS validation. If the smoke fallback trainer was used, that still only validates the dataset/export/artifact/registry pipeline and keeps the result review-only. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
           <div class="smoke-guide-grid">
             <section class="callout warning">
               <p class="callout-title">Runtime preflight</p>
@@ -527,6 +542,12 @@
               <p class="callout-title">Local script command</p>
               <pre class="mono">./scripts/ft_smoke_test.sh</pre>
               <p>After preflight, the script creates a small instruction_sft dataset, locks a smoke version, and queues a tiny local training job against <code>hf-internal/testing-tiny-random-gpt2</code>.</p>
+            </section>
+            <section class="callout warning">
+              <p class="callout-title">Smoke fallback notes</p>
+              <p>Smoke fallback trainer was used.</p>
+              <p>This validates dataset/export/artifact/registry flow, not model quality.</p>
+              <p>Use host MPS/local_peft path for real trainer validation.</p>
             </section>
             <section class="callout">
               <p class="callout-title">Expected artifacts</p>
@@ -727,7 +748,7 @@
           <div class="section-heading">
             <div>
               <h2>Retrieval preview</h2>
-              <p class="section-copy">Preview how the selected collection retrieves evidence before you use it from the Models inference surface.</p>
+              <p class="section-copy">Preview how the selected collection retrieves evidence before you use it from the Models inference surface. This retrieval preview does not call an LLM.</p>
             </div>
           </div>
           <div class="controls compact-controls">
@@ -742,7 +763,7 @@
               </div>
             </div>
             <button id="rag-preview-button" type="button" class="run-button">Preview retrieval</button>
-            <p id="rag-preview-hint" class="hint">Select a collection and run a retrieval preview to inspect document-level context before inference.</p>
+            <p id="rag-preview-hint" class="hint">Select a collection and run a retrieval preview to inspect document-level context before inference. This does not call an LLM.</p>
           </div>
           <div id="rag-preview-result" class="detail-stack empty">Retrieval preview results will appear here.</div>
         </section>

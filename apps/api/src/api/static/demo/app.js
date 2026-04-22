@@ -77,9 +77,14 @@ const SMOKE_DATASET_SEED_ROWS = [
 const state = {
   mode: MODES.WORKFLOW,
   workflow: {
+    hasLoadedInitialData: false,
     datasets: [],
+    ragCollections: [],
+    models: [],
     workflows: [],
     selectedDatasetKey: null,
+    selectedRagCollectionId: null,
+    selectedModelId: null,
     selectedWorkflowKey: null,
     pollHandle: null,
   },
@@ -187,7 +192,11 @@ const dom = {
   modelsMode: document.querySelector('#models-mode'),
   ragMode: document.querySelector('#rag-mode'),
   workflow: {
-    datasetSelect: document.querySelector('#dataset-select'),
+    sourceSelect: document.querySelector('#workflow-source-select'),
+    refreshButton: document.querySelector('#workflow-refresh-button'),
+    sourceSummary: document.querySelector('#workflow-source-summary'),
+    modelSelect: document.querySelector('#workflow-model-select'),
+    modelSummary: document.querySelector('#workflow-model-summary'),
     workflowList: document.querySelector('#workflow-list'),
     promptInput: document.querySelector('#prompt-input'),
     runButton: document.querySelector('#run-button'),
@@ -817,6 +826,62 @@ function selectedWorkflow() {
   return state.workflow.workflows.find((workflow) => workflow.key === state.workflow.selectedWorkflowKey) || null;
 }
 
+function workflowSourceTypeLabel(sourceType) {
+  if (sourceType === 'dataset') {
+    return 'Legacy dataset';
+  }
+  if (sourceType === 'rag_collection') {
+    return 'RAG collection';
+  }
+  return sourceType || '—';
+}
+
+function selectedWorkflowSource() {
+  if (state.workflow.selectedRagCollectionId) {
+    const collection = state.workflow.ragCollections.find((item) => item.id === state.workflow.selectedRagCollectionId) || null;
+    if (collection) {
+      return {
+        kind: 'rag_collection',
+        id: collection.id,
+        label: collection.name || collection.id,
+        item: collection,
+      };
+    }
+  }
+
+  if (state.workflow.selectedDatasetKey) {
+    const dataset = state.workflow.datasets.find((item) => item.key === state.workflow.selectedDatasetKey) || null;
+    if (dataset) {
+      return {
+        kind: 'dataset',
+        id: dataset.key,
+        label: dataset.title || dataset.key,
+        item: dataset,
+      };
+    }
+  }
+
+  return null;
+}
+
+function selectedWorkflowModel() {
+  return state.workflow.models.find((model) => model.id === state.workflow.selectedModelId) || null;
+}
+
+function workflowSelectableModels() {
+  return state.workflow.models.filter((model) => model.readiness?.selectable);
+}
+
+function workflowSourceSelectionValue() {
+  if (state.workflow.selectedRagCollectionId) {
+    return `rag:${state.workflow.selectedRagCollectionId}`;
+  }
+  if (state.workflow.selectedDatasetKey) {
+    return `dataset:${state.workflow.selectedDatasetKey}`;
+  }
+  return '';
+}
+
 function selectedPlcSuite() {
   return state.plc.selectedSuite;
 }
@@ -1024,6 +1089,10 @@ async function setMode(mode) {
     await ensurePlcInitialized();
     return;
   }
+  if (mode === MODES.WORKFLOW) {
+    await ensureWorkflowInitialized({ force: true });
+    return;
+  }
   if (mode === MODES.FT) {
     await ensureFtInitialized();
     return;
@@ -1051,16 +1120,115 @@ function renderMode() {
 }
 
 function renderWorkflowDatasets() {
-  dom.workflow.datasetSelect.innerHTML = '';
-  state.workflow.datasets.forEach((dataset) => {
-    const option = document.createElement('option');
-    option.value = dataset.key;
-    option.textContent = `${dataset.title}${dataset.is_active ? ' (active)' : ''}`;
-    if (dataset.key === state.workflow.selectedDatasetKey) {
-      option.selected = true;
-    }
-    dom.workflow.datasetSelect.append(option);
+  const selectedValue = workflowSourceSelectionValue();
+  const fragments = [];
+
+  if (state.workflow.datasets.length) {
+    fragments.push(`
+      <optgroup label="Legacy datasets">
+        ${state.workflow.datasets
+          .map((dataset) => `<option value="dataset:${escapeHtml(dataset.key)}" ${selectedValue === `dataset:${dataset.key}` ? 'selected' : ''}>${escapeHtml(`${dataset.title}${dataset.is_active ? ' · active dataset' : ''}`)}</option>`)
+          .join('')}
+      </optgroup>
+    `);
+  }
+
+  if (state.workflow.ragCollections.length) {
+    fragments.push(`
+      <optgroup label="RAG collections">
+        ${state.workflow.ragCollections
+          .map((collection) => `<option value="rag:${escapeHtml(collection.id)}" ${selectedValue === `rag:${collection.id}` ? 'selected' : ''}>${escapeHtml(`${collection.name || collection.id} · ${collection.document_count ?? 0} docs · ${collection.index_status || 'ready'}`)}</option>`)
+          .join('')}
+      </optgroup>
+    `);
+  }
+
+  if (!fragments.length) {
+    dom.workflow.sourceSelect.innerHTML = '<option value="">No workflow sources available</option>';
+    dom.workflow.sourceSelect.disabled = true;
+  } else {
+    dom.workflow.sourceSelect.innerHTML = fragments.join('');
+    dom.workflow.sourceSelect.disabled = false;
+  }
+
+  renderWorkflowSourceSummary();
+}
+
+function renderWorkflowSourceSummary() {
+  const source = selectedWorkflowSource();
+  if (!source) {
+    dom.workflow.sourceSummary.className = 'callout warning';
+    dom.workflow.sourceSummary.innerHTML = '<p class="callout-title">Workflow source status</p><p>Select a legacy dataset or RAG collection source before running the workflow.</p>';
+    return;
+  }
+
+  if (source.kind === 'dataset') {
+    const dataset = source.item;
+    dom.workflow.sourceSummary.className = 'callout success';
+    dom.workflow.sourceSummary.innerHTML = `
+      <p class="callout-title">Workflow source status</p>
+      <div class="badge-row">${renderBadge('legacy dataset')}${renderBadge(dataset.is_active ? 'active dataset' : 'inactive dataset')}</div>
+      <p>${escapeHtml(`${source.label} is selected. Workflow review will use the legacy dataset-backed source path.`)}</p>
+      ${renderDetailGrid([
+        { label: 'Source type', value: workflowSourceTypeLabel(source.kind) },
+        { label: 'Source label', value: source.label },
+        { label: 'Source ID', value: source.id },
+        { label: 'Status', value: dataset.is_active ? 'active dataset' : 'inactive dataset' },
+      ])}
+    `;
+    return;
+  }
+
+  const collection = source.item;
+  const sourceWarning = Number(collection.document_count ?? 0) === 0
+    ? 'This collection has no documents yet, so workflow runs may return retrieval-only guidance without evidence.'
+    : `This collection is ready to ground workflow review outside the legacy dataset path with ${countLabel(collection.document_count ?? 0, 'document')}.`;
+  dom.workflow.sourceSummary.className = `callout${Number(collection.document_count ?? 0) === 0 ? ' warning' : ' success'}`;
+  dom.workflow.sourceSummary.innerHTML = `
+    <p class="callout-title">Workflow source status</p>
+    <div class="badge-row">${renderBadge('RAG collection')}${renderBadge(`${collection.document_count ?? 0} docs`)}${renderBadge(collection.index_status || 'ready')}</div>
+    <p>${escapeHtml(sourceWarning)}</p>
+    ${renderDetailGrid([
+      { label: 'Source type', value: workflowSourceTypeLabel(source.kind) },
+      { label: 'Source label', value: source.label },
+      { label: 'Source ID', value: source.id },
+      { label: 'Collection status', value: `${collection.document_count ?? 0} docs · ${collection.index_status || 'ready'}` },
+    ])}
+  `;
+}
+
+function renderWorkflowModelOptions() {
+  const selectableModels = workflowSelectableModels();
+  dom.workflow.modelSelect.disabled = !selectableModels.length;
+  populateMappedSelectOptions(dom.workflow.modelSelect, selectableModels, {
+    placeholderLabel: selectableModels.length ? undefined : 'No runtime-ready/selectable workflow models available',
+    selectedValue: state.workflow.selectedModelId,
+    valueKey: 'id',
+    labelBuilder: (item) => `${modelDisplayName(item)} · ${item.status || 'unknown'} · ${item.publish_status || 'n/a'}`,
   });
+  renderWorkflowModelSummary();
+}
+
+function renderWorkflowModelSummary() {
+  const model = selectedWorkflowModel();
+  if (!model) {
+    dom.workflow.modelSummary.className = 'callout warning';
+    dom.workflow.modelSummary.innerHTML = '<p class="callout-title">Workflow model status</p><p>No runtime-ready/selectable workflow models are available yet. The workflow model selector is disabled until a selectable model exists.</p>';
+    return;
+  }
+
+  dom.workflow.modelSummary.className = 'callout success';
+  dom.workflow.modelSummary.innerHTML = `
+    <p class="callout-title">Workflow model status</p>
+    <div class="badge-row">${renderBadge(model.source_type || 'unknown source')}${renderBadge(model.publish_status || 'publish n/a')}${renderBadge(model.readiness?.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}</div>
+    <p>${escapeHtml(`${modelDisplayName(model)} is selected for workflow runs. Only runtime-ready/selectable models appear in this selector.`)}</p>
+    ${renderDetailGrid([
+      { label: 'Display name', value: modelDisplayName(model) },
+      { label: 'Model ID', value: model.id || '—' },
+      { label: 'Serving model', value: model.serving_model_name || '—' },
+      { label: 'Runtime readiness', value: model.readiness?.runtime_ready ? 'ready' : model.readiness?.runtime_ready_reason || 'blocked' },
+    ])}
+  `;
 }
 
 function renderWorkflowList() {
@@ -1100,19 +1268,57 @@ function renderWorkflowEvidenceCard(item) {
   `;
 }
 
+function workflowExecutionModelLabel(workflowMeta) {
+  return workflowMeta?.model_display_name || workflowMeta?.selected_model || (workflowMeta?.degraded ? 'No LLM call' : '—');
+}
+
+function renderWorkflowExecutionMeta(workflowMeta, { title = 'Workflow run metadata' } = {}) {
+  const source = selectedWorkflowSource();
+  const model = selectedWorkflowModel();
+  return `
+    <section class="callout">
+      <p class="callout-title">${escapeHtml(title)}</p>
+      ${renderDetailGrid([
+        { label: 'Source', value: workflowMeta?.source_label || source?.label || '—' },
+        { label: 'Source type', value: workflowSourceTypeLabel(workflowMeta?.source_type || source?.kind || null) },
+        { label: 'Source ID', value: workflowMeta?.source_id || source?.id || '—' },
+        { label: 'Model used', value: workflowExecutionModelLabel(workflowMeta) },
+        { label: 'Model ID', value: workflowMeta?.model_id || model?.id || '—' },
+        { label: 'Selected runtime model', value: workflowMeta?.selected_model || model?.serving_model_name || '—' },
+        { label: 'Fallback model used', value: workflowMeta?.used_fallback === true ? 'yes' : workflowMeta?.used_fallback === false ? 'no' : '—' },
+      ])}
+    </section>
+  `;
+}
+
+function renderWorkflowEvidenceSummary(workflowMeta, evidenceCount) {
+  return `
+    <section class="callout">
+      <p class="callout-title">Evidence context</p>
+      ${renderDetailGrid([
+        { label: 'Source', value: workflowMeta?.source_label || selectedWorkflowSource()?.label || '—' },
+        { label: 'Source type', value: workflowSourceTypeLabel(workflowMeta?.source_type || selectedWorkflowSource()?.kind || null) },
+        { label: 'Model used', value: workflowExecutionModelLabel(workflowMeta) },
+        { label: 'Evidence items', value: evidenceCount ?? 0 },
+      ])}
+    </section>
+  `;
+}
+
 function renderWorkflowResult(job) {
   const result = job.result_json || null;
   if (!result) {
     dom.workflow.resultPanel.className = 'result-panel empty';
     dom.workflow.resultPanel.textContent = job.status === 'failed' ? `Workflow failed: ${job.error || 'unknown error'}` : 'Waiting for result payload.';
     dom.workflow.evidencePanel.className = 'evidence-list empty';
-    dom.workflow.evidencePanel.textContent = job.status === 'failed' ? 'No evidence returned because the workflow did not complete successfully.' : 'Evidence will appear after completion.';
+    dom.workflow.evidencePanel.textContent = job.status === 'failed' ? 'No evidence returned because the workflow did not complete successfully.' : 'Evidence and source/model context will appear after completion.';
     return;
   }
 
   const evidence = Array.isArray(result.evidence) ? result.evidence : [];
   const workflowMeta = result.meta && typeof result.meta === 'object' ? result.meta : null;
   const fragments = [];
+  fragments.push(renderWorkflowExecutionMeta(workflowMeta));
   if (Array.isArray(workflowMeta?.warnings) && workflowMeta.warnings.length) {
     fragments.push(`
       <section class="callout warning">
@@ -1151,19 +1357,67 @@ function renderWorkflowResult(job) {
 
   dom.workflow.resultPanel.className = 'result-panel';
   dom.workflow.resultPanel.innerHTML = fragments.join('');
-  dom.workflow.evidencePanel.className = evidence.length ? 'evidence-list' : 'evidence-list empty';
-  dom.workflow.evidencePanel.innerHTML = evidence.length
+  dom.workflow.evidencePanel.className = 'detail-stack';
+  dom.workflow.evidencePanel.innerHTML = `${renderWorkflowEvidenceSummary(workflowMeta, evidence.length)}${evidence.length
     ? evidence.map(renderWorkflowEvidenceCard).join('')
     : workflowMeta?.rag_status === 'not_ready'
       ? 'Evidence is unavailable until the legacy RAG index is initialized.'
-      : 'No evidence returned.';
+      : 'No evidence returned.'}`;
+}
+
+function syncWorkflowSelections() {
+  const datasetKeys = state.workflow.datasets.map((dataset) => dataset.key);
+  const ragCollectionIds = state.workflow.ragCollections.map((collection) => collection.id);
+  const selectableModelIds = workflowSelectableModels().map((model) => model.id);
+
+  if (state.workflow.selectedDatasetKey && !datasetKeys.includes(state.workflow.selectedDatasetKey)) {
+    state.workflow.selectedDatasetKey = null;
+  }
+  if (state.workflow.selectedRagCollectionId && !ragCollectionIds.includes(state.workflow.selectedRagCollectionId)) {
+    state.workflow.selectedRagCollectionId = null;
+  }
+  if (!state.workflow.selectedDatasetKey && !state.workflow.selectedRagCollectionId) {
+    const activeDataset = state.workflow.datasets.find((dataset) => dataset.is_active) || state.workflow.datasets[0] || null;
+    state.workflow.selectedDatasetKey = activeDataset?.key || null;
+  }
+  if (state.workflow.selectedModelId && !selectableModelIds.includes(state.workflow.selectedModelId)) {
+    state.workflow.selectedModelId = null;
+  }
+  if (!state.workflow.selectedModelId) {
+    state.workflow.selectedModelId = selectableModelIds[0] || null;
+  }
 }
 
 async function refreshWorkflowDatasets() {
   state.workflow.datasets = await fetchJson('/datasets');
-  const active = state.workflow.datasets.find((dataset) => dataset.is_active) || state.workflow.datasets[0] || null;
-  state.workflow.selectedDatasetKey = active ? active.key : null;
+  syncWorkflowSelections();
   renderWorkflowDatasets();
+}
+
+async function refreshWorkflowRagCollections() {
+  state.workflow.ragCollections = await fetchJson('/rag-collections');
+  syncWorkflowSelections();
+  renderWorkflowDatasets();
+}
+
+async function refreshWorkflowModels() {
+  state.workflow.models = await fetchJson('/models');
+  syncWorkflowSelections();
+  renderWorkflowModelOptions();
+}
+
+async function refreshWorkflowSourcesAndModels() {
+  const [datasets, ragCollections, models] = await Promise.all([
+    fetchJson('/datasets'),
+    fetchJson('/rag-collections'),
+    fetchJson('/models'),
+  ]);
+  state.workflow.datasets = datasets;
+  state.workflow.ragCollections = ragCollections;
+  state.workflow.models = models;
+  syncWorkflowSelections();
+  renderWorkflowDatasets();
+  renderWorkflowModelOptions();
 }
 
 async function refreshWorkflowCatalog() {
@@ -1207,7 +1461,15 @@ async function activateDataset(datasetKey) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dataset_key: datasetKey }),
   });
-  await refreshWorkflowDatasets();
+  await refreshWorkflowSourcesAndModels();
+}
+
+async function ensureWorkflowInitialized({ force = false } = {}) {
+  if (state.workflow.hasLoadedInitialData && !force) {
+    return;
+  }
+  await Promise.all([refreshWorkflowSourcesAndModels(), refreshWorkflowCatalog()]);
+  state.workflow.hasLoadedInitialData = true;
 }
 
 function renderPlcDashboard() {
@@ -2783,6 +3045,15 @@ function classifyFtTrainingFailure(job) {
       rawError,
     };
   }
+  if (lowered.includes('smoke fallback failed')) {
+    return {
+      category: 'smoke_fallback_failed',
+      phase,
+      summary: 'Training failed after the smoke fallback trainer was attempted. The deterministic demo path could not finish artifact generation.',
+      remediation: 'Inspect the fallback artifact directory, confirm deterministic smoke fallback is enabled, and retry the smoke job.',
+      rawError,
+    };
+  }
   if (lowered.includes('torch is required') || lowered.includes('dependencies are missing')) {
     return {
       category: 'dependency_missing',
@@ -2901,6 +3172,13 @@ function ftStatusNarrative(job) {
       tone: 'failure',
       title: 'Training failed',
       body: `${failure.summary} ${failure.remediation}`,
+    };
+  }
+  if (job?.artifact_validation?.smoke_fallback_used) {
+    return {
+      tone: 'success',
+      title: 'Training succeeded with smoke fallback',
+      body: 'Smoke fallback trainer was used. This validates dataset/export/artifact/registry flow, not model quality. Use host MPS/local_peft path for real trainer validation.',
     };
   }
   return {
@@ -3073,7 +3351,7 @@ function renderFtTrainingJobDetail() {
     ${job.lineage_warning ? `<section class="callout warning"><p class="callout-title">Trainer/source mismatch</p><p>${escapeHtml(job.lineage_warning)}</p></section>` : ''}
     ${job.status === 'failed' ? renderFtFailureSummary(job) : ''}
     ${renderFtArtifactPathCards(artifactPaths)}
-    ${artifactValidation ? `<section class="callout ${artifactValidation.artifact_valid ? 'success' : 'failure'}"><p class="callout-title">Artifact validation</p><div class="badge-row">${renderBadge(artifactValidation.artifact_valid ? 'validated' : 'invalid')}${renderBadge(job.artifact_paths?.adapter_dir ? 'adapter path ready' : 'adapter path missing')}${renderBadge(job.artifact_paths?.training_report_path ? 'report path ready' : 'report path missing')}</div><p>${escapeHtml(artifactValidation.artifact_valid ? 'Adapter/report/log artifacts passed structural validation before the job was marked succeeded.' : `Artifact validation failed: ${safeArray(artifactValidation.missing).join(', ') || 'unknown issue'}`)}</p>${safeArray(artifactValidation.warnings).length ? `<p>${safeArray(artifactValidation.warnings).map((warning) => escapeHtml(warning)).join(' ')}</p>` : ''}</section>` : ''}
+    ${artifactValidation ? `<section class="callout ${artifactValidation.artifact_valid ? 'success' : 'failure'}"><p class="callout-title">Artifact validation</p><div class="badge-row">${renderBadge(artifactValidation.artifact_valid ? 'validated' : 'invalid')}${renderBadge(job.artifact_paths?.adapter_dir ? 'adapter path ready' : 'adapter path missing')}${renderBadge(job.artifact_paths?.training_report_path ? 'report path ready' : 'report path missing')}${artifactValidation.smoke_fallback_used ? renderBadge('smoke fallback trainer used') : ''}</div><p>${escapeHtml(artifactValidation.artifact_valid ? 'Adapter/report/log artifacts passed structural validation before the job was marked succeeded.' : `Artifact validation failed: ${safeArray(artifactValidation.missing).join(', ') || 'unknown issue'}`)}</p>${safeArray(artifactValidation.warnings).length ? `<p>${safeArray(artifactValidation.warnings).map((warning) => escapeHtml(warning)).join(' ')}</p>` : ''}</section>` : ''}
     ${publishReadiness ? `<section class="callout ${publishReadiness.runtime_ready ? 'success' : 'warning'}"><p class="callout-title">Publish readiness</p><div class="badge-row">${renderBadge(publishReadiness.publish_status || 'publish n/a')}${renderBadge(publishReadiness.runtime_ready ? 'runtime-ready' : 'runtime-blocked')}${renderBadge(publishReadiness.candidate_published_model_name || 'candidate serving name pending')}</div><p>${escapeHtml(publishReadiness.runtime_ready ? 'A serving model is available for inference.' : publishReadiness.runtime_ready_reason || publishReadiness.selectable_reason || 'A serving model is not available yet.')}</p></section>` : ''}
     ${job.log_text ? `<section class="callout"><p class="callout-title">Training log</p><p>${escapeHtml(job.log_text)}</p></section>` : ''}
     ${renderFtRegisteredModelCards(job.registered_models)}
@@ -3856,12 +4134,16 @@ function renderRagPreviewResult() {
   const preview = state.rag.retrievalPreview;
   if (!preview) {
     dom.rag.previewResult.className = 'detail-stack empty';
-    dom.rag.previewResult.textContent = 'Retrieval preview results will appear here.';
+    dom.rag.previewResult.textContent = 'Retrieval preview results will appear here. This preview does not call an LLM.';
     return;
   }
 
   dom.rag.previewResult.className = 'detail-stack';
   dom.rag.previewResult.innerHTML = `
+    <section class="callout success">
+      <p class="callout-title">Non-LLM retrieval preview</p>
+      <p>This retrieval preview only shows collection retrieval results. It does not call an LLM.</p>
+    </section>
     ${renderDetailGrid([
       { label: 'Collection', value: preview.collection_name || preview.collection_id || '—' },
       { label: 'Collection ID', value: preview.collection_id || '—' },
@@ -3977,7 +4259,7 @@ async function deleteRagDocument(documentId) {
   renderRagDocumentDetail();
   renderRagPreviewResult();
   setRagDocumentHint(`Deleted document ${response.document_id}.`);
-  setRagPreviewHint('Retrieval preview was cleared after document deletion. Run it again to inspect the updated collection context.');
+  setRagPreviewHint('Retrieval preview was cleared after document deletion. Run it again to inspect the updated collection context. This does not call an LLM.');
 }
 
 async function ensureRagInitialized({ force = false } = {}) {
@@ -4011,7 +4293,7 @@ dom.modeButtons.forEach((button) => {
       if (button.dataset.mode === MODES.RAG) {
         setRagCollectionHint('RAG collections ready. Create or inspect retrieval collections here.');
         setRagDocumentHint('Upload, review, or delete collection-managed documents here.');
-        setRagPreviewHint('Run retrieval preview to inspect grounding context before inference.');
+        setRagPreviewHint('Run retrieval preview to inspect grounding context before inference. This does not call an LLM.');
       }
     } catch (error) {
       if (button.dataset.mode === MODES.PLC) {
@@ -4041,8 +4323,8 @@ dom.workflow.runButton.addEventListener('click', async () => {
     setWorkflowHint('Select a workflow first.');
     return;
   }
-  if (!state.workflow.selectedDatasetKey) {
-    setWorkflowHint('Select a dataset first.');
+  if (!state.workflow.selectedDatasetKey && !state.workflow.selectedRagCollectionId) {
+    setWorkflowHint('Select a workflow source first.');
     return;
   }
   if (!prompt) {
@@ -4054,7 +4336,7 @@ dom.workflow.runButton.addEventListener('click', async () => {
   dom.workflow.resultPanel.className = 'result-panel empty';
   dom.workflow.resultPanel.textContent = 'Workflow queued…';
   dom.workflow.evidencePanel.className = 'evidence-list empty';
-  dom.workflow.evidencePanel.textContent = 'Evidence will appear after completion.';
+  dom.workflow.evidencePanel.textContent = 'Evidence and source/model context will appear after completion.';
   setWorkflowHint('Submitting workflow job...');
 
   try {
@@ -4064,6 +4346,8 @@ dom.workflow.runButton.addEventListener('click', async () => {
       body: JSON.stringify({
         prompt,
         dataset_key: state.workflow.selectedDatasetKey,
+        rag_collection_id: state.workflow.selectedRagCollectionId,
+        model_id: state.workflow.selectedModelId,
         k: 4,
       }),
     });
@@ -4076,12 +4360,50 @@ dom.workflow.runButton.addEventListener('click', async () => {
   }
 });
 
-dom.workflow.datasetSelect.addEventListener('change', async (event) => {
-  const nextKey = event.target.value;
-  state.workflow.selectedDatasetKey = nextKey;
+dom.workflow.sourceSelect.addEventListener('change', async (event) => {
+  const nextValue = String(event.target.value || '');
+  if (!nextValue) {
+    state.workflow.selectedDatasetKey = null;
+    state.workflow.selectedRagCollectionId = null;
+    renderWorkflowDatasets();
+    setWorkflowHint('Workflow source selection cleared.');
+    return;
+  }
+
+  if (nextValue.startsWith('dataset:')) {
+    const nextKey = nextValue.slice('dataset:'.length);
+    state.workflow.selectedDatasetKey = nextKey;
+    state.workflow.selectedRagCollectionId = null;
+    renderWorkflowDatasets();
+    try {
+      await activateDataset(nextKey);
+      setWorkflowHint(`Workflow source switched to legacy dataset ${nextKey}.`);
+    } catch (error) {
+      setWorkflowHint(error.message);
+    }
+    return;
+  }
+
+  if (nextValue.startsWith('rag:')) {
+    state.workflow.selectedRagCollectionId = nextValue.slice('rag:'.length);
+    state.workflow.selectedDatasetKey = null;
+    renderWorkflowDatasets();
+    const collection = selectedWorkflowSource();
+    setWorkflowHint(collection ? `Workflow source switched to RAG collection ${collection.label}.` : 'Workflow source updated.');
+  }
+});
+
+dom.workflow.modelSelect.addEventListener('change', (event) => {
+  state.workflow.selectedModelId = event.target.value || null;
+  renderWorkflowModelOptions();
+  const model = selectedWorkflowModel();
+  setWorkflowHint(model ? `Workflow model set to ${modelDisplayName(model)}.` : 'Workflow model selection cleared.');
+});
+
+dom.workflow.refreshButton.addEventListener('click', async () => {
   try {
-    await activateDataset(nextKey);
-    setWorkflowHint(`Active dataset switched to ${nextKey}.`);
+    await Promise.all([refreshWorkflowSourcesAndModels(), refreshWorkflowCatalog()]);
+    setWorkflowHint('Workflow sources and selectable models refreshed.');
   } catch (error) {
     setWorkflowHint(error.message);
   }
@@ -4731,6 +5053,7 @@ dom.rag.collectionsRefresh.addEventListener('click', async () => {
   try {
     await ensureRagInitialized();
     await refreshRagCollections({ preferredCollectionId: state.rag.selectedCollectionId, preferredDocumentId: state.rag.selectedDocumentId });
+    await refreshWorkflowRagCollections();
     setRagCollectionHint('RAG collections refreshed.');
   } catch (error) {
     setRagCollectionHint(error.message);
@@ -4763,6 +5086,7 @@ dom.rag.createCollectionButton.addEventListener('click', async () => {
       }),
     });
     await refreshRagCollections({ preferredCollectionId: created.id });
+    await refreshWorkflowRagCollections();
     dom.rag.collectionName.value = '';
     dom.rag.collectionDescription.value = '';
     setRagCollectionHint(`Created RAG collection ${created.name}.`);
@@ -4842,7 +5166,7 @@ dom.rag.previewButton.addEventListener('click', async () => {
       }),
     });
     renderRagPreviewResult();
-    setRagPreviewHint(`Retrieval preview completed for ${collection.name}.`);
+    setRagPreviewHint(`Retrieval preview completed for ${collection.name}. This did not call an LLM.`);
   } catch (error) {
     setRagPreviewHint(error.message);
   } finally {
@@ -4854,17 +5178,17 @@ async function boot() {
   renderMode();
   renderFtSmokeActions();
   try {
-    await Promise.all([refreshWorkflowDatasets(), refreshWorkflowCatalog()]);
-    setWorkflowHint('Ready. Choose a dataset, select a workflow, and run the demo.');
+    await ensureWorkflowInitialized({ force: true });
+    setWorkflowHint('Ready. Choose a workflow source, optionally pick a runtime-ready model, and run the demo.');
     setPlcImportHint('Choose a CSV or XLSX file to import PLC testcases.');
-    setPlcRunHint('Switch to PLC testing mode to load suites, review testcases, and enqueue runs.');
+    setPlcRunHint('Switch to PLC testing mode to load suites, review testcases, and enqueue deterministic stub runs that do not call an LLM.');
     setFtDatasetHint('Switch to Fine-tuning mode to manage datasets and versions.');
     setFtVersionHint('Fine-tuning version detail will appear here after you select a dataset version.');
     setFtTrainingHint('Run preflight first before enqueueing a new runtime. Use a host worker for Apple Silicon MPS, use ./scripts/ft_smoke_preflight.sh --worker-runtime docker for Docker worker checks, and remember smoke jobs validate adapter artifacts rather than Ollama serving readiness.');
     setModelsHint('Switch to Models mode to inspect registered models and run inference.');
     setRagCollectionHint('Switch to RAG mode to manage collections and document grounding data.');
     setRagDocumentHint('Select a RAG collection to inspect, upload, or delete documents.');
-    setRagPreviewHint('Select a RAG collection and run retrieval preview here.');
+    setRagPreviewHint('Select a RAG collection and run retrieval preview here. This does not call an LLM.');
     renderInferenceResult();
     renderRagPreviewResult();
   } catch (error) {

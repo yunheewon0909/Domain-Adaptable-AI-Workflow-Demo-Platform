@@ -7,7 +7,13 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert response.status_code == 200
     text = response.text
     assert "Workflow reviewer" in text
+    assert "Workflow source" in text
+    assert "Workflow inference model" in text
+    assert "Refresh sources &amp; models" in text
+    assert "Choose a legacy dataset or RAG collection source for workflow review" in text
+    assert "source and model metadata" in text
     assert "PLC testing MVP" in text
+    assert "PLC stub execution does not call an LLM." in text
     assert "Fine-tuning" in text
     assert "Models" in text
     assert "RAG" in text
@@ -33,6 +39,9 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert (
         "Do not treat CPU smoke defaults as guidance for large-model training" in text
     )
+    assert "Smoke fallback trainer was used" in text
+    assert "This validates dataset/export/artifact/registry flow, not model quality" in text
+    assert "Use host MPS/local_peft path for real trainer validation" in text
     assert "./scripts/ft_smoke_preflight.sh --worker-runtime host" in text
     assert "./scripts/ft_smoke_preflight.sh --worker-runtime docker" in text
     assert "./scripts/ft_smoke_test.sh" in text
@@ -54,6 +63,7 @@ def test_demo_surface_includes_workflow_and_plc_modes(client: TestClient) -> Non
     assert "Only runtime-ready/selectable models can run inference." in text
     assert "Create RAG collection" in text
     assert "Retrieval preview" in text
+    assert "This retrieval preview does not call an LLM." in text
     assert "delete collection-managed files" in text
     assert "delete the selected collection-managed document" in text
 
@@ -70,6 +80,12 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "Runtime ready reason" in text
     assert "Review details" in text
     assert "Use for inference" in text
+    assert "Workflow source status" in text
+    assert "Workflow model status" in text
+    assert "Workflow run metadata" in text
+    assert "Evidence context" in text
+    assert "Model used" in text
+    assert "No runtime-ready/selectable workflow models are available yet." in text
     assert "Selected inference model" in text
     assert "Selected RAG collection" in text
     assert "Only runtime-ready/selectable models can run inference." in text
@@ -100,5 +116,6 @@ def test_demo_app_js_includes_lineage_and_readiness_labels(client: TestClient) -
     assert "do not expect Ollama model publishing from the smoke job" in text
     assert "RAG index is not ready" in text
     assert "Evidence is unavailable until the legacy RAG index is initialized." in text
+    assert "This did not call an LLM." in text
     assert "Delete document" in text
     assert "Retrieval preview was cleared after document deletion." in text
