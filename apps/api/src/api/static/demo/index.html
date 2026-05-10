@@ -7,28 +7,88 @@
     <link rel="stylesheet" href="/demo/assets/styles.css" />
   </head>
   <body>
-    <main class="page">
-      <header class="hero">
-        <p class="eyebrow">{{DEMO_EYEBROW}}</p>
-        <h1>{{APP_TITLE}}</h1>
-        <p class="subtitle">{{DEMO_SUBTITLE}}</p>
-      </header>
-
-      <section class="panel mode-panel">
-        <div class="field">
-          <span class="label">Reviewer mode</span>
-          <div class="mode-switch" role="tablist" aria-label="Reviewer demo modes">
-            <button id="mode-workflow" type="button" class="mode-button active" data-mode="workflow" aria-selected="true">Workflow reviewer</button>
-            <button id="mode-plc" type="button" class="mode-button" data-mode="plc" aria-selected="false">PLC testing MVP</button>
-            <button id="mode-ft" type="button" class="mode-button" data-mode="ft" aria-selected="false">Fine-tuning</button>
-            <button id="mode-models" type="button" class="mode-button" data-mode="models" aria-selected="false">Models</button>
-            <button id="mode-rag" type="button" class="mode-button" data-mode="rag" aria-selected="false">RAG</button>
-          </div>
+    <div class="workbench">
+      <aside class="workbench-rail" aria-label="Reviewer workbench navigation">
+        <div class="rail-brand">
+          <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>{{DEMO_EYEBROW}}</p>
+          <h1 class="rail-title">{{APP_TITLE}}</h1>
+          <p class="rail-subtitle">{{DEMO_SUBTITLE}}</p>
+          <span class="hero-pill" aria-hidden="true">Local &middot; static UI &middot; vanilla JS</span>
         </div>
-        <p class="hint">Keep the existing workflow review path, switch into the PLC tester surface, manage fine-tuning datasets and jobs, inspect registered models and inference runs, or manage RAG collections and retrieval previews from the shared reviewer shell.</p>
-      </section>
+        <nav class="mode-rail" role="tablist" aria-label="Reviewer demo modes">
+          <button id="mode-workflow" type="button" class="mode-button mode-card active" data-mode="workflow" aria-selected="true">
+            <span class="mode-card-meta">
+              <span class="mode-card-badge">01</span>
+              <span class="mode-card-kind">review</span>
+            </span>
+            <span class="mode-card-title">Workflow reviewer</span>
+            <span class="mode-card-copy">Inspect legacy datasets, RAG sources, and runtime models in one shell.</span>
+          </button>
+          <button id="mode-plc" type="button" class="mode-button mode-card" data-mode="plc" aria-selected="false">
+            <span class="mode-card-meta">
+              <span class="mode-card-badge">02</span>
+              <span class="mode-card-kind">testing</span>
+            </span>
+            <span class="mode-card-title">PLC testing MVP</span>
+            <span class="mode-card-copy">Import suites, queue runs, and inspect testcase-level pass/fail detail.</span>
+          </button>
+          <button id="mode-ft" type="button" class="mode-button mode-card" data-mode="ft" aria-selected="false">
+            <span class="mode-card-meta">
+              <span class="mode-card-badge">03</span>
+              <span class="mode-card-kind">dataset</span>
+            </span>
+            <span class="mode-card-title">Fine-tuning</span>
+            <span class="mode-card-copy">Manage datasets, lock versions, and enqueue smoke or real training jobs.</span>
+          </button>
+          <button id="mode-models" type="button" class="mode-button mode-card" data-mode="models" aria-selected="false">
+            <span class="mode-card-meta">
+              <span class="mode-card-badge">04</span>
+              <span class="mode-card-kind">registry</span>
+            </span>
+            <span class="mode-card-title">Models</span>
+            <span class="mode-card-copy">Review the registry, separate review from inference, and run inference.</span>
+          </button>
+          <button id="mode-rag" type="button" class="mode-button mode-card" data-mode="rag" aria-selected="false">
+            <span class="mode-card-meta">
+              <span class="mode-card-badge">05</span>
+              <span class="mode-card-kind">retrieval</span>
+            </span>
+            <span class="mode-card-title">RAG</span>
+            <span class="mode-card-copy">Manage collections, upload documents, and preview retrieval before inference.</span>
+          </button>
+        </nav>
+        <p class="rail-footnote">Switch the active surface here. Each mode keeps its own controls, run state, and review panels &mdash; all backed by the shared reviewer shell.</p>
+      </aside>
 
-      <section id="workflow-mode" class="demo-mode">
+      <main class="workbench-main">
+        <header class="workspace-header">
+          <div class="workspace-heading">
+            <p class="workspace-eyebrow">Reviewer workbench</p>
+            <h2 class="workspace-title">Domain-adaptable AI workflow demo</h2>
+          </div>
+          <div class="workspace-meta">
+            <span class="mode-count" aria-hidden="true">5 surfaces</span>
+            <span class="hero-pill" aria-hidden="true">vanilla JS &middot; static</span>
+          </div>
+        </header>
+
+        <section id="workflow-mode" class="demo-mode">
+          <section class="mode-start" aria-label="Workflow reviewer quick start">
+            <div class="mode-start-head">
+              <div>
+                <span class="mode-start-eyebrow">Workflow reviewer</span>
+                <h3 class="mode-start-title">Run a workflow review</h3>
+                <p class="mode-start-copy">Pick a workflow source, choose a runtime-ready inference model, then review the run output.</p>
+              </div>
+              <span class="tag">source &middot; model &middot; review</span>
+            </div>
+            <div class="mode-start-actions">
+              <a class="secondary-button" href="#workflow-source-select">Choose source</a>
+              <a class="secondary-button" href="#workflow-model-select">Choose model</a>
+              <a class="secondary-button" href="#workflow-list">Pick workflow</a>
+              <a class="secondary-button" href="#run-button">Run workflow</a>
+            </div>
+          </section>
         <section class="panel controls">
           <div class="form-grid">
             <div class="field">
@@ -82,6 +142,21 @@
       </section>
 
       <section id="plc-mode" class="demo-mode" hidden>
+        <section class="mode-start" aria-label="PLC testing quick start">
+          <div class="mode-start-head">
+            <div>
+              <span class="mode-start-eyebrow">PLC testing MVP</span>
+              <h3 class="mode-start-title">Import a suite and inspect deterministic run evidence</h3>
+              <p class="mode-start-copy">Start from a CSV/XLSX suite, choose a target, and review testcase-level IO logs without calling an LLM.</p>
+            </div>
+            <span class="tag">import &middot; run &middot; IO logs</span>
+          </div>
+          <div class="mode-start-actions">
+            <a class="secondary-button" href="#plc-suite-file">Import suite</a>
+            <a class="secondary-button" href="#plc-target-select">Choose target</a>
+            <a class="secondary-button" href="#plc-run-button">Run selected cases</a>
+          </div>
+        </section>
         <section class="grid plc-overview-grid">
           <article class="panel">
             <div class="section-heading">
@@ -324,6 +399,21 @@
       </section>
 
       <section id="ft-mode" class="demo-mode" hidden>
+        <section class="mode-start" aria-label="Fine-tuning quick start">
+          <div class="mode-start-head">
+            <div>
+              <span class="mode-start-eyebrow">Fine-tuning</span>
+              <h3 class="mode-start-title">Prepare data, lock a version, and follow the training lifecycle</h3>
+              <p class="mode-start-copy">Use the smoke path to validate dataset export, adapter artifacts, and registry handoff before attempting real serving.</p>
+            </div>
+            <span class="tag">dataset &middot; LoRA &middot; artifacts</span>
+          </div>
+          <div class="mode-start-actions">
+            <a class="secondary-button" href="#ft-prepare-smoke-dataset-button">Prepare smoke dataset</a>
+            <a class="secondary-button" href="#ft-fill-smoke-preset-button">Fill preset</a>
+            <a class="secondary-button" href="#ft-enqueue-smoke-training-button">Enqueue smoke training</a>
+          </div>
+        </section>
         <section class="grid ft-overview-grid">
           <article class="panel">
             <div class="section-heading">
@@ -574,6 +664,21 @@
       </section>
 
       <section id="models-mode" class="demo-mode" hidden>
+        <section class="mode-start" aria-label="Models quick start">
+          <div class="mode-start-head">
+            <div>
+              <span class="mode-start-eyebrow">Models</span>
+              <h3 class="mode-start-title">Review lineage before selecting a runtime-ready inference model</h3>
+              <p class="mode-start-copy">Artifact-only rows remain visible for review while inference actions stay gated to real selectable models.</p>
+            </div>
+            <span class="tag">registry &middot; readiness &middot; inference</span>
+          </div>
+          <div class="mode-start-actions">
+            <a class="secondary-button" href="#models-list">Review registry</a>
+            <a class="secondary-button" href="#inference-model-select">Choose inference model</a>
+            <a class="secondary-button" href="#inference-run-button">Run inference</a>
+          </div>
+        </section>
         <section class="grid models-browser-grid">
           <article class="panel">
             <div class="section-heading">
@@ -659,6 +764,21 @@
       </section>
 
       <section id="rag-mode" class="demo-mode" hidden>
+        <section class="mode-start" aria-label="RAG quick start">
+          <div class="mode-start-head">
+            <div>
+              <span class="mode-start-eyebrow">RAG</span>
+              <h3 class="mode-start-title">Create collections, upload documents, and preview retrieval</h3>
+              <p class="mode-start-copy">Grounding data gets its own reviewer surface so retrieval quality can be inspected before model inference.</p>
+            </div>
+            <span class="tag">collections &middot; documents &middot; retrieval</span>
+          </div>
+          <div class="mode-start-actions">
+            <a class="secondary-button" href="#rag-collection-name">Create collection</a>
+            <a class="secondary-button" href="#rag-document-file">Upload document</a>
+            <a class="secondary-button" href="#rag-preview-button">Preview retrieval</a>
+          </div>
+        </section>
         <section class="grid rag-browser-grid">
           <article class="panel">
             <div class="section-heading">
@@ -768,7 +888,8 @@
           <div id="rag-preview-result" class="detail-stack empty">Retrieval preview results will appear here.</div>
         </section>
       </section>
-    </main>
+      </main>
+    </div>
 
     <script src="/demo/assets/app.js" defer></script>
   </body>
