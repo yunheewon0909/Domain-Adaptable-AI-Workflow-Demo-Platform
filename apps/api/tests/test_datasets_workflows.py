@@ -312,6 +312,64 @@ def test_execute_workflow_returns_typed_output_with_evidence(
     )
 
 
+@pytest.mark.parametrize("workflow_key", ["recommendation", "report_generator"])
+def test_execute_workflow_returns_fallback_when_llm_output_is_unstructured(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    workflow_key: str,
+) -> None:
+    index_dir = tmp_path / "rag_index"
+    rag_db_path = index_dir / "rag.db"
+    source_dir = tmp_path / "sample_docs"
+    source_dir.mkdir(parents=True)
+    (source_dir / "maintenance.md").write_text(
+        "maintenance workflow evidence should remain visible in fallback output",
+        encoding="utf-8",
+    )
+
+    ingest_documents(
+        source_dir=source_dir,
+        db_path=rag_db_path,
+        chunk_size=120,
+        chunk_overlap=20,
+        embedding_client=FakeEmbeddingClient(),
+    )
+
+    monkeypatch.setenv("RAG_INDEX_DIR", str(index_dir))
+    monkeypatch.setenv("RAG_DB_PATH", str(rag_db_path))
+    monkeypatch.setenv("RAG_SOURCE_DIR", str(source_dir))
+    get_settings.cache_clear()
+
+    llm = FakeWorkflowLLM("I cannot make a JSON recommendation from this context.")
+
+    with Session(get_engine()) as session:
+        result = execute_workflow(
+            session=session,
+            payload={
+                "workflow_key": workflow_key,
+                "dataset_key": "industrial_demo",
+                "prompt": "hi",
+                "k": 3,
+            },
+            llm_client=llm,
+            embedding_client=FakeEmbeddingClient(),
+        )
+
+    if workflow_key == "recommendation":
+        assert result["recommendations"]
+        assert result["rationale"]
+    else:
+        assert result["title"]
+        assert result["executive_summary"]
+        assert result["findings"]
+        assert result["actions"]
+    assert result["evidence"]
+    assert result["meta"]["degraded"] is True
+    assert result["meta"]["rag_status"] == "llm_output_unstructured"
+    assert any("not valid workflow JSON" in item for item in result["meta"]["warnings"])
+
+
 def test_execute_workflow_supports_rag_collection_source_and_model_metadata(
     client: TestClient,
 ) -> None:

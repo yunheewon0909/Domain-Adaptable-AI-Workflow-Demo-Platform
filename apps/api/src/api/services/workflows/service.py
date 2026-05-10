@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any
@@ -31,6 +32,7 @@ from api.services.workflows.profiles import get_profile
 
 
 WORKFLOW_MAX_TOKENS = 512
+logger = logging.getLogger(__name__)
 
 
 class WorkflowExecutionError(RuntimeError):
@@ -400,6 +402,54 @@ def _build_evidence_fallback_findings(evidence: list[Any]) -> list[str]:
     return fallback_findings
 
 
+def _build_unstructured_llm_output_result(
+    *,
+    workflow_key: str,
+    user_prompt: str,
+    evidence: list[Any],
+    source_meta: dict[str, Any],
+    model_meta: dict[str, Any],
+) -> dict[str, Any]:
+    fallback_findings = _build_evidence_fallback_findings(evidence) or [
+        "Retrieved evidence was available, but the LLM response was not structured enough to display directly."
+    ]
+    warning = (
+        "LLM response was not valid workflow JSON, so the demo returned an "
+        "evidence-grounded fallback instead of failing the job."
+    )
+    meta = {
+        "degraded": True,
+        "rag_status": "llm_output_unstructured",
+        "prompt": user_prompt,
+        "warnings": [warning],
+        **source_meta,
+        **model_meta,
+    }
+
+    if workflow_key == "recommendation":
+        return {
+            "recommendations": fallback_findings,
+            "rationale": warning,
+            "evidence": [item.model_dump() for item in evidence],
+            "meta": meta,
+        }
+    if workflow_key == "report_generator":
+        return {
+            "title": "Evidence-grounded fallback report",
+            "executive_summary": warning,
+            "findings": fallback_findings,
+            "actions": ["Try a more specific prompt or rerun the workflow."],
+            "evidence": [item.model_dump() for item in evidence],
+            "meta": meta,
+        }
+    return {
+        "summary": warning,
+        "key_points": fallback_findings,
+        "evidence": [item.model_dump() for item in evidence],
+        "meta": meta,
+    }
+
+
 def _normalize_workflow_output(
     workflow_key: str,
     parsed: dict[str, Any],
@@ -584,8 +634,23 @@ def execute_workflow(
             }
         )
     except (json.JSONDecodeError, ValidationError) as exc:
-        raise WorkflowExecutionError(
-            f"workflow output validation failed: {exc}"
-        ) from exc
+        logger.warning(
+            "workflow output validation failed; returning fallback "
+            "workflow_key=%s model=%s error=%s",
+            workflow.key,
+            chat_result.model,
+            exc,
+        )
+        return _build_unstructured_llm_output_result(
+            workflow_key=workflow.key,
+            user_prompt=user_prompt,
+            evidence=evidence,
+            source_meta=source_meta,
+            model_meta=_build_model_meta(
+                selected_model,
+                selected_model_name=chat_result.model,
+                used_fallback=chat_result.used_fallback,
+            ),
+        )
 
     return final_result.model_dump(mode="json")
