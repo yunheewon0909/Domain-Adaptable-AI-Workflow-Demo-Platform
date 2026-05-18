@@ -425,7 +425,7 @@ Open WebUI can be pointed at this shim by setting its OpenAI base URL to `http:/
 
 Intentional limitations of the first slice:
 
-- **No streaming**: requests with `"stream": true` are rejected with `400`. Open WebUI works with non-streaming responses; richer streaming is a follow-up.
+- **Streaming compatibility is shallow**: requests with `"stream": true` return OpenAI-style SSE chunks for Open WebUI compatibility, but the shim still waits for one completed upstream Ollama response before emitting the content. True token-by-token streaming is a follow-up.
 - **No RAG-collection grounding**: messages are forwarded to the model as-is. RAG-collection-grounded inference is still available via `/inference/run`, which the `/admin` Models tab uses.
 - **Readiness gating is strict**: only `readiness.selectable == true` registry rows are exposed and usable. Direct Ollama model names that are not registered in the model registry are **not** accepted; this is by design so that an external client cannot bypass the artifact-only vs published distinction.
 - **Token usage is placeholder**: the upstream Ollama OpenAI shim does not report token counts, so `usage` fields are zeros.
@@ -469,7 +469,7 @@ Stop the sidecar when you are done:
 docker compose --profile open-webui down
 ```
 
-The first slice of the OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, and the documented limitations of the first slice (no streaming, no RAG-collection grounding, registry-only model resolution, placeholder token counts).
+The first slice of the OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, and the documented limitations of the first slice (compatibility SSE only, no RAG-collection grounding, registry-only model resolution, placeholder token counts).
 
 ## Host-Only Run
 

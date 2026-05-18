@@ -204,7 +204,7 @@ def test_v1_chat_completions_rejects_unknown_model(
     assert response.status_code == 404
 
 
-def test_v1_chat_completions_rejects_streaming(
+def test_v1_chat_completions_supports_streaming_sse(
     client_with_llm: TestClient,
 ) -> None:
     listing = client_with_llm.get("/v1/models").json()["data"]
@@ -217,8 +217,13 @@ def test_v1_chat_completions_rejects_streaming(
         },
     )
 
-    assert response.status_code == 400
-    assert "streaming" in response.json()["detail"].lower()
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    text = response.text
+    assert "data: " in text
+    assert "chat.completion.chunk" in text
+    assert "answer::ping" in text
+    assert "data: [DONE]" in text
 
 
 def test_v1_chat_completions_requires_user_message(

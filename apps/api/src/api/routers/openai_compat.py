@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
+from collections.abc import Iterator
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -146,20 +149,10 @@ def list_v1_models() -> dict[str, Any]:
     return {"object": "list", "data": data}
 
 
-@router.post("/chat/completions")
-def post_v1_chat_completion(
+def _run_chat_completion(
     request: ChatCompletionRequest,
-    llm_client: LLMClient = Depends(get_llm_client),
-) -> dict[str, Any]:
-    if request.stream:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "streaming chat completions are not implemented in this OpenAI-compatible shim; "
-                "retry with stream=false"
-            ),
-        )
-
+    llm_client: LLMClient,
+) -> tuple[dict[str, Any], str, str, int]:
     with Session(get_engine()) as session:
         model = _resolve_selectable_model(session, request.model)
 
@@ -193,7 +186,7 @@ def post_v1_chat_completion(
     exposed_model_id = _exposed_model_id(model) if model.get("id") else str(
         serving_model_name
     )
-    return {
+    response = {
         "id": completion_id,
         "object": "chat.completion",
         "created": created,
@@ -220,7 +213,66 @@ def post_v1_chat_completion(
             "notes": [
                 "Token counts are not reported by the upstream Ollama OpenAI shim; usage fields are placeholders.",
                 "RAG-collection grounding is not wired into this shim; messages are forwarded to the model as provided.",
-                "Streaming is not implemented; request must use stream=false.",
+                "Streaming responses are compatibility SSE wrappers around a single completed upstream call.",
             ],
         },
     }
+    return response, completion_id, exposed_model_id, created
+
+
+def _stream_chat_completion(
+    response: dict[str, Any],
+    completion_id: str,
+    exposed_model_id: str,
+    created: int,
+) -> Iterator[str]:
+    content = response["choices"][0]["message"]["content"] or ""
+    first_chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": exposed_model_id,
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+        ],
+    }
+    yield f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n"
+
+    if content:
+        content_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": exposed_model_id,
+            "choices": [
+                {"index": 0, "delta": {"content": content}, "finish_reason": None}
+            ],
+        }
+        yield f"data: {json.dumps(content_chunk, ensure_ascii=False)}\n\n"
+
+    final_chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": exposed_model_id,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "x_domain_platform": response["x_domain_platform"],
+    }
+    yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+@router.post("/chat/completions", response_model=None)
+def post_v1_chat_completion(
+    request: ChatCompletionRequest,
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> Any:
+    response, completion_id, exposed_model_id, created = _run_chat_completion(
+        request, llm_client
+    )
+    if request.stream:
+        return StreamingResponse(
+            _stream_chat_completion(response, completion_id, exposed_model_id, created),
+            media_type="text/event-stream",
+        )
+    return response
