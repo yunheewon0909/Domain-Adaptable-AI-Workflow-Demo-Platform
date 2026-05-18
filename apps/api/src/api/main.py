@@ -12,6 +12,7 @@ from api.routers.fine_tuning import router as fine_tuning_router
 from api.routers.health import router as health_router
 from api.routers.jobs import router as jobs_router
 from api.routers.models import router as models_router
+from api.routers.openai_compat import router as openai_compat_router
 from api.routers.plc import router as plc_router
 from api.routers.rag import router as rag_router
 from api.routers.workflows import router as workflows_router
@@ -31,6 +32,11 @@ def create_app() -> FastAPI:
         app.mount(
             "/demo/assets", StaticFiles(directory=_DEMO_STATIC_ROOT), name="demo-assets"
         )
+        app.mount(
+            "/admin/assets",
+            StaticFiles(directory=_DEMO_STATIC_ROOT),
+            name="admin-assets",
+        )
 
     app.include_router(health_router)
     app.include_router(datasets_router)
@@ -40,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router)
     app.include_router(plc_router)
     app.include_router(rag_router)
+    app.include_router(openai_compat_router)
     if active_starter.demo.enabled:
         app.include_router(demo_router)
 

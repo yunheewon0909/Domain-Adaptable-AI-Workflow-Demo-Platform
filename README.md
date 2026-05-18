@@ -385,9 +385,55 @@ curl -s http://127.0.0.1:8000/demo
 - **Docker CPU smoke profile**: `compose.yml` now pins the API and worker demo path to CPU-friendly smoke defaults (`TRAINING_DEVICE=cpu`, `TRAINING_ALLOW_CPU=true`, `FT_MAX_SEQ_LENGTH=256`, artifact-only publish seam off) so Mac/Windows Docker Compose runs can validate tiny smoke jobs without pretending a large-model CPU training path is practical.
 - **Host Apple Silicon MPS profile**: use the host-worker path when you want actual MPS validation. Docker Linux workers should still be treated as non-MPS runtimes even on Apple Silicon hosts.
 
+## Internal `/admin` reviewer console
+
+`/admin` is now the **preferred internal/admin console route** for the reviewer surface. It serves the same static UI as the historical `/demo` route (Workflow, PLC testing MVP, Fine-tuning, Models, RAG) but is positioned as the operator/admin console rather than the user-facing demo. `/demo` is **preserved for compatibility** and still works; new internal links and documentation should point at `/admin`.
+
+```bash
+curl -s http://127.0.0.1:8000/admin       # internal console (preferred)
+curl -s http://127.0.0.1:8000/demo        # legacy compatibility alias
+```
+
+External chat/model UX comparison is expected to happen through the Open WebUI sidecar (see below), optionally talking to the OpenAI-compatible shim documented in the next section. The `/admin` console remains the authoritative surface for review, registry, training, RAG-collection, and PLC operations.
+
+## OpenAI-compatible shim (`/v1/*`)
+
+The API now exposes a thin OpenAI-compatible HTTP shim so external chat clients (Open WebUI, OpenAI SDK clients, etc.) can reach our model-registry-aware inference path with readiness gating preserved:
+
+- `GET /v1/models` — lists only registry rows whose `readiness.selectable == true`. Artifact-only / `publish_ready` / not-yet-serving rows are **never** exposed. The `id` field is the registry id (for example `model-1`); the `serving_model_name` is included for visibility.
+- `POST /v1/chat/completions` — accepts `{ "model", "messages", "temperature", "max_tokens", "stream" }` and adapts to the same `LLMClient` used by `/inference/run`. `model` may be a registry id, a serving model name, or the underlying Ollama model name, but the resolved row must still be runtime-ready/selectable. The shim returns an OpenAI-shaped `chat.completion` response and an `x_domain_platform` block describing the resolved registry row, fallback usage, and limitations.
+
+Example usage from an OpenAI-style client:
+
+```bash
+curl -s http://127.0.0.1:8000/v1/models | jq
+
+curl -s -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "model-1",
+    "messages": [
+      {"role": "system", "content": "Reply in one short sentence."},
+      {"role": "user", "content": "What is the demo platform for?"}
+    ],
+    "temperature": 0,
+    "max_tokens": 64
+  }'
+```
+
+Open WebUI can be pointed at this shim by setting its OpenAI base URL to `http://api:8000/v1` (inside the Compose network) or `http://127.0.0.1:8000/v1` (from the host); see the sidecar section below for the configuration hook.
+
+Intentional limitations of the first slice:
+
+- **No streaming**: requests with `"stream": true` are rejected with `400`. Open WebUI works with non-streaming responses; richer streaming is a follow-up.
+- **No RAG-collection grounding**: messages are forwarded to the model as-is. RAG-collection-grounded inference is still available via `/inference/run`, which the `/admin` Models tab uses.
+- **Readiness gating is strict**: only `readiness.selectable == true` registry rows are exposed and usable. Direct Ollama model names that are not registered in the model registry are **not** accepted; this is by design so that an external client cannot bypass the artifact-only vs published distinction.
+- **Token usage is placeholder**: the upstream Ollama OpenAI shim does not report token counts, so `usage` fields are zeros.
+- **No tool/function calling, no `n>1`, no `logprobs`**: only the minimal subset Open WebUI needs for a chat round-trip is implemented.
+
 ## Optional Open WebUI sidecar
 
-Open WebUI is integrated as an **optional Docker Compose sidecar** for chat/model UX evaluation. It is **not** a replacement for `/demo`, and it is **not** started by default. See `docs/adr/0004-open-webui-integration.md` for the full decision and risk notes.
+Open WebUI is integrated as an **optional Docker Compose sidecar** for chat/model UX evaluation. It is **not** a replacement for `/admin` (or `/demo`), and it is **not** started by default. See `docs/adr/0004-open-webui-integration.md` for the full decision and risk notes.
 
 Start the sidecar only when you want to evaluate it:
 
@@ -423,7 +469,7 @@ Stop the sidecar when you are done:
 docker compose --profile open-webui down
 ```
 
-A future evaluation may decide to expose a thin OpenAI-compatible shim from `apps/api` (`/v1/models`, `/v1/chat/completions`) so external chat clients can reach our model-registry-aware inference path with readiness gating preserved. That shim is **not** implemented in this milestone; the spike is currently limited to the sidecar wiring described above.
+The first slice of the OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, and the documented limitations of the first slice (no streaming, no RAG-collection grounding, registry-only model resolution, placeholder token counts).
 
 ## Host-Only Run
 
@@ -546,7 +592,13 @@ curl -sS "http://127.0.0.1:8000/plc-test-runs?suite_id=plc-suite-1&target_key=st
 
 ## Reviewer UI
 
-Open:
+Open the internal admin console (preferred path):
+
+```text
+http://127.0.0.1:8000/admin
+```
+
+The legacy `/demo` alias is preserved for compatibility:
 
 ```text
 http://127.0.0.1:8000/demo

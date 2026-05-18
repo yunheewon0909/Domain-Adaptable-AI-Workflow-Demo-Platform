@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+import time
+import uuid
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
+
+from api.db import get_engine
+from api.dependencies import get_llm_client
+from api.llm import LLMClient, LLMClientError
+from api.services.model_registry import list_models
+
+router = APIRouter(prefix="/v1", tags=["openai-compat"])
+
+OWNED_BY = "domain-adaptable-ai-platform"
+
+
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    role: Literal["system", "user", "assistant", "tool", "developer"]
+    content: str | None = None
+
+
+class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    model: str = Field(min_length=1)
+    messages: list[ChatMessage] = Field(min_length=1)
+    temperature: float = Field(default=0, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=1)
+    stream: bool = False
+
+
+def _is_selectable(model: dict[str, Any]) -> bool:
+    readiness = model.get("readiness") or {}
+    return bool(readiness.get("selectable"))
+
+
+def _exposed_model_id(model: dict[str, Any]) -> str:
+    return str(model["id"])
+
+
+def _build_prompt(messages: list[ChatMessage]) -> tuple[str, str]:
+    last_user_idx: int | None = None
+    for idx in range(len(messages) - 1, -1, -1):
+        if messages[idx].role == "user":
+            last_user_idx = idx
+            break
+    if last_user_idx is None:
+        raise HTTPException(
+            status_code=400,
+            detail="chat completion requires at least one user message",
+        )
+    question_msg = messages[last_user_idx]
+    question = (question_msg.content or "").strip()
+    if not question:
+        raise HTTPException(
+            status_code=400,
+            detail="last user message must have non-empty content",
+        )
+
+    context_parts: list[str] = []
+    for idx, message in enumerate(messages):
+        if idx == last_user_idx:
+            continue
+        content = (message.content or "").strip()
+        if not content:
+            continue
+        context_parts.append(f"[{message.role}]\n{content}")
+    context = "\n\n".join(context_parts) or "No prior context provided."
+    return question, context
+
+
+def _resolve_selectable_model(session: Session, requested_model: str) -> dict[str, Any]:
+    requested = requested_model.strip()
+    if not requested:
+        raise HTTPException(status_code=400, detail="model must be provided")
+
+    models = list_models(session)
+    by_id = {str(model["id"]): model for model in models if model.get("id")}
+    if requested in by_id:
+        model = by_id[requested]
+        if not _is_selectable(model):
+            readiness = model.get("readiness") or {}
+            raise HTTPException(
+                status_code=404,
+                detail=str(
+                    readiness.get("selectable_reason")
+                    or "model is not runtime-ready/selectable"
+                ),
+            )
+        return model
+
+    matches_by_serving = [
+        model
+        for model in models
+        if model.get("serving_model_name") == requested
+        or model.get("ollama_model_name") == requested
+        or model.get("published_model_name") == requested
+    ]
+    if not matches_by_serving:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "model not found in registry; the OpenAI-compatible shim only exposes "
+                "registry-tracked runtime-ready/selectable models"
+            ),
+        )
+    selectable_match = next(
+        (model for model in matches_by_serving if _is_selectable(model)),
+        None,
+    )
+    if selectable_match is None:
+        readiness = (matches_by_serving[0].get("readiness") or {})
+        raise HTTPException(
+            status_code=404,
+            detail=str(
+                readiness.get("selectable_reason")
+                or "model is not runtime-ready/selectable"
+            ),
+        )
+    return selectable_match
+
+
+@router.get("/models")
+def list_v1_models() -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        models = list_models(session)
+    now = int(time.time())
+    data = [
+        {
+            "id": _exposed_model_id(model),
+            "object": "model",
+            "created": now,
+            "owned_by": OWNED_BY,
+            "serving_model_name": model.get("serving_model_name"),
+            "source_type": model.get("source_type"),
+        }
+        for model in models
+        if _is_selectable(model)
+    ]
+    return {"object": "list", "data": data}
+
+
+@router.post("/chat/completions")
+def post_v1_chat_completion(
+    request: ChatCompletionRequest,
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> dict[str, Any]:
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "streaming chat completions are not implemented in this OpenAI-compatible shim; "
+                "retry with stream=false"
+            ),
+        )
+
+    with Session(get_engine()) as session:
+        model = _resolve_selectable_model(session, request.model)
+
+    question, context = _build_prompt(request.messages)
+
+    serving_model_name = model.get("serving_model_name")
+    if not serving_model_name:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "selected model has no serving target; only runtime-ready/selectable "
+                "models can be used through the OpenAI-compatible shim"
+            ),
+        )
+
+    try:
+        result = llm_client.generate_answer(
+            question=question,
+            context=context,
+            model=str(serving_model_name),
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+    except LLMClientError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"LLM request failed: {exc}"
+        ) from exc
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+    exposed_model_id = _exposed_model_id(model) if model.get("id") else str(
+        serving_model_name
+    )
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": exposed_model_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": result.answer},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        "x_domain_platform": {
+            "registry_model_id": model.get("id"),
+            "serving_model_name": serving_model_name,
+            "used_fallback": result.used_fallback,
+            "actual_model": result.model,
+            "source_type": model.get("source_type"),
+            "readiness": model.get("readiness"),
+            "notes": [
+                "Token counts are not reported by the upstream Ollama OpenAI shim; usage fields are placeholders.",
+                "RAG-collection grounding is not wired into this shim; messages are forwarded to the model as provided.",
+                "Streaming is not implemented; request must use stream=false.",
+            ],
+        },
+    }
