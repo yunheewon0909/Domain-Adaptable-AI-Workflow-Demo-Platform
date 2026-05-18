@@ -400,8 +400,8 @@ External chat/model UX comparison is expected to happen through the Open WebUI s
 
 The API now exposes a thin OpenAI-compatible HTTP shim so external chat clients (Open WebUI, OpenAI SDK clients, etc.) can reach our model-registry-aware inference path with readiness gating preserved:
 
-- `GET /v1/models` — lists only registry rows whose `readiness.selectable == true`. Artifact-only / `publish_ready` / not-yet-serving rows are **never** exposed. The `id` field is the registry id (for example `model-1`); the `serving_model_name` is included for visibility.
-- `POST /v1/chat/completions` — accepts `{ "model", "messages", "temperature", "max_tokens", "stream" }` and adapts to the same `LLMClient` used by `/inference/run`. `model` may be a registry id, a serving model name, or the underlying Ollama model name, but the resolved row must still be runtime-ready/selectable. The shim returns an OpenAI-shaped `chat.completion` response and an `x_domain_platform` block describing the resolved registry row, fallback usage, and limitations.
+- `GET /v1/models` — lists only registry rows whose `readiness.selectable == true`. Artifact-only / `publish_ready` / not-yet-serving rows are **never** exposed. The OpenAI-visible `id` is a human-readable platform label such as `Qwen2.5 7B - default platform model`; the internal registry id remains available as `registry_id`.
+- `POST /v1/chat/completions` — accepts `{ "model", "messages", "temperature", "max_tokens", "stream", "rag_collection_id", "top_k" }` and adapts to the same `LLMClient` used by `/inference/run`. `model` may be the human-readable OpenAI-visible id, a registry id, a serving model name, or the underlying Ollama model name, but the resolved row must still be runtime-ready/selectable. The shim returns an OpenAI-shaped `chat.completion` response and an `x_domain_platform` block describing the resolved registry row, fallback usage, optional RAG grounding, and limitations.
 
 Example usage from an OpenAI-style client:
 
@@ -411,7 +411,7 @@ curl -s http://127.0.0.1:8000/v1/models | jq
 curl -s -X POST http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "model-1",
+    "model": "Qwen2.5 7B - default platform model",
     "messages": [
       {"role": "system", "content": "Reply in one short sentence."},
       {"role": "user", "content": "What is the demo platform for?"}
@@ -426,7 +426,7 @@ Open WebUI can be pointed at this shim by setting its OpenAI base URL to `http:/
 Intentional limitations of the first slice:
 
 - **Streaming compatibility is shallow**: requests with `"stream": true` return OpenAI-style SSE chunks for Open WebUI compatibility, but the shim still waits for one completed upstream Ollama response before emitting the content. True token-by-token streaming is a follow-up.
-- **No RAG-collection grounding**: messages are forwarded to the model as-is. RAG-collection-grounded inference is still available via `/inference/run`, which the `/admin` Models tab uses.
+- **Optional RAG-collection grounding**: clients may pass `rag_collection_id` and `top_k` to ground a chat completion with platform-managed RAG collection evidence. Plain OpenAI clients, including stock Open WebUI chats, do not send these custom fields, so those requests remain ordinary registry-gated chat until a tool/function or custom request layer supplies the collection id.
 - **Readiness gating is strict**: only `readiness.selectable == true` registry rows are exposed and usable. Direct Ollama model names that are not registered in the model registry are **not** accepted; this is by design so that an external client cannot bypass the artifact-only vs published distinction.
 - **Token usage is placeholder**: the upstream Ollama OpenAI shim does not report token counts, so `usage` fields are zeros.
 - **No tool/function calling, no `n>1`, no `logprobs`**: only the minimal subset Open WebUI needs for a chat round-trip is implemented.
@@ -453,14 +453,14 @@ Override the host port if `3000` is taken:
 OPEN_WEBUI_PORT=3100 docker compose --profile open-webui up -d open-webui
 ```
 
-The sidecar shares the existing `ollama` service via `OLLAMA_BASE_URL=http://ollama:11434` and persists its own state to the `open-webui-data` named volume.
+The sidecar is configured to use the platform OpenAI-compatible shim at `http://api:8000/v1` and to disable direct Ollama model listing (`ENABLE_OLLAMA_API=False`). That keeps Open WebUI focused on registry-gated platform models instead of showing duplicate raw Ollama models. It persists its own state to the `open-webui-data` named volume.
 
 Boundary notes for reviewers:
 
 - **`/demo` is still the authoritative reviewer surface** for Workflow, PLC testing MVP, Fine-tuning, Models, and RAG. Open WebUI is for chat/model UX comparison only.
 - **Separate data stores**: Open WebUI keeps its own users, chats, prompts, and RAG store inside its volume. Those are **not** the same as `rag_collections` / `rag_documents`, `ft_datasets`, `model_registry`, or PLC tables. Documents uploaded into Open WebUI are not visible to workflow evidence or the RAG tab.
 - **Separate auth**: Open WebUI manages its own signup/login on first run. There is no shared identity with the FastAPI app, which has no auth surface today.
-- **Readiness gating is bypassed**: Open WebUI lists whatever Ollama exposes locally, so it will surface artifact-only or otherwise non-serving-ready lineages that the Models tab intentionally blocks from inference. Treat the Models tab as authoritative for serving readiness.
+- **Readiness gating is preserved through the shim**: the sidecar should show only platform-exposed `/v1/models` rows. If direct Ollama is manually re-enabled inside Open WebUI admin settings, it can bypass registry readiness and reintroduce duplicate raw Ollama models.
 - **License/branding**: Open WebUI is third-party software with its own license; this repo references the public image rather than vendoring or rebranding it.
 
 Stop the sidecar when you are done:
@@ -469,7 +469,7 @@ Stop the sidecar when you are done:
 docker compose --profile open-webui down
 ```
 
-The first slice of the OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, and the documented limitations of the first slice (compatibility SSE only, no RAG-collection grounding, registry-only model resolution, placeholder token counts).
+The OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, human-readable model labels, optional `rag_collection_id` grounding, and the remaining limitations of the slice (compatibility SSE only, stock Open WebUI does not yet send platform RAG/tool fields, placeholder token counts).
 
 ## Host-Only Run
 

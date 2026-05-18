@@ -15,6 +15,7 @@ from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.llm import LLMClient, LLMClientError
 from api.services.model_registry import list_models
+from api.services.rag.collections import preview_collection_retrieval
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
@@ -36,6 +37,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = Field(default=0, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1)
     stream: bool = False
+    rag_collection_id: str | None = None
+    top_k: int = Field(default=4, ge=1, le=10)
 
 
 def _is_selectable(model: dict[str, Any]) -> bool:
@@ -43,8 +46,48 @@ def _is_selectable(model: dict[str, Any]) -> bool:
     return bool(readiness.get("selectable"))
 
 
+def _model_tags(model: dict[str, Any]) -> set[str]:
+    tags = model.get("tags_json") or []
+    return {str(tag).strip().lower() for tag in tags if str(tag).strip()}
+
+
+def _friendly_model_name(raw_name: str | None) -> str:
+    if not raw_name:
+        return "Unknown model"
+    base = raw_name.split(":", 1)[0]
+    if base.lower().startswith("qwen"):
+        base = base.replace("qwen", "Qwen", 1)
+    size = ""
+    if ":" in raw_name:
+        variant = raw_name.split(":", 1)[1]
+        head = variant.split("-", 1)[0]
+        if head:
+            size = f" {head.upper()}"
+    return f"{base}{size}".strip()
+
+
 def _exposed_model_id(model: dict[str, Any]) -> str:
-    return str(model["id"])
+    tags = _model_tags(model)
+    friendly = _friendly_model_name(
+        str(model.get("serving_model_name") or model.get("ollama_model_name") or "")
+    )
+    if "default" in tags:
+        return f"{friendly} - default platform model"
+    if "fallback" in tags:
+        return f"{friendly} - fallback platform model"
+    label = str(model.get("display_name") or model.get("id") or friendly).strip()
+    return f"{label} - platform model"
+
+
+def _model_sort_key(model: dict[str, Any]) -> tuple[int, str]:
+    tags = _model_tags(model)
+    if "default" in tags:
+        priority = 0
+    elif "fallback" in tags:
+        priority = 1
+    else:
+        priority = 2
+    return (priority, _exposed_model_id(model))
 
 
 def _build_prompt(messages: list[ChatMessage]) -> tuple[str, str]:
@@ -85,6 +128,20 @@ def _resolve_selectable_model(session: Session, requested_model: str) -> dict[st
 
     models = list_models(session)
     by_id = {str(model["id"]): model for model in models if model.get("id")}
+    by_exposed_id = {_exposed_model_id(model): model for model in models}
+    if requested in by_exposed_id:
+        model = by_exposed_id[requested]
+        if not _is_selectable(model):
+            readiness = model.get("readiness") or {}
+            raise HTTPException(
+                status_code=404,
+                detail=str(
+                    readiness.get("selectable_reason")
+                    or "model is not runtime-ready/selectable"
+                ),
+            )
+        return model
+
     if requested in by_id:
         model = by_id[requested]
         if not _is_selectable(model):
@@ -140,10 +197,13 @@ def list_v1_models() -> dict[str, Any]:
             "object": "model",
             "created": now,
             "owned_by": OWNED_BY,
+            "registry_id": model.get("id"),
+            "display_name": model.get("display_name"),
             "serving_model_name": model.get("serving_model_name"),
             "source_type": model.get("source_type"),
+            "readiness": model.get("readiness"),
         }
-        for model in models
+        for model in sorted(models, key=_model_sort_key)
         if _is_selectable(model)
     ]
     return {"object": "list", "data": data}
@@ -157,6 +217,34 @@ def _run_chat_completion(
         model = _resolve_selectable_model(session, request.model)
 
     question, context = _build_prompt(request.messages)
+
+    retrieval_preview: dict[str, Any] | None = None
+    if request.rag_collection_id:
+        with Session(get_engine()) as session:
+            try:
+                retrieval_preview = preview_collection_retrieval(
+                    session,
+                    collection_id=request.rag_collection_id,
+                    query=question,
+                    top_k=request.top_k,
+                )
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=404, detail="RAG collection not found"
+                ) from exc
+        rag_context = (
+            "\n\n".join(
+                f"[{item['filename']}]\n{item['excerpt']}"
+                for item in retrieval_preview.get("results", [])
+            )
+            or "No matching RAG collection context found."
+        )
+        context = (
+            f"{context}\n\n"
+            "Use the following platform RAG collection evidence when it is relevant. "
+            "If it is insufficient, say so.\n\n"
+            f"{rag_context}"
+        )
 
     serving_model_name = model.get("serving_model_name")
     if not serving_model_name:
@@ -210,9 +298,11 @@ def _run_chat_completion(
             "actual_model": result.model,
             "source_type": model.get("source_type"),
             "readiness": model.get("readiness"),
+            "rag_collection_id": request.rag_collection_id,
+            "retrieval_preview": retrieval_preview,
             "notes": [
                 "Token counts are not reported by the upstream Ollama OpenAI shim; usage fields are placeholders.",
-                "RAG-collection grounding is not wired into this shim; messages are forwarded to the model as provided.",
+                "RAG-collection grounding is opt-in via rag_collection_id; ordinary OpenAI clients that do not send it remain plain chat.",
                 "Streaming responses are compatibility SSE wrappers around a single completed upstream call.",
             ],
         },

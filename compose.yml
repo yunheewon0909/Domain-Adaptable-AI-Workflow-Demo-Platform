@@ -115,12 +115,20 @@ services:
     image: ghcr.io/open-webui/open-webui:main
     profiles: ["open-webui"]
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
+      ENABLE_OLLAMA_API: "False"
+      OPENAI_API_BASE_URLS: http://api:8000/v1
+      OPENAI_API_KEYS: local-dev-key
+      RAG_EMBEDDING_ENGINE: ollama
+      RAG_EMBEDDING_MODEL: nomic-embed-text
+      RAG_OLLAMA_BASE_URL: http://ollama:11434
+      BYPASS_EMBEDDING_AND_RETRIEVAL: "true"
     ports:
       - "${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - open-webui-data:/app/backend/data
     depends_on:
+      api:
+        condition: service_started
       ollama:
         condition: service_started
 

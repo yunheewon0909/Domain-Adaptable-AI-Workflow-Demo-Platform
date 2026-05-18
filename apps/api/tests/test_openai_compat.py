@@ -10,6 +10,7 @@ from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.main import app
 from api.models import ModelRegistryRecord
+from api.services.rag.collections import add_collection_document, create_collection
 
 
 class _FakeChatResult:
@@ -94,7 +95,10 @@ def test_v1_models_exposes_only_selectable_rows(client: TestClient) -> None:
         assert entry["object"] == "model"
         assert entry["owned_by"] == "domain-adaptable-ai-platform"
         assert entry["id"]
+        assert "platform model" in entry["id"]
+        assert entry["registry_id"]
         assert entry["serving_model_name"]
+        assert entry["readiness"]["selectable"] is True
 
 
 def test_v1_models_excludes_artifact_only_rows(client: TestClient) -> None:
@@ -140,7 +144,7 @@ def test_v1_chat_completions_returns_openai_shape(
         "total_tokens": 0,
     }
     platform_meta = body["x_domain_platform"]
-    assert platform_meta["registry_model_id"] == selected["id"]
+    assert platform_meta["registry_model_id"] == selected["registry_id"]
     assert platform_meta["serving_model_name"] == selected["serving_model_name"]
     assert platform_meta["readiness"]["selectable"] is True
 
@@ -152,6 +156,80 @@ def test_v1_chat_completions_returns_openai_shape(
     assert call["temperature"] == 0
     assert call["max_tokens"] == 16
 
+
+
+def test_v1_chat_completions_accepts_registry_id_for_backward_compatibility(
+    client_with_llm: TestClient,
+) -> None:
+    selected = client_with_llm.get("/v1/models").json()["data"][0]
+
+    response = client_with_llm.post(
+        "/v1/chat/completions",
+        json={
+            "model": selected["registry_id"],
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model"] == selected["id"]
+
+
+
+def test_v1_chat_completions_can_ground_with_rag_collection(
+    client_with_llm: TestClient, recording_llm: _RecordingLLMClient
+) -> None:
+    selected = client_with_llm.get("/v1/models").json()["data"][0]
+    with Session(get_engine()) as session:
+        collection = create_collection(
+            session,
+            name="OpenAI shim grounding test",
+            description=None,
+            embedding_model=None,
+            chunking_policy_json={},
+        )
+        add_collection_document(
+            session,
+            collection_id=collection["id"],
+            filename="maintenance-note.txt",
+            mime_type="text/plain",
+            source_type="test",
+            content=b"Maintenance automation evidence says inspect the servo alarm.",
+        )
+
+    response = client_with_llm.post(
+        "/v1/chat/completions",
+        json={
+            "model": selected["id"],
+            "messages": [{"role": "user", "content": "maintenance automation"}],
+            "rag_collection_id": collection["id"],
+            "top_k": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    platform_meta = body["x_domain_platform"]
+    assert platform_meta["rag_collection_id"] == collection["id"]
+    assert platform_meta["retrieval_preview"]["results"]
+    assert "servo alarm" in str(recording_llm.calls[-1]["context"])
+
+def test_v1_chat_completions_rejects_missing_rag_collection(
+    client_with_llm: TestClient,
+) -> None:
+    selected = client_with_llm.get("/v1/models").json()["data"][0]
+
+    response = client_with_llm.post(
+        "/v1/chat/completions",
+        json={
+            "model": selected["id"],
+            "messages": [{"role": "user", "content": "hello"}],
+            "rag_collection_id": "missing-collection",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "RAG collection not found"
 
 def test_v1_chat_completions_accepts_serving_model_name(
     client_with_llm: TestClient,
