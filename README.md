@@ -4,7 +4,7 @@
 
 This repository is now positioned as an extensible monorepo-style skeleton for domain-adaptable AI and automation services. It still ships the original reviewer workflow demo, it includes a **DB-centered PLC test automation platform slice**, and it now also includes a **local AI ops slice** for fine-tuning dataset management, queue-backed real training jobs, model registry review, separate inference selection, separate workflow source selection, and separate RAG collection/document review. The Models cards now expose explicit Review details and Use for inference actions, and the in-panel inference summary is clearer.
 
-The current milestone is best understood as **v0.7.7: runtime E2E hardening for the real local SFT + LoRA, workflow, RAG, and PLC demo paths**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, runtime-aware preflight guidance in the same reviewer surface, clearer fine-tuning troubleshooting messages, graceful workflow guidance when the legacy RAG index is not initialized, collection-managed workflow source review, separate RAG data operations with document deletion, and executable Docker/API/worker/Ollama E2E scripts, while keeping artifact-only rows reviewable and not inference-selectable.
+The current milestone is best understood as **v0.7.7: runtime E2E hardening for the real local SFT + LoRA, workflow, RAG, and PLC demo paths**. The repo still does not include private C++ assets or live PLC bindings, and it still does not claim a full production fine-tuning platform. What it now provides is an end-to-end review flow for training data management, queue-backed real training execution, artifact registration, smoke-test validation, truthful model readiness, guided Fine-tuning smoke-job progress tracking inside `/demo`, runtime-aware preflight guidance in the same reviewer surface, clearer fine-tuning troubleshooting messages, graceful workflow guidance when the legacy RAG index is not initialized, evidence-grounded workflow fallback when an LLM returns unstructured non-JSON output, collection-managed workflow source review, separate RAG data operations with document deletion, and executable Docker/API/worker/Ollama E2E scripts, while keeping artifact-only rows reviewable and not inference-selectable.
 
 The key message of the repo is now threefold:
 
@@ -380,7 +380,7 @@ curl -s http://127.0.0.1:8000/demo
 
 ## Docker-first demo readiness notes
 
-- **Workflow reviewer source choice**: Workflow mode can use the legacy dataset-backed `rag.db` source or collection-managed RAG sources. If the legacy index is missing, `/demo` shows `RAG index is not ready`, explains that you should run `rag-ingest` or enqueue a RAG reindex, and keeps the job result readable instead of surfacing a noisy subprocess failure.
+- **Workflow reviewer source choice**: Workflow mode can use the legacy dataset-backed `rag.db` source or collection-managed RAG sources. If the legacy index is missing, `/demo` shows `RAG index is not ready`, explains that you should run `rag-ingest` or enqueue a RAG reindex, and keeps the job result readable instead of surfacing a noisy subprocess failure. If the LLM returns prose instead of strict workflow JSON, the job returns an evidence-grounded degraded result with a `llm_output_unstructured` warning instead of failing validation.
 - **RAG collection-managed documents are different**: the RAG tab manages `rag_collections` / `rag_documents` metadata, text previews, retrieval preview, and document deletion. Those collection-managed documents are separate from the legacy workflow `rag.db` index, and they stay preview-based rather than a full embedding lifecycle.
 - **Docker CPU smoke profile**: `compose.yml` now pins the API and worker demo path to CPU-friendly smoke defaults (`TRAINING_DEVICE=cpu`, `TRAINING_ALLOW_CPU=true`, `FT_MAX_SEQ_LENGTH=256`, artifact-only publish seam off) so Mac/Windows Docker Compose runs can validate tiny smoke jobs without pretending a large-model CPU training path is practical.
 - **Host Apple Silicon MPS profile**: use the host-worker path when you want actual MPS validation. Docker Linux workers should still be treated as non-MPS runtimes even on Apple Silicon hosts.
@@ -905,6 +905,7 @@ Or run the main bundle:
 
 - no selectable model: fail by default, optional skip with `E2E_ALLOW_NO_MODEL_SKIP=true`
 - missing legacy `rag.db`: workflow E2E treats a structured `RAG index is not ready` result as success, because the goal is graceful degradation instead of subprocess failure
+- unstructured LLM workflow output: non-JSON or schema-invalid responses resolve to a degraded evidence-grounded result instead of a subprocess or validation failure
 - artifact-only fine-tuned model: must stay blocked from inference/workflow selection
 - FT smoke path: validates artifact/report/registry behavior and truthful readiness, not model quality or automatic Ollama import
 
@@ -960,6 +961,6 @@ The repo now explicitly uses milestone-based versioning:
 - `v0.7.4`: `/demo` runtime preflight guidance, stronger smoke-runtime boundary copy, and deterministic preflight unit-test coverage
 - `v0.7.5`: graceful workflow RAG-index readiness guidance, Docker CPU-smoke defaults for Compose, clearer fine-tuning failure classification, and RAG document deletion/management improvements
 - `v0.7.6`: deterministic smoke fallback docs, workflow source selection across legacy and collection-managed RAG, and tighter inference readiness gating for selectable models
-- `v0.7.7`: Docker/API/worker/Ollama runtime-validation scripts for stack smoke, inference, workflow model execution, collection-managed RAG workflow evidence, artifact-only model gating, RAG document CRUD refresh, PLC stub pipeline checks, and queue hardening
+- `v0.7.7`: Docker/API/worker/Ollama runtime-validation scripts for stack smoke, inference, workflow model execution, collection-managed RAG workflow evidence, artifact-only model gating, RAG document CRUD refresh, PLC stub pipeline checks, graceful workflow fallback for unstructured LLM output, and queue hardening
 
 See `CHANGELOG.md` for the current milestone notes.
