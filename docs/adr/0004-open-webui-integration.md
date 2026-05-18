@@ -27,6 +27,7 @@ Concretely:
 - the sidecar is started with `docker compose --profile open-webui up -d open-webui`
 - Open WebUI is started with `ENABLE_OLLAMA_API=False` and `OPENAI_API_BASE_URLS=http://api:8000/v1`
 - the API shim exposes only runtime-ready/selectable model-registry rows through `/v1/models`
+- a repo-owned importable Open WebUI Tool artifact (`/openwebui/platform_tools.py`) lets chats call platform RAG collections and workflow jobs without forking Open WebUI
 - no source code of Open WebUI is vendored or submoduled
 - Open WebUI still owns its users, chats, prompts, and uploads; it does not become the source of truth for platform RAG, training, PLC, or registry state
 
@@ -85,7 +86,11 @@ The sidecar now uses a thin OpenAI-compatible shim exposed by `apps/api`:
 - `GET /v1/models` returns serving-ready selectable registry rows only, with human-readable model ids and internal `registry_id` metadata
 - `POST /v1/chat/completions` adapts to our `LLMClient` semantics, including readiness gating, compatibility SSE streaming, and optional `rag_collection_id` / `top_k` context grounding
 
-This keeps external chat clients from bypassing the artifact-only vs published distinction. The shim deliberately remains small: no true token streaming, no general tool/function calling, and no automatic Open WebUI-to-platform RAG selection yet.
+This keeps external chat clients from bypassing the artifact-only vs published distinction. The shim deliberately remains small: no true token streaming and no general OpenAI tool/function-calling implementation. Platform RAG/workflow calls are handled through the separate importable Open WebUI Tool artifact.
+
+## Open WebUI platform tool
+
+`/openwebui/platform_tools.py` serves a small Open WebUI Tool module that can be imported into the sidecar. It defaults to `http://api:8000` and exposes functions to list/query platform RAG collections, list workflows, enqueue workflow jobs, and read job status. This keeps user-facing chat affordances in Open WebUI while preserving the platform API as the source of truth for RAG/workflow state.
 
 ## Pros
 
@@ -97,7 +102,7 @@ This keeps external chat clients from bypassing the artifact-only vs published d
 
 ## Cons / risks
 
-- **data store separation**: Open WebUI has its own users, chats, prompts, and RAG store; reviewers may mistakenly assume documents uploaded into Open WebUI are visible to our `rag_collections` or workflow evidence path, which is not true
+- **data store separation**: Open WebUI has its own users, chats, prompts, and RAG store; reviewers may mistakenly assume documents uploaded into Open WebUI are visible to our `rag_collections` or workflow evidence path, which is not true. Use the platform tool when a chat needs platform-managed RAG/workflow state.
 - **configuration drift**: if direct Ollama is manually re-enabled in Open WebUI admin settings, it can again surface raw duplicate models and bypass the `model_registry` `artifact_ready` vs `published` policy
 - **auth**: Open WebUI manages its own auth (signup on first run by default); this repo has no auth and the sidecar should not be assumed to share identity with `/demo`
 - **license/branding**: Open WebUI is third-party software with its own license and brand. We are not redistributing it; we reference a public image. Any decision to bundle, fork, or rebrand it would require a separate review of upstream license terms before action.
@@ -110,4 +115,4 @@ This keeps external chat clients from bypassing the artifact-only vs published d
 - this repo gains an optional, removable evaluation surface without altering any existing reviewer flow
 - the platform retains a single source of truth for registry, training, RAG collections, PLC suites, and queue lifecycle
 - Open WebUI becomes a plausible user-facing chat shell for registry-gated models, while `/admin` remains the internal/operator console for workflows, RAG collection management, training, PLC, and review state
-- a future ADR can revisit reviewer-surface migration or an Open WebUI tool/function layer, with the evidence from this integration to support the call
+- a future ADR can revisit reviewer-surface migration or deeper Open WebUI automation, with the evidence from this integration to support the call

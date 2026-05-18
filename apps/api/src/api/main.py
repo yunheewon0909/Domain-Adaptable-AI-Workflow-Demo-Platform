@@ -13,6 +13,7 @@ from api.routers.health import router as health_router
 from api.routers.jobs import router as jobs_router
 from api.routers.models import router as models_router
 from api.routers.openai_compat import router as openai_compat_router
+from api.routers.openwebui import router as openwebui_router
 from api.routers.plc import router as plc_router
 from api.routers.rag import router as rag_router
 from api.routers.workflows import router as workflows_router
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(plc_router)
     app.include_router(rag_router)
     app.include_router(openai_compat_router)
+    app.include_router(openwebui_router)
     if active_starter.demo.enabled:
         app.include_router(demo_router)
 

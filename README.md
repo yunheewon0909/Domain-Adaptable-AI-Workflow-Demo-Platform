@@ -469,7 +469,24 @@ Stop the sidecar when you are done:
 docker compose --profile open-webui down
 ```
 
-The OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, human-readable model labels, optional `rag_collection_id` grounding, and the remaining limitations of the slice (compatibility SSE only, stock Open WebUI does not yet send platform RAG/tool fields, placeholder token counts).
+
+### Open WebUI platform tool import
+
+The API also serves a small Open WebUI Tool artifact from `/openwebui/platform_tools.py` with a discoverable manifest at `/openwebui/manifest.json`. Import that Python module from the Open WebUI admin/workspace tools screen when you want chat sessions to call platform-managed capabilities without forking Open WebUI.
+
+Inside the Compose network the tool defaults to `http://api:8000`. If you import it into an Open WebUI instance outside Compose, set its `api_base_url` valve to the host API URL, for example `http://127.0.0.1:8000`.
+
+Exposed tool calls:
+
+- `list_rag_collections()` — list platform `rag_collections` rows and document counts
+- `query_rag_collection(collection_id, query, top_k)` — retrieve platform-managed evidence excerpts
+- `list_workflows()` — list queue-backed workflow definitions
+- `enqueue_workflow_job(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k)` — enqueue a workflow run
+- `get_job_status(job_id)` — poll queued/running workflow jobs and inspect results
+
+This is intentionally an importable tool artifact, not a vendored Open WebUI fork. Stock Open WebUI still owns chats/users/tool assignment, while the tool calls the platform API for RAG/workflow state.
+
+The OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, human-readable model labels, optional `rag_collection_id` grounding, and the remaining limitations of the slice (compatibility SSE only, placeholder token counts). Use the importable platform tool above when Open WebUI chats need to select/query platform RAG collections or enqueue workflows.
 
 ## Host-Only Run
 
