@@ -385,6 +385,46 @@ curl -s http://127.0.0.1:8000/demo
 - **Docker CPU smoke profile**: `compose.yml` now pins the API and worker demo path to CPU-friendly smoke defaults (`TRAINING_DEVICE=cpu`, `TRAINING_ALLOW_CPU=true`, `FT_MAX_SEQ_LENGTH=256`, artifact-only publish seam off) so Mac/Windows Docker Compose runs can validate tiny smoke jobs without pretending a large-model CPU training path is practical.
 - **Host Apple Silicon MPS profile**: use the host-worker path when you want actual MPS validation. Docker Linux workers should still be treated as non-MPS runtimes even on Apple Silicon hosts.
 
+## Optional Open WebUI sidecar
+
+Open WebUI is integrated as an **optional Docker Compose sidecar** for chat/model UX evaluation. It is **not** a replacement for `/demo`, and it is **not** started by default. See `docs/adr/0004-open-webui-integration.md` for the full decision and risk notes.
+
+Start the sidecar only when you want to evaluate it:
+
+```bash
+docker compose --profile open-webui up -d open-webui
+```
+
+Then open:
+
+```text
+http://127.0.0.1:3000
+```
+
+Override the host port if `3000` is taken:
+
+```bash
+OPEN_WEBUI_PORT=3100 docker compose --profile open-webui up -d open-webui
+```
+
+The sidecar shares the existing `ollama` service via `OLLAMA_BASE_URL=http://ollama:11434` and persists its own state to the `open-webui-data` named volume.
+
+Boundary notes for reviewers:
+
+- **`/demo` is still the authoritative reviewer surface** for Workflow, PLC testing MVP, Fine-tuning, Models, and RAG. Open WebUI is for chat/model UX comparison only.
+- **Separate data stores**: Open WebUI keeps its own users, chats, prompts, and RAG store inside its volume. Those are **not** the same as `rag_collections` / `rag_documents`, `ft_datasets`, `model_registry`, or PLC tables. Documents uploaded into Open WebUI are not visible to workflow evidence or the RAG tab.
+- **Separate auth**: Open WebUI manages its own signup/login on first run. There is no shared identity with the FastAPI app, which has no auth surface today.
+- **Readiness gating is bypassed**: Open WebUI lists whatever Ollama exposes locally, so it will surface artifact-only or otherwise non-serving-ready lineages that the Models tab intentionally blocks from inference. Treat the Models tab as authoritative for serving readiness.
+- **License/branding**: Open WebUI is third-party software with its own license; this repo references the public image rather than vendoring or rebranding it.
+
+Stop the sidecar when you are done:
+
+```bash
+docker compose --profile open-webui down
+```
+
+A future evaluation may decide to expose a thin OpenAI-compatible shim from `apps/api` (`/v1/models`, `/v1/chat/completions`) so external chat clients can reach our model-registry-aware inference path with readiness gating preserved. That shim is **not** implemented in this milestone; the spike is currently limited to the sidecar wiring described above.
+
 ## Host-Only Run
 
 API:
