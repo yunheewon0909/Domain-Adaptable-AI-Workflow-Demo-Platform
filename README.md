@@ -474,7 +474,16 @@ docker compose --profile open-webui down
 
 The API also serves a small Open WebUI Tool artifact from `/openwebui/platform_tools.py` with a discoverable manifest at `/openwebui/manifest.json`. Import that Python module from the Open WebUI admin/workspace tools screen when you want chat sessions to call platform-managed capabilities without forking Open WebUI.
 
-Inside the Compose network the tool defaults to `http://api:8000`. If you import it into an Open WebUI instance outside Compose, set its `api_base_url` valve to the host API URL, for example `http://127.0.0.1:8000`.
+Step-by-step from a fresh Open WebUI install:
+
+1. Start the platform: `docker compose up -d api worker postgres ollama`. The API auto-seeds two demo RAG collections on first boot (see below) so the Tool is not pointed at an empty surface.
+2. Start the sidecar: `docker compose --profile open-webui up -d open-webui` and open `http://127.0.0.1:3000`.
+3. Grab the tool source. Inside Compose: `curl http://api:8000/openwebui/platform_tools.py`. From the host: `curl http://127.0.0.1:8000/openwebui/platform_tools.py`.
+4. In Open WebUI go to **Workspace → Tools → + (New)**, paste the file contents, save.
+5. Open the Tool's **Valves** panel. Inside the Compose network leave `api_base_url=http://api:8000`. From host-side Open WebUI set it to `http://127.0.0.1:8000`.
+6. Enable the Tool on a chat (chat **Settings → Tools**) and ask the model to call `list_rag_collections`, `query_rag_collection`, or `enqueue_workflow_job`.
+
+`GET /openwebui/manifest.json` lists the exposed tool methods if a reviewer wants to discover the surface without reading the Python file first.
 
 Exposed tool calls:
 
@@ -487,6 +496,27 @@ Exposed tool calls:
 This is intentionally an importable tool artifact, not a vendored Open WebUI fork. Stock Open WebUI still owns chats/users/tool assignment, while the tool calls the platform API for RAG/workflow state.
 
 The OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, human-readable model labels, optional `rag_collection_id` grounding, and the remaining limitations of the slice (compatibility SSE only, placeholder token counts). Use the importable platform tool above when Open WebUI chats need to select/query platform RAG collections or enqueue workflows.
+
+### Seeded demo RAG collections
+
+To keep the imported Open WebUI Tool from looking half-empty on a fresh database, the API startup deterministically seeds two demo collections backed by repo-tracked sample documents:
+
+- `rag-collection-demo-ops` — **Demo Operations Handbook** (`data/sample_docs/getting_started.txt`, `data/sample_docs/maintenance.md`)
+- `rag-collection-demo-enterprise` — **Demo Enterprise Knowledge** (`data/datasets/enterprise_docs/source/quarterly_enablement.md`, `data/datasets/enterprise_docs/source/pilot_notes.md`)
+
+What this gives a reviewer:
+
+- `list_rag_collections()` in Open WebUI returns at least these two ids with non-zero `document_count`.
+- `query_rag_collection("rag-collection-demo-ops", "maintenance ingestion")` returns ranked excerpts for the maintenance workflow.
+- `enqueue_workflow_job("briefing", "Summarize the seeded ops handbook.", rag_collection_id="rag-collection-demo-ops")` produces a grounded workflow result without manual document upload.
+
+Seed semantics:
+
+- **Idempotent on startup**: existing seed records are not duplicated.
+- **Reviewer-deletions win**: deleting an individual seeded document via `DELETE /rag-documents/{id}` (or the `/admin` RAG tab) does **not** re-create it on the next restart. The seeder only populates documents when it has to create the collection row itself.
+- **Tagged for inspection**: seed rows carry `metadata_json.owner_tag = "demo_seed"` (documents) and `chunking_policy_json.owner_tag = "demo_seed"` (collections) so reviewers and tests can tell them apart from operator-uploaded content.
+
+To force-restore the seed, drop the seed `rag_collections` rows directly in the database (no platform `DELETE /rag-collections/{id}` endpoint is exposed by design) and restart the API — the next startup will re-create both collections and their initial documents.
 
 ## Host-Only Run
 

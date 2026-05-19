@@ -19,6 +19,7 @@ from api.routers.rag import router as rag_router
 from api.routers.workflows import router as workflows_router
 from api.services.datasets.registry import ensure_default_datasets
 from api.services.model_registry import ensure_default_models
+from api.services.rag.collections import ensure_default_rag_collections
 from api.services.starter_definitions import get_default_starter
 
 _DEMO_STATIC_ROOT = Path(__file__).resolve().parent / "static" / "demo"
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
         with Session(engine) as session:
             ensure_default_datasets(session)
             ensure_default_models(session)
+            ensure_default_rag_collections(session)
 
     return app
 

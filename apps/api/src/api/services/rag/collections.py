@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
@@ -269,6 +270,180 @@ def delete_document(session: Session, document_id: str) -> dict[str, Any]:
             storage_deleted = True
             response["storage_deleted"] = True
     return response
+
+
+SEED_COLLECTION_OWNER_TAG = "demo_seed"
+
+
+@dataclass(frozen=True)
+class _SeedDocumentSpec:
+    document_id: str
+    source_path: str
+    filename: str
+    mime_type: str
+
+
+@dataclass(frozen=True)
+class _SeedCollectionSpec:
+    collection_id: str
+    name: str
+    description: str
+    documents: tuple[_SeedDocumentSpec, ...]
+
+
+_DEMO_SEED_COLLECTIONS: tuple[_SeedCollectionSpec, ...] = (
+    _SeedCollectionSpec(
+        collection_id="rag-collection-demo-ops",
+        name="Demo Operations Handbook",
+        description=(
+            "Pre-seeded industrial operations knowledge base. Use it to demo "
+            "the Open WebUI Tool list/query path and workflow grounding."
+        ),
+        documents=(
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-ops-getting-started",
+                source_path="data/sample_docs/getting_started.txt",
+                filename="getting_started.txt",
+                mime_type="text/plain",
+            ),
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-ops-maintenance",
+                source_path="data/sample_docs/maintenance.md",
+                filename="maintenance.md",
+                mime_type="text/markdown",
+            ),
+        ),
+    ),
+    _SeedCollectionSpec(
+        collection_id="rag-collection-demo-enterprise",
+        name="Demo Enterprise Knowledge",
+        description=(
+            "Pre-seeded enterprise enablement and pilot notes. Useful as the "
+            "second collection for Open WebUI Tool list/query verification."
+        ),
+        documents=(
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-enterprise-enablement",
+                source_path="data/datasets/enterprise_docs/source/quarterly_enablement.md",
+                filename="quarterly_enablement.md",
+                mime_type="text/markdown",
+            ),
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-enterprise-pilot",
+                source_path="data/datasets/enterprise_docs/source/pilot_notes.md",
+                filename="pilot_notes.md",
+                mime_type="text/markdown",
+            ),
+        ),
+    ),
+)
+
+
+def _seed_document(
+    session: Session,
+    *,
+    collection_id: str,
+    spec: _SeedDocumentSpec,
+    content: bytes,
+) -> RAGDocumentRecord:
+    now = datetime.now(timezone.utc)
+    checksum = hashlib.sha256(content).hexdigest()
+    storage_dir = _collections_root() / collection_id / "documents"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(spec.filename).suffix
+    stored_filename = f"{spec.document_id}{suffix}" if suffix else spec.document_id
+    storage_path = storage_dir / _sanitize_filename(stored_filename)
+    storage_path.write_bytes(content)
+
+    preview_text, parse_method = _extract_preview_text(content, spec.mime_type)
+    status = "parsed" if preview_text else "uploaded"
+    metadata_json = {
+        "storage_path": str(storage_path),
+        "text_preview": preview_text[:4000],
+        "text_length": len(preview_text),
+        "parse_method": parse_method,
+        "chunk_preview": [
+            preview_text[i : i + 300]
+            for i in range(0, min(len(preview_text), 900), 300)
+        ]
+        if preview_text
+        else [],
+        "owner_tag": SEED_COLLECTION_OWNER_TAG,
+        "seed_source_path": spec.source_path,
+    }
+    record = RAGDocumentRecord(
+        id=spec.document_id,
+        collection_id=collection_id,
+        filename=spec.filename,
+        mime_type=spec.mime_type,
+        source_type="seed",
+        status=status,
+        checksum=checksum,
+        metadata_json=metadata_json,
+        updated_at=now,
+    )
+    session.add(record)
+    return record
+
+
+def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
+    """Seed deterministic demo RAG collections if they are missing.
+
+    Idempotent: existing collection/document records keyed by the seed ids are
+    left untouched, so reviewers can edit or delete the seed without it being
+    silently restored on the next API restart. Documents are only re-created
+    when both the seed source file is present on disk and the record does not
+    already exist.
+    """
+    settings = get_settings()
+    project_root = get_project_root()
+    now = datetime.now(timezone.utc)
+    seeded: list[dict[str, Any]] = []
+    changed = False
+
+    for spec in _DEMO_SEED_COLLECTIONS:
+        collection = session.get(RAGCollectionRecord, spec.collection_id)
+        is_new_collection = collection is None
+        if is_new_collection:
+            collection = RAGCollectionRecord(
+                id=spec.collection_id,
+                name=spec.name,
+                description=spec.description,
+                embedding_model=settings.ollama_embed_model,
+                chunking_policy_json={
+                    "chunk_size": settings.rag_chunk_size,
+                    "chunk_overlap": settings.rag_chunk_overlap,
+                    "owner_tag": SEED_COLLECTION_OWNER_TAG,
+                },
+                updated_at=now,
+            )
+            session.add(collection)
+            session.flush()
+            changed = True
+
+        # Only populate documents on first creation. A reviewer deleting a seed
+        # document should not see it silently restored on the next restart;
+        # deleting the whole collection is the documented way to re-seed.
+        if is_new_collection:
+            for doc_spec in spec.documents:
+                source_path = project_root / doc_spec.source_path
+                if not source_path.is_file():
+                    continue
+                content = source_path.read_bytes()
+                _seed_document(
+                    session,
+                    collection_id=spec.collection_id,
+                    spec=doc_spec,
+                    content=content,
+                )
+                collection.updated_at = now
+                changed = True
+
+        seeded.append({"id": spec.collection_id, "name": spec.name})
+
+    if changed:
+        session.commit()
+    return seeded
 
 
 def preview_collection_retrieval(
