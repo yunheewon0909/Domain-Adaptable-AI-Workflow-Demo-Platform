@@ -70,9 +70,12 @@ def test_platform_tools_exposes_expected_methods() -> None:
         "get_rag_document",
         "delete_rag_document",
         "list_workflows",
+        "list_workflow_sources",
+        "list_selectable_models",
         "enqueue_workflow_job",
         "run_workflow_and_wait",
         "get_job_status",
+        "summarize_job_result",
     ):
         method = getattr(instance, method_name, None)
         assert callable(method), f"missing required tool method: {method_name}"
@@ -115,9 +118,12 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "def get_rag_document" in body
     assert "def delete_rag_document" in body
     assert "def list_workflows" in body
+    assert "def list_workflow_sources" in body
+    assert "def list_selectable_models" in body
     assert "def enqueue_workflow_job" in body
     assert "def run_workflow_and_wait" in body
     assert "def get_job_status" in body
+    assert "def summarize_job_result" in body
 
 
 def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None:
@@ -137,9 +143,12 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
         "get_rag_document",
         "delete_rag_document",
         "list_workflows",
+        "list_workflow_sources",
+        "list_selectable_models",
         "enqueue_workflow_job",
         "run_workflow_and_wait",
         "get_job_status",
+        "summarize_job_result",
     }
 
 
@@ -302,6 +311,10 @@ def test_list_workflows_returns_compact_projection() -> None:
     assert workflow["key"] == "briefing"
     assert workflow["summary"] == "Summarize evidence"
     assert workflow["output_fields"] == ["summary"]
+    assert workflow["recommended_prompts"] == [
+        "Summarize the latest ops findings",
+        "What are the key maintenance issues?",
+    ]
     assert "created_at" not in workflow
     assert "implementation_detail" not in workflow
 
@@ -329,6 +342,10 @@ def test_enqueue_workflow_job_promotes_job_id_for_chat_followup() -> None:
     assert decoded["ok"] is True
     assert decoded["job_id"] == "job-42"
     assert decoded["status"] == "queued"
+    assert decoded["source_type"] == "rag"
+    assert decoded["model_id"] is None
+    assert decoded["rag_collection_id"] == "rag-c1"
+    assert decoded["dataset_key"] is None
     assert "job_id='job-42'" in decoded["next_step"]
     assert "payload_json" not in decoded["job"]
 
@@ -600,3 +617,174 @@ def test_get_job_status_returns_compact_projection() -> None:
     assert "payload_json" not in job, (
         "payload_json is the request input; dropping it keeps polling responses small"
     )
+
+
+def test_list_workflows_omits_recommended_prompts_for_unknown_keys() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_workflows = [
+        {
+            "key": "unknown_workflow",
+            "title": "Unknown",
+            "description": "A test workflow",
+            "prompt_label": "Test prompt",
+            "output_fields": ["result"],
+        }
+    ]
+    tools._request = lambda method, path, *, json_body=None: (200, canned_workflows)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_workflows())
+    workflow = decoded["workflows"][0]
+    assert "recommended_prompts" not in workflow
+
+
+def test_list_workflow_sources_returns_combined_sources() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    def _fake_request(method, path, *, json_body=None):
+        if path == "/rag-collections":
+            return 200, [
+                {
+                    "id": "rag-c1",
+                    "name": "Ops",
+                    "description": "ops handbook",
+                    "embedding_model": "nomic-embed-text",
+                    "document_count": 1,
+                }
+            ]
+        if path == "/datasets":
+            return 200, [
+                {
+                    "dataset_key": "ops",
+                    "name": "Ops Dataset",
+                    "description": "legacy ops data",
+                }
+            ]
+        return 200, {}
+
+    tools._request = _fake_request  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_workflow_sources())
+    assert decoded["ok"] is True
+    sources = decoded["sources"]
+    assert len(sources["rag_collections"]) == 1
+    assert sources["rag_collections"][0]["id"] == "rag-c1"
+    assert len(sources["datasets"]) == 1
+    assert sources["datasets"][0]["dataset_key"] == "ops"
+
+
+def test_list_selectable_models_returns_only_selectable() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_models = [
+        {
+            "model_id": "model-1",
+            "name": "GPT-4",
+            "provider": "openai",
+            "status": "active",
+        },
+        {
+            "model_id": "model-2",
+            "name": "Review-Only",
+            "provider": "huggingface",
+            "status": "registered",
+        },
+    ]
+    tools._request = lambda method, path, *, json_body=None: (200, canned_models)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_selectable_models())
+    assert decoded["ok"] is True
+    assert len(decoded["models"]) == 1
+    assert decoded["models"][0]["model_id"] == "model-1"
+    assert "selectable" not in decoded["models"][0]
+
+
+def test_enqueue_workflow_job_returns_dataset_source_type() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_job = {
+        "job_id": "job-43",
+        "status": "queued",
+        "workflow_key": "briefing",
+        "dataset_key": "ops",
+    }
+    tools._request = lambda method, path, *, json_body=None: (202, canned_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.enqueue_workflow_job(
+            "briefing",
+            "maintenance ingestion briefing",
+            dataset_key="ops",
+            model_id="model-1",
+        )
+    )
+    assert decoded["ok"] is True
+    assert decoded["source_type"] == "dataset"
+    assert decoded["model_id"] == "model-1"
+    assert decoded["dataset_key"] == "ops"
+    assert decoded["rag_collection_id"] is None
+
+
+def test_summarize_job_result_returns_summary_for_succeeded() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_job = {
+        "id": "job-1",
+        "status": "succeeded",
+        "workflow_key": "briefing",
+        "result_json": {
+            "summary": "All systems nominal",
+            "confidence": 0.95,
+            "timing": {"elapsed_ms": 1200},
+        },
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.summarize_job_result("job-1"))
+    assert decoded["ok"] is True
+    assert decoded["status"] == "succeeded"
+    assert decoded["summary"]["summary"] == "All systems nominal"
+    assert decoded["summary"]["confidence"] == 0.95
+    assert "timing" not in decoded["summary"]
+
+
+def test_summarize_job_result_returns_error_for_failed() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_job = {
+        "id": "job-2",
+        "status": "failed",
+        "workflow_key": "briefing",
+        "error": "Dataset not found: ops",
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.summarize_job_result("job-2"))
+    assert decoded["ok"] is False
+    assert decoded["status"] == "failed"
+    assert decoded["error"] == "Dataset not found: ops"
+    assert "suggestion" in decoded
+
+
+def test_summarize_job_result_returns_status_for_running() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_job = {
+        "id": "job-3",
+        "status": "running",
+        "workflow_key": "briefing",
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.summarize_job_result("job-3"))
+    assert decoded["ok"] is True
+    assert decoded["status"] == "running"
+    assert decoded["summary"] is None
+    assert "next_step" in decoded

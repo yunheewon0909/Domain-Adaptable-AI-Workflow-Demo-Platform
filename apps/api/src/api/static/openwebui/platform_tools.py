@@ -238,12 +238,50 @@ class Tools:
     def _project_workflow(item: Any) -> Any:
         if not isinstance(item, dict):
             return item
-        return {
-            "key": item.get("key"),
+        key = item.get("key")
+        result: dict[str, Any] = {
+            "key": key,
             "title": item.get("title"),
             "summary": item.get("summary") or item.get("description"),
             "prompt_label": item.get("prompt_label"),
             "output_fields": item.get("output_fields"),
+        }
+        if key == "briefing":
+            result["recommended_prompts"] = [
+                "Summarize the latest ops findings",
+                "What are the key maintenance issues?",
+            ]
+        elif key == "recommendation":
+            result["recommended_prompts"] = [
+                "Recommend improvements based on recent data",
+                "What should we prioritize this week?",
+            ]
+        elif key == "report_generator":
+            result["recommended_prompts"] = [
+                "Generate a report on the current status",
+                "Create a weekly ops summary",
+            ]
+        return result
+
+    @staticmethod
+    def _project_dataset(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        return {
+            "dataset_key": item.get("dataset_key") or item.get("key"),
+            "name": item.get("name"),
+            "description": item.get("description"),
+        }
+
+    @staticmethod
+    def _project_model(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        return {
+            "model_id": item.get("model_id") or item.get("id"),
+            "name": item.get("name"),
+            "provider": item.get("provider"),
+            "status": item.get("status"),
         }
 
     @staticmethod
@@ -269,6 +307,18 @@ class Tools:
             "started_at": item.get("started_at"),
             "finished_at": item.get("finished_at"),
         }
+
+    @staticmethod
+    def _summarize_result(result_json: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(result_json, dict):
+            return {"result": result_json}
+        internal_keys = {"timing", "raw", "meta", "request", "payload"}
+        summary: dict[str, Any] = {
+            key: value for key, value in result_json.items() if key not in internal_keys
+        }
+        if not summary:
+            summary["result"] = result_json
+        return summary
 
     def _error(self, status: int, body: Any, *, action: str) -> str:
         return self._format(
@@ -457,6 +507,51 @@ class Tools:
         )
         return self._format({"ok": True, "workflows": workflows})
 
+    def list_workflow_sources(self) -> str:
+        """List available workflow sources: RAG collections and legacy datasets."""
+        rag_status, rag_body = self._request("GET", "/rag-collections")
+        if rag_status != 200:
+            return self._error(rag_status, rag_body, action="list_workflow_sources.rag_collections")
+        rag_collections = (
+            [self._project_collection(item) for item in rag_body]
+            if isinstance(rag_body, list)
+            else rag_body
+        )
+
+        ds_status, ds_body = self._request("GET", "/datasets")
+        if ds_status != 200:
+            return self._error(ds_status, ds_body, action="list_workflow_sources.datasets")
+        datasets = (
+            [self._project_dataset(item) for item in ds_body]
+            if isinstance(ds_body, list)
+            else ds_body
+        )
+
+        return self._format(
+            {
+                "ok": True,
+                "sources": {
+                    "rag_collections": rag_collections,
+                    "datasets": datasets,
+                },
+            }
+        )
+
+    def list_selectable_models(self) -> str:
+        """List platform models that are ready for inference selection."""
+        status, body = self._request("GET", "/models")
+        if status != 200:
+            return self._error(status, body, action="list_selectable_models")
+        raw_models = body if isinstance(body, list) else []
+        # Platform API does not expose a ``selectable`` boolean; use
+        # ``status == "active"`` as the selectability signal instead.
+        selectable = [
+            self._project_model(item)
+            for item in raw_models
+            if isinstance(item, dict) and item.get("status") == "active"
+        ]
+        return self._format({"ok": True, "models": selectable})
+
     def enqueue_workflow_job(
         self,
         workflow_key: str,
@@ -508,12 +603,21 @@ class Tools:
             return self._error(status, body, action="enqueue_workflow_job")
         job = self._project_job(body)
         job_id = job.get("id") if isinstance(job, dict) else None
+        source_type: str | None = None
+        if rag_collection_id is not None:
+            source_type = "rag"
+        elif dataset_key is not None:
+            source_type = "dataset"
         return self._format(
             {
                 "ok": True,
                 "job_id": job_id,
                 "status": job.get("status") if isinstance(job, dict) else None,
                 "workflow_key": job.get("workflow_key") if isinstance(job, dict) else workflow_key,
+                "source_type": source_type,
+                "model_id": model_id,
+                "rag_collection_id": rag_collection_id,
+                "dataset_key": dataset_key,
                 "job": job,
                 "next_step": (
                     f"Call get_job_status with job_id={job_id!r}; do not use a "
@@ -635,3 +739,43 @@ class Tools:
         if status != 200:
             return self._error(status, body, action="get_job_status")
         return self._format({"ok": True, "job": self._project_job(body)})
+
+    def summarize_job_result(self, job_id: str) -> str:
+        """Return a concise summary of a workflow job result."""
+        encoded_id = urllib.parse.quote(job_id, safe="")
+        status, body = self._request("GET", f"/jobs/{encoded_id}")
+        if status != 200:
+            return self._error(status, body, action="summarize_job_result")
+        job = self._project_job(body) if isinstance(body, dict) else {}
+        job_status = job.get("status") if isinstance(job, dict) else None
+        if job_status == "succeeded":
+            result_json = job.get("result_json") if isinstance(job, dict) else None
+            summary = self._summarize_result(result_json)
+            return self._format(
+                {
+                    "ok": True,
+                    "job_id": job_id,
+                    "status": job_status,
+                    "summary": summary,
+                }
+            )
+        if job_status == "failed":
+            error = job.get("error") if isinstance(job, dict) else None
+            return self._format(
+                {
+                    "ok": False,
+                    "job_id": job_id,
+                    "status": job_status,
+                    "error": error,
+                    "suggestion": "Check the job inputs and retry, or inspect the platform logs.",
+                }
+            )
+        return self._format(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "status": job_status,
+                "summary": None,
+                "next_step": f"Call get_job_status with job_id={job_id!r} to poll again.",
+            }
+        )

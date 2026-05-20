@@ -489,10 +489,17 @@ Exposed tool calls:
 
 - `list_rag_collections()` — list platform `rag_collections` rows and document counts
 - `query_rag_collection(collection_id, query, top_k)` — retrieve platform-managed evidence excerpts
-- `list_workflows()` — list queue-backed workflow definitions
-- `enqueue_workflow_job(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k)` — enqueue a workflow run
+- `get_rag_collection(collection_id)` — fetch full detail for one RAG collection (embedding model, chunking policy, timestamps)
+- `list_rag_documents(collection_id)` — list documents with compact projection (excludes text_preview)
+- `get_rag_document(document_id)` — fetch document detail with 1000-char text_preview truncation
+- `delete_rag_document(document_id)` — permanently remove a document (destructive; confirms with user)
+- `list_workflows()` — list queue-backed workflow definitions (includes `recommended_prompts` for known workflows)
+- `list_workflow_sources()` — combine RAG collections + legacy datasets into one source picker
+- `list_selectable_models()` — list only inference-ready platform models (`status=active`)
+- `enqueue_workflow_job(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k)` — enqueue a workflow run (returns `source_type`, `model_id`, `rag_collection_id`, `dataset_key` in the envelope)
 - `run_workflow_and_wait(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k, max_wait_seconds)` — enqueue and wait in one chat tool call, avoiding placeholder job-id polling
 - `get_job_status(job_id)` — poll queued/running workflow jobs and inspect results
+- `summarize_job_result(job_id)` — concise summary for succeeded (extracts key output), failed (highlights error), or still-running jobs
 
 This is intentionally an importable tool artifact, not a vendored Open WebUI fork. Stock Open WebUI still owns chats/users/tool assignment, while the tool calls the platform API for RAG/workflow state.
 
@@ -510,6 +517,16 @@ What this gives a reviewer:
 - `list_rag_collections()` in Open WebUI returns at least these two ids with non-zero `document_count`.
 - `query_rag_collection("rag-collection-demo-ops", "maintenance ingestion")` returns ranked excerpts for the maintenance workflow.
 - `enqueue_workflow_job("briefing", "Summarize the seeded ops handbook.", rag_collection_id="rag-collection-demo-ops")` produces a grounded workflow result without manual document upload.
+
+**Phase 3 — Workflow reviewer parity** extends the tool surface with source/model discovery and job result summarization:
+
+- `list_workflow_sources()` combines RAG collections + legacy datasets so the chat model can present both options without knowing IDs up front.
+- `list_selectable_models()` returns only inference-ready platform models (`status=active`) for the model picker.
+- `list_workflows()` now includes `recommended_prompts` examples for each known workflow (`briefing`, `recommendation`, `report_generator`), helping the chat model suggest natural-language invocations.
+- `enqueue_workflow_job()` return envelope now includes `source_type`, `model_id`, `rag_collection_id`, `dataset_key` so the chat can echo what was used.
+- `summarize_job_result(job_id)` returns a concise view: extracted output for succeeded jobs, highlighted error for failed ones, or current status for still-running ones.
+
+End-to-end chat flow: "List available workflows and sources" → `list_workflows()` + `list_workflow_sources()` → "Run the briefing workflow against the ops handbook" → `enqueue_workflow_job("briefing", ..., rag_collection_id="rag-collection-demo-ops")` → `summarize_job_result(job_id)`.
 
 Seed semantics:
 

@@ -61,9 +61,12 @@ def get_openwebui_manifest() -> dict[str, object]:
                     "get_rag_document",
                     "delete_rag_document",
                     "list_workflows",
+                    "list_workflow_sources",
+                    "list_selectable_models",
                     "enqueue_workflow_job",
                     "run_workflow_and_wait",
                     "get_job_status",
+                    "summarize_job_result",
                 ],
                 "install_hint": (
                     "Open WebUI -> Workspace -> Tools -> + (New), paste the "
