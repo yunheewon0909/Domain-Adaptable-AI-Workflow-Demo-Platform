@@ -201,7 +201,7 @@ export MODEL_ARTIFACT_DIR="$(pwd)/data/model_artifacts"
 export FT_DEFAULT_TRAINING_METHOD=sft_lora
 export FT_TRAINER_BACKEND=local_peft
 export FT_MAX_SEQ_LENGTH=1024
-export FT_TRAINER_MODEL_MAP_JSON='{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+export FT_TRAINER_MODEL_MAP_JSON='{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
 export OLLAMA_PUBLISH_ENABLED=false
 export OLLAMA_MODEL_NAMESPACE=demo
 
@@ -348,7 +348,7 @@ docker compose ps
 
 ```bash
 docker compose exec -T ollama ollama pull qwen2.5:3b-instruct-q4_K_M
-docker compose exec -T ollama ollama pull qwen2.5:7b-instruct-q4_K_M
+docker compose exec -T ollama ollama pull qwen3.5:4b
 docker compose exec -T ollama ollama pull nomic-embed-text
 ```
 
@@ -481,7 +481,7 @@ Step-by-step from a fresh Open WebUI install:
 3. Grab the tool source. Inside Compose: `curl http://api:8000/openwebui/platform_tools.py`. From the host: `curl http://127.0.0.1:8000/openwebui/platform_tools.py`.
 4. In Open WebUI go to **Workspace → Tools → + (New)**, paste the file contents, save.
 5. Open the Tool's **Valves** panel. Inside the Compose network leave `api_base_url=http://api:8000`. From host-side Open WebUI set it to `http://127.0.0.1:8000`.
-6. Enable the Tool on a chat (chat **Settings → Tools**) and ask the model to call `list_rag_collections`, `query_rag_collection`, or `enqueue_workflow_job`.
+6. Enable the Tool on a chat (chat **Settings → Tools**) and ask the model to call `list_rag_collections`, `query_rag_collection`, or `run_workflow_and_wait`.
 
 `GET /openwebui/manifest.json` lists the exposed tool methods if a reviewer wants to discover the surface without reading the Python file first.
 
@@ -491,11 +491,12 @@ Exposed tool calls:
 - `query_rag_collection(collection_id, query, top_k)` — retrieve platform-managed evidence excerpts
 - `list_workflows()` — list queue-backed workflow definitions
 - `enqueue_workflow_job(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k)` — enqueue a workflow run
+- `run_workflow_and_wait(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k, max_wait_seconds)` — enqueue and wait in one chat tool call, avoiding placeholder job-id polling
 - `get_job_status(job_id)` — poll queued/running workflow jobs and inspect results
 
 This is intentionally an importable tool artifact, not a vendored Open WebUI fork. Stock Open WebUI still owns chats/users/tool assignment, while the tool calls the platform API for RAG/workflow state.
 
-The OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, human-readable model labels, optional `rag_collection_id` grounding, and the remaining limitations of the slice (compatibility SSE only, placeholder token counts). Use the importable platform tool above when Open WebUI chats need to select/query platform RAG collections or enqueue workflows.
+The OpenAI-compatible shim (`/v1/models`, `/v1/chat/completions`) is now live; see the **OpenAI-compatible shim (`/v1/*`)** section above for the contract, readiness-gating behavior, human-readable model labels, optional `rag_collection_id` grounding, and the remaining limitations of the slice (compatibility SSE only, placeholder token counts). Use the importable platform tool above when Open WebUI chats need to select/query platform RAG collections or run workflows; prefer `run_workflow_and_wait` for single-message workflow UX and reserve `enqueue_workflow_job` + `get_job_status` for explicit async/polling demos.
 
 ### Seeded demo RAG collections
 
@@ -524,7 +525,7 @@ API:
 
 ```bash
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
-export OLLAMA_TIMEOUT_SECONDS=120
+export OLLAMA_TIMEOUT_SECONDS=600
 export PLC_EXECUTOR_MODE=stub
 export TRAINING_DEVICE=auto
 export TRAINING_ALLOW_CPU=false
@@ -532,7 +533,7 @@ export MODEL_ARTIFACT_DIR="$(pwd)/data/model_artifacts"
 export FT_DEFAULT_TRAINING_METHOD=sft_lora
 export FT_TRAINER_BACKEND=local_peft
 export FT_MAX_SEQ_LENGTH=1024
-export FT_TRAINER_MODEL_MAP_JSON='{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+export FT_TRAINER_MODEL_MAP_JSON='{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
 export OLLAMA_PUBLISH_ENABLED=false
 export OLLAMA_MODEL_NAMESPACE=demo
 
@@ -556,7 +557,7 @@ export MODEL_ARTIFACT_DIR="$(pwd)/data/model_artifacts"
 export FT_DEFAULT_TRAINING_METHOD=sft_lora
 export FT_TRAINER_BACKEND=local_peft
 export FT_MAX_SEQ_LENGTH=1024
-export FT_TRAINER_MODEL_MAP_JSON='{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+export FT_TRAINER_MODEL_MAP_JSON='{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
 export OLLAMA_PUBLISH_ENABLED=false
 export OLLAMA_MODEL_NAMESPACE=demo
 
@@ -710,7 +711,7 @@ curl -sS -X POST http://127.0.0.1:8000/ft-training-jobs \
   -H "Content-Type: application/json" \
   -d '{
     "dataset_version_id": "ft-version-1",
-    "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+    "base_model_name": "qwen3.5:4b",
     "training_method": "sft_lora",
     "hyperparams_json": {
       "epochs": 1,
@@ -1007,7 +1008,7 @@ If Ollama is running but the serving models are missing, pull them into the runn
 
 ```bash
 docker compose exec -T ollama ollama pull qwen2.5:3b-instruct-q4_K_M
-docker compose exec -T ollama ollama pull qwen2.5:7b-instruct-q4_K_M
+docker compose exec -T ollama ollama pull qwen3.5:4b
 docker compose exec -T ollama ollama pull nomic-embed-text
 ```
 

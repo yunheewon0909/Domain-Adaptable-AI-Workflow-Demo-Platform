@@ -113,9 +113,15 @@ class OllamaChatClient:
                     },
                 ],
                 "temperature": temperature,
+                "reasoning": {"effort": "none"},
                 **({"max_tokens": max_tokens} if max_tokens is not None else {}),
             },
-            timeout=self._timeout_seconds,
+            timeout=httpx.Timeout(
+                connect=5.0,
+                read=self._timeout_seconds,
+                write=self._timeout_seconds,
+                pool=5.0,
+            ),
         )
         response.raise_for_status()
 

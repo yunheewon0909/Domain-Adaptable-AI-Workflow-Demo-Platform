@@ -22,7 +22,7 @@ def _config(
     current_runtime: str = "host",
     training_device: str = "auto",
     training_allow_cpu: bool = False,
-    trainer_model_map_json: str = '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}',
+    trainer_model_map_json: str = '{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}',
     trainer_backend: str = "local_peft",
     default_training_method: str = "sft_lora",
 ) -> PreflightConfig:

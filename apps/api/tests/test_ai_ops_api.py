@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
@@ -23,7 +24,7 @@ from api.services.fine_tuning.trainer import (
     DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME,
     TrainingArtifacts,
 )
-from api.services.model_registry.service import complete_training_job
+from api.services.model_registry.service import complete_training_job, ensure_default_models
 
 
 class FakeLLMClient:
@@ -74,6 +75,48 @@ def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
         trainer_model_name="hf-internal/testing-tiny-random-gpt2",
         device="cpu",
     )
+
+
+def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setenv("OLLAMA_FALLBACK_MODEL", "qwen2.5:3b-instruct-q4_K_M")
+    get_settings.cache_clear()
+
+    with Session(get_engine()) as session:
+        session.add(
+            ModelRegistryRecord(
+                id="model-old-default",
+                display_name="Old default",
+                source_type="base",
+                base_model_name="qwen2.5:7b-instruct-q4_K_M",
+                ollama_model_name="qwen2.5:7b-instruct-q4_K_M",
+                published_model_name="qwen2.5:7b-instruct-q4_K_M",
+                status="active",
+                publish_status="published",
+                tags_json=["base", "default"],
+                description="Old configured default model.",
+            )
+        )
+        ensure_default_models(session)
+
+        old = session.get(ModelRegistryRecord, "model-old-default")
+        assert old is not None
+        assert old.status == "registered"
+        assert old.tags_json == ["base"]
+
+        current = session.scalar(
+            select(ModelRegistryRecord).where(
+                ModelRegistryRecord.ollama_model_name == "qwen3.5:4b"
+            )
+        )
+        assert current is not None
+
+    listing = client.get("/models")
+    assert listing.status_code == 200
+    active_models = [model for model in listing.json() if model["status"] == "active"]
+    assert [model["ollama_model_name"] for model in active_models] == ["qwen3.5:4b"]
 
 
 def _create_locked_ft_version(client: TestClient, *, dataset_name: str) -> str:
@@ -258,7 +301,7 @@ def test_real_training_requires_locked_dataset_version(client: TestClient) -> No
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
@@ -326,7 +369,7 @@ def test_training_job_model_registry_and_inference_flow(
             "/ft-training-jobs",
             json={
                 "dataset_version_id": version_id,
-                "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+                "base_model_name": "qwen3.5:4b",
                 "training_method": "sft_lora",
                 "hyperparams_json": {
                     "epochs": 1,
@@ -492,7 +535,7 @@ def test_publish_disabled_returns_truthful_artifact_ready_status(
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
@@ -547,7 +590,7 @@ def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "smoke_test": True,
@@ -615,7 +658,7 @@ def test_hf_resolution_failure_stays_classified_when_smoke_fallback_is_disabled(
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "smoke_test": True,
@@ -776,7 +819,7 @@ def test_training_failure_is_classified_for_ui(
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"

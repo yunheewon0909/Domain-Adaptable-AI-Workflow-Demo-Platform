@@ -23,7 +23,7 @@ def _settings(**overrides):
         ft_allow_smoke_fallback=True,
         ft_smoke_fallback_backend="deterministic_smoke",
         ft_trainer_model_map_json=(
-            '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+            '{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
         ),
         **overrides,
     )
@@ -75,7 +75,7 @@ def test_run_training_backend_uses_deterministic_smoke_fallback_for_hf_failures(
 
     result = run_training_backend(
         _export_result(tmp_path),
-        base_model_name="qwen2.5:7b-instruct-q4_K_M",
+        base_model_name="qwen3.5:4b",
         training_method="sft_lora",
         hyperparams_json={
             "smoke_test": True,
@@ -113,7 +113,7 @@ def test_run_training_backend_does_not_fallback_for_non_hf_resolution_errors(
     ):
         run_training_backend(
             _export_result(tmp_path),
-            base_model_name="qwen2.5:7b-instruct-q4_K_M",
+            base_model_name="qwen3.5:4b",
             training_method="sft_lora",
             hyperparams_json={
                 "smoke_test": True,

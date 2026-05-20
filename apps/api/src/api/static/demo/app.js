@@ -41,7 +41,7 @@ const FT_LIFECYCLE_STEPS = [
     description: 'The validated artifact bundle is being recorded in the model registry for review-only inspection.',
   },
 ];
-const SMOKE_BASE_MODEL_NAME = 'qwen2.5:7b-instruct-q4_K_M';
+const SMOKE_BASE_MODEL_NAME = 'qwen3.5:4b';
 const SMOKE_TRAINER_MODEL_NAME = 'hf-internal/testing-tiny-random-gpt2';
 const SMOKE_HYPERPARAMETER_PRESET = {
   epochs: 1,

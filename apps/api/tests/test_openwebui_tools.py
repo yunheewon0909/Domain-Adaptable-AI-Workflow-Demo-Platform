@@ -58,6 +58,8 @@ def test_platform_tools_exposes_expected_methods() -> None:
     assert valves.api_base_url == "http://api:8000"
     assert valves.request_timeout_seconds >= 1
     assert 1 <= valves.default_top_k <= 10
+    assert 1 <= valves.workflow_wait_timeout_seconds <= 600
+    assert 1 <= valves.workflow_poll_interval_seconds <= 30
 
     instance = tools_cls()
     for method_name in (
@@ -65,6 +67,7 @@ def test_platform_tools_exposes_expected_methods() -> None:
         "query_rag_collection",
         "list_workflows",
         "enqueue_workflow_job",
+        "run_workflow_and_wait",
         "get_job_status",
     ):
         method = getattr(instance, method_name, None)
@@ -105,6 +108,7 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "def query_rag_collection" in body
     assert "def list_workflows" in body
     assert "def enqueue_workflow_job" in body
+    assert "def run_workflow_and_wait" in body
     assert "def get_job_status" in body
 
 
@@ -122,6 +126,7 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
         "query_rag_collection",
         "list_workflows",
         "enqueue_workflow_job",
+        "run_workflow_and_wait",
         "get_job_status",
     }
 
@@ -186,3 +191,236 @@ def test_get_job_status_returns_error_envelope_for_missing_job(
     assert decoded["ok"] is False
     assert decoded["action"] == "get_job_status"
     assert decoded["http_status"] == 404
+
+
+def test_list_rag_collections_returns_compact_projection() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned = [
+        {
+            "id": "rag-c1",
+            "name": "Ops",
+            "description": "ops handbook",
+            "embedding_model": "nomic-embed-text",
+            "document_count": 1,
+            "chunking_policy_json": {"chunk_size": 800, "chunk_overlap": 100},
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-02T00:00:00Z",
+            "documents": [
+                {
+                    "id": "rag-doc-1",
+                    "filename": "maintenance.md",
+                    "text_preview": "x" * 4000,
+                    "metadata_json": {"text_preview": "x" * 4000},
+                }
+            ],
+        }
+    ]
+    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_rag_collections())
+    assert decoded["ok"] is True
+    entry = decoded["collections"][0]
+    assert entry["id"] == "rag-c1"
+    assert entry["name"] == "Ops"
+    assert entry["document_count"] == 1
+    assert entry["document_filenames"] == ["maintenance.md"]
+    for noisy_key in ("documents", "chunking_policy_json", "created_at", "updated_at"):
+        assert noisy_key not in entry, (
+            f"{noisy_key} should be projected out to keep the chat tool context lean"
+        )
+
+
+def test_query_rag_collection_returns_compact_projection() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_retrieval = {
+        "collection_id": "rag-c1",
+        "collection_name": "Ops",
+        "document_count": 2,
+        "query": "maintenance ingestion",
+        "top_k": 3,
+        "results": [
+            {
+                "filename": "maintenance.md",
+                "score": 2,
+                "excerpt": "a" * 900,
+                "metadata_json": {"raw": "x" * 2000},
+            }
+        ],
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned_retrieval)  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.query_rag_collection("rag-c1", "maintenance ingestion", top_k=3)
+    )
+    assert decoded["ok"] is True
+    retrieval = decoded["retrieval"]
+    assert retrieval["collection_id"] == "rag-c1"
+    assert retrieval["results"][0]["filename"] == "maintenance.md"
+    assert len(retrieval["results"][0]["excerpt"]) == 500
+    assert "metadata_json" not in retrieval["results"][0]
+    assert "document_count" not in retrieval
+
+
+def test_list_workflows_returns_compact_projection() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_workflows = [
+        {
+            "key": "briefing",
+            "title": "Briefing",
+            "description": "Summarize evidence",
+            "prompt_label": "Briefing prompt",
+            "output_fields": ["summary"],
+            "created_at": "2025-01-01T00:00:00Z",
+            "implementation_detail": "x" * 2000,
+        }
+    ]
+    tools._request = lambda method, path, *, json_body=None: (200, canned_workflows)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_workflows())
+    assert decoded["ok"] is True
+    workflow = decoded["workflows"][0]
+    assert workflow["key"] == "briefing"
+    assert workflow["summary"] == "Summarize evidence"
+    assert workflow["output_fields"] == ["summary"]
+    assert "created_at" not in workflow
+    assert "implementation_detail" not in workflow
+
+
+def test_enqueue_workflow_job_promotes_job_id_for_chat_followup() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_job = {
+        "job_id": "job-42",
+        "status": "queued",
+        "workflow_key": "briefing",
+        "dataset_key": None,
+    }
+    tools._request = lambda method, path, *, json_body=None: (202, canned_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.enqueue_workflow_job(
+            "briefing",
+            "maintenance ingestion briefing",
+            rag_collection_id="rag-c1",
+            top_k=2,
+        )
+    )
+    assert decoded["ok"] is True
+    assert decoded["job_id"] == "job-42"
+    assert decoded["status"] == "queued"
+    assert "job_id='job-42'" in decoded["next_step"]
+    assert "payload_json" not in decoded["job"]
+
+
+def test_run_workflow_and_wait_returns_completed_job_without_placeholder_polling() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools.valves.workflow_poll_interval_seconds = 1
+
+    calls = []
+    queued_job = {
+        "job_id": "job-42",
+        "status": "queued",
+        "workflow_key": "briefing",
+        "dataset_key": None,
+    }
+    completed_job = {
+        "id": "job-42",
+        "status": "succeeded",
+        "workflow_key": "briefing",
+        "dataset_key": None,
+        "payload_json": {"prompt": "x" * 1000},
+        "result_json": {"summary": "done"},
+        "attempts": 1,
+        "max_attempts": 1,
+    }
+
+    def _fake_request(method, path, *, json_body=None):
+        calls.append((method, path, json_body))
+        if method == "POST":
+            return 202, queued_job
+        return 200, completed_job
+
+    tools._request = _fake_request  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.run_workflow_and_wait(
+            "briefing",
+            "maintenance ingestion briefing",
+            rag_collection_id="rag-c1",
+            top_k=2,
+            max_wait_seconds=2,
+        )
+    )
+    assert decoded["ok"] is True
+    assert decoded["job_id"] == "job-42"
+    assert decoded["status"] == "succeeded"
+    assert decoded["job"]["result_json"] == {"summary": "done"}
+    assert "payload_json" not in decoded["job"]
+    assert calls[0] == (
+        "POST",
+        "/workflows/briefing/jobs",
+        {"prompt": "maintenance ingestion briefing", "rag_collection_id": "rag-c1", "k": 2},
+    )
+    assert calls[1][0:2] == ("GET", "/jobs/job-42")
+
+
+def test_run_workflow_and_wait_times_out_with_real_job_id_for_later_polling() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools.valves.workflow_poll_interval_seconds = 1
+
+    queued_job = {
+        "job_id": "job-99",
+        "status": "running",
+        "workflow_key": "briefing",
+    }
+    tools._request = lambda method, path, *, json_body=None: (202 if method == "POST" else 200, queued_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.run_workflow_and_wait("briefing", "slow prompt", max_wait_seconds=1)
+    )
+    assert decoded["ok"] is True
+    assert decoded["job_id"] == "job-99"
+    assert decoded["status"] == "timeout"
+    assert "job_id='job-99'" in decoded["next_step"]
+
+
+def test_get_job_status_returns_compact_projection() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_job = {
+        "id": "job-1",
+        "type": "workflow_run",
+        "status": "succeeded",
+        "workflow_key": "briefing",
+        "dataset_key": "ops",
+        "plc_suite_id": None,
+        "payload_json": {"prompt": "long", "evidence": ["x" * 2000]},
+        "result_json": {"answer": "ok"},
+        "attempts": 1,
+        "max_attempts": 1,
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:01:00Z",
+        "started_at": "2025-01-01T00:00:10Z",
+        "finished_at": "2025-01-01T00:00:55Z",
+        "error": None,
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned_job)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.get_job_status("job-1"))
+    assert decoded["ok"] is True
+    job = decoded["job"]
+    assert job["status"] == "succeeded"
+    assert job["result_json"] == {"answer": "ok"}
+    assert "payload_json" not in job, (
+        "payload_json is the request input; dropping it keeps polling responses small"
+    )

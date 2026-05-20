@@ -25,6 +25,7 @@ that the tool runs inside any Open WebUI container without extra packages.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -65,6 +66,21 @@ class Tools:
             ge=1,
             le=10,
             description="Default top_k used for RAG queries when the chat does not specify one.",
+        )
+        workflow_wait_timeout_seconds: int = Field(
+            default=180,
+            ge=1,
+            le=600,
+            description=(
+                "Maximum time run_workflow_and_wait waits for an async workflow "
+                "job before returning a timeout envelope."
+            ),
+        )
+        workflow_poll_interval_seconds: int = Field(
+            default=5,
+            ge=1,
+            le=30,
+            description="Polling interval used by run_workflow_and_wait.",
         )
 
     def __init__(self) -> None:
@@ -112,6 +128,92 @@ class Tools:
     def _format(payload: Any) -> str:
         return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
+    @staticmethod
+    def _project_collection(item: Any) -> Any:
+        # Keep chat-model context lean: drop nested document text_previews,
+        # chunking policy, and timestamps from the listing. Reviewers can still
+        # call the underlying API for full detail when they actually need it.
+        if not isinstance(item, dict):
+            return item
+        documents = item.get("documents") or []
+        document_filenames = [
+            doc.get("filename")
+            for doc in documents
+            if isinstance(doc, dict) and doc.get("filename")
+        ]
+        return {
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "description": item.get("description"),
+            "embedding_model": item.get("embedding_model"),
+            "document_count": item.get("document_count", len(documents)),
+            "document_filenames": document_filenames,
+        }
+
+    @staticmethod
+    def _project_retrieval(payload: Any) -> Any:
+        # Keep the tool result small enough for local chat models to summarize
+        # quickly. Full excerpts are useful in the API, but Open WebUI only
+        # needs source names, scores, and short snippets for chat grounding.
+        if not isinstance(payload, dict):
+            return payload
+        results = []
+        for item in payload.get("results") or []:
+            if not isinstance(item, dict):
+                results.append(item)
+                continue
+            excerpt = str(item.get("excerpt") or "")
+            results.append(
+                {
+                    "filename": item.get("filename"),
+                    "score": item.get("score"),
+                    "excerpt": excerpt[:500],
+                }
+            )
+        return {
+            "collection_id": payload.get("collection_id"),
+            "collection_name": payload.get("collection_name"),
+            "query": payload.get("query"),
+            "top_k": payload.get("top_k"),
+            "results": results,
+        }
+
+    @staticmethod
+    def _project_workflow(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        return {
+            "key": item.get("key"),
+            "title": item.get("title"),
+            "summary": item.get("summary") or item.get("description"),
+            "prompt_label": item.get("prompt_label"),
+            "output_fields": item.get("output_fields"),
+        }
+
+    @staticmethod
+    def _project_job(item: Any) -> Any:
+        # Drop payload_json (the request input the chat already knows) so the
+        # polling response stays small and result_json stands out.
+        if not isinstance(item, dict):
+            return item
+        # The enqueue endpoint returns a compact acknowledgement with
+        # ``job_id`` at top level, while the status endpoint returns the full
+        # job resource with ``id``. Normalize both shapes so chat follow-up and
+        # run_workflow_and_wait never lose the real job identifier.
+        return {
+            "id": item.get("id") or item.get("job_id"),
+            "status": item.get("status"),
+            "workflow_key": item.get("workflow_key"),
+            "dataset_key": item.get("dataset_key"),
+            "attempts": item.get("attempts"),
+            "max_attempts": item.get("max_attempts"),
+            "error": item.get("error"),
+            "result_json": item.get("result_json"),
+            "created_at": item.get("created_at"),
+            "started_at": item.get("started_at"),
+            "finished_at": item.get("finished_at"),
+        }
+
     def _error(self, status: int, body: Any, *, action: str) -> str:
         return self._format(
             {
@@ -141,7 +243,12 @@ class Tools:
         status, body = self._request("GET", "/rag-collections")
         if status != 200:
             return self._error(status, body, action="list_rag_collections")
-        return self._format({"ok": True, "collections": body})
+        collections = (
+            [self._project_collection(item) for item in body]
+            if isinstance(body, list)
+            else body
+        )
+        return self._format({"ok": True, "collections": collections})
 
     def query_rag_collection(
         self,
@@ -175,7 +282,7 @@ class Tools:
         )
         if status != 200:
             return self._error(status, body, action="query_rag_collection")
-        return self._format({"ok": True, "retrieval": body})
+        return self._format({"ok": True, "retrieval": self._project_retrieval(body)})
 
     # ---- Workflows -----------------------------------------------------
 
@@ -191,7 +298,12 @@ class Tools:
         status, body = self._request("GET", "/workflows")
         if status != 200:
             return self._error(status, body, action="list_workflows")
-        return self._format({"ok": True, "workflows": body})
+        workflows = (
+            [self._project_workflow(item) for item in body]
+            if isinstance(body, list)
+            else body
+        )
+        return self._format({"ok": True, "workflows": workflows})
 
     def enqueue_workflow_job(
         self,
@@ -208,6 +320,11 @@ class Tools:
         worker process executes the workflow asynchronously. Use
         get_job_status with the returned job_id to poll for completion and
         read the final result_json.
+
+        Most evidence-grounded workflows require either ``dataset_key`` or
+        ``rag_collection_id``; if both are omitted the platform may return a
+        404 error envelope. Prefer ``rag_collection_id`` from
+        list_rag_collections when available.
 
         :param workflow_key: Workflow key from list_workflows().
         :param prompt: User prompt to drive the workflow.
@@ -237,16 +354,116 @@ class Tools:
         )
         if status not in (200, 202):
             return self._error(status, body, action="enqueue_workflow_job")
+        job = self._project_job(body)
+        job_id = job.get("id") if isinstance(job, dict) else None
         return self._format(
             {
                 "ok": True,
-                "job": body,
+                "job_id": job_id,
+                "status": job.get("status") if isinstance(job, dict) else None,
+                "workflow_key": job.get("workflow_key") if isinstance(job, dict) else workflow_key,
+                "job": job,
                 "next_step": (
-                    "Call get_job_status with this job_id to poll until the "
-                    "status is 'succeeded' or 'failed'."
+                    f"Call get_job_status with job_id={job_id!r}; do not use a "
+                    "placeholder. Poll until status is 'succeeded' or 'failed'."
                 ),
             }
         )
+
+    def run_workflow_and_wait(
+        self,
+        workflow_key: str,
+        prompt: str,
+        dataset_key: str | None = None,
+        rag_collection_id: str | None = None,
+        model_id: str | None = None,
+        top_k: int | None = None,
+        max_wait_seconds: int | None = None,
+    ) -> str:
+        """Enqueue a workflow and wait for its final status in one tool call.
+
+        Prefer this for Open WebUI chat UX when the user asks to run a
+        workflow and see the result, because it avoids fragile multi-turn
+        polling and prevents placeholder job ids. It returns the compact final
+        job, including result_json when status is "succeeded". If the job is
+        still running after the wait budget, it returns ok=true with status
+        "timeout" and the real job_id so the user can later call
+        get_job_status(job_id).
+
+        :param workflow_key: Workflow key from list_workflows().
+        :param prompt: User prompt to drive the workflow.
+        :param dataset_key: Optional legacy dataset_key for evidence retrieval.
+        :param rag_collection_id: Optional RAG collection id for grounding.
+        :param model_id: Optional platform model registry id.
+        :param top_k: Optional retrieval top_k.
+        :param max_wait_seconds: Optional per-call wait budget, clamped by the
+            Valve's workflow_wait_timeout_seconds.
+        :return: JSON string with job_id, final/timeout status, and compact job.
+        """
+        body_payload: dict[str, Any] = {"prompt": prompt}
+        if dataset_key is not None:
+            body_payload["dataset_key"] = dataset_key
+        if rag_collection_id is not None:
+            body_payload["rag_collection_id"] = rag_collection_id
+        if model_id is not None:
+            body_payload["model_id"] = model_id
+        if top_k is not None:
+            body_payload["k"] = max(1, min(int(top_k), 8))
+
+        encoded_key = urllib.parse.quote(workflow_key, safe="")
+        status, body = self._request(
+            "POST",
+            f"/workflows/{encoded_key}/jobs",
+            json_body=body_payload,
+        )
+        if status not in (200, 202):
+            return self._error(status, body, action="run_workflow_and_wait.enqueue")
+
+        job = self._project_job(body)
+        job_id = job.get("id") if isinstance(job, dict) else None
+        if not job_id:
+            return self._format(
+                {
+                    "ok": False,
+                    "action": "run_workflow_and_wait.enqueue",
+                    "error": "missing_job_id",
+                    "job": job,
+                }
+            )
+
+        configured_budget = int(self.valves.workflow_wait_timeout_seconds)
+        if max_wait_seconds is not None:
+            configured_budget = min(configured_budget, max(1, int(max_wait_seconds)))
+        poll_interval = int(self.valves.workflow_poll_interval_seconds)
+        deadline = time.monotonic() + configured_budget
+
+        while True:
+            current_status = job.get("status") if isinstance(job, dict) else None
+            if current_status in ("succeeded", "failed", "cancelled"):
+                return self._format(
+                    {
+                        "ok": current_status == "succeeded",
+                        "job_id": job_id,
+                        "status": current_status,
+                        "job": job,
+                    }
+                )
+            if time.monotonic() >= deadline:
+                return self._format(
+                    {
+                        "ok": True,
+                        "job_id": job_id,
+                        "status": "timeout",
+                        "job": job,
+                        "next_step": f"Call get_job_status with job_id={job_id!r} later.",
+                    }
+                )
+            time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
+            encoded_id = urllib.parse.quote(str(job_id), safe="")
+            status, body = self._request("GET", f"/jobs/{encoded_id}")
+            if status != 200:
+                return self._error(status, body, action="run_workflow_and_wait.poll")
+            job = self._project_job(body)
 
     # ---- Jobs ----------------------------------------------------------
 
@@ -265,4 +482,4 @@ class Tools:
         status, body = self._request("GET", f"/jobs/{encoded_id}")
         if status != 200:
             return self._error(status, body, action="get_job_status")
-        return self._format({"ok": True, "job": body})
+        return self._format({"ok": True, "job": self._project_job(body)})

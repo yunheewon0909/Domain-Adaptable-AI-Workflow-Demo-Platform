@@ -476,6 +476,23 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
         )
 
     now = datetime.now(timezone.utc)
+    configured_default_name = settings.ollama_model
+    previous_active_base_models = session.scalars(
+        select(ModelRegistryRecord).where(
+            ModelRegistryRecord.source_type == "base",
+            ModelRegistryRecord.status == "active",
+            ModelRegistryRecord.ollama_model_name != configured_default_name,
+        )
+    ).all()
+    for model in previous_active_base_models:
+        model.status = "registered"
+        model.tags_json = [
+            tag for tag in list(model.tags_json or []) if tag != "default"
+        ]
+        if "base" not in model.tags_json:
+            model.tags_json.append("base")
+        model.updated_at = now
+
     for item in defaults:
         existing = session.scalar(
             select(ModelRegistryRecord).where(

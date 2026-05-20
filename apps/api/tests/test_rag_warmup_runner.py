@@ -23,7 +23,7 @@ def test_run_warmup_job_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OLLAMA_EMBED_BASE_URL", "http://ollama:11434/v1")
     monkeypatch.setenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434/v1")
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3.5:4b")
     monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "15")
 
     calls: list[tuple[str, dict[str, object], float]] = []
@@ -39,7 +39,7 @@ def test_run_warmup_job_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["embed_ok"] is True
     assert result["chat_ok"] is True
     assert result["embed_model"] == "nomic-embed-text"
-    assert result["chat_model"] == "qwen2.5:7b-instruct-q4_K_M"
+    assert result["chat_model"] == "qwen3.5:4b"
     assert result["embed_latency_ms"] >= 0
     assert result["chat_latency_ms"] >= 0
 
@@ -47,7 +47,7 @@ def test_run_warmup_job_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls[0][0] == "http://ollama:11434/v1/embeddings"
     assert calls[0][1] == {"model": "nomic-embed-text", "input": "hello"}
     assert calls[1][0] == "http://ollama:11434/v1/chat/completions"
-    assert calls[1][1]["model"] == "qwen2.5:7b-instruct-q4_K_M"
+    assert calls[1][1]["model"] == "qwen3.5:4b"
 
 
 def test_run_warmup_job_missing_model_error_has_actionable_pull_command(

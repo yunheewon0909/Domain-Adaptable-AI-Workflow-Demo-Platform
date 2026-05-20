@@ -70,7 +70,7 @@ def _add_artifact_only_fine_tuned_model() -> str:
             id="model-ft-artifact-only",
             display_name="Artifact-only fine-tuned",
             source_type="fine_tuned",
-            base_model_name="qwen2.5:7b-instruct-q4_K_M",
+            base_model_name="qwen3.5:4b",
             ollama_model_name="artifact::ft-job-test",
             published_model_name=None,
             status="artifact_ready",

@@ -28,11 +28,11 @@ services:
       RAG_INDEX_DIR: /workspace/data/rag_index
       RAG_DB_PATH: /workspace/data/rag_index/rag.db
       OLLAMA_BASE_URL: http://ollama:11434/v1
-      OLLAMA_MODEL: qwen2.5:7b-instruct-q4_K_M
+      OLLAMA_MODEL: qwen3.5:4b
       OLLAMA_FALLBACK_MODEL: qwen2.5:3b-instruct-q4_K_M
       OLLAMA_EMBED_BASE_URL: http://ollama:11434/v1
       OLLAMA_EMBED_MODEL: nomic-embed-text
-      OLLAMA_TIMEOUT_SECONDS: "120"
+      OLLAMA_TIMEOUT_SECONDS: "600"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
       TRAINING_DEVICE: cpu
@@ -43,7 +43,7 @@ services:
       FT_TRAINER_BACKEND: local_peft
       FT_ALLOW_SMOKE_FALLBACK: "true"
       FT_SMOKE_FALLBACK_BACKEND: deterministic_smoke
-      FT_TRAINER_MODEL_MAP_JSON: '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+      FT_TRAINER_MODEL_MAP_JSON: '{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
       OLLAMA_PUBLISH_ENABLED: "false"
       OLLAMA_MODEL_NAMESPACE: demo
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-api
@@ -86,11 +86,11 @@ services:
       RAG_INDEX_DIR: /workspace/data/rag_index
       RAG_DB_PATH: /workspace/data/rag_index/rag.db
       OLLAMA_BASE_URL: http://ollama:11434/v1
-      OLLAMA_MODEL: qwen2.5:7b-instruct-q4_K_M
+      OLLAMA_MODEL: qwen3.5:4b
       OLLAMA_FALLBACK_MODEL: qwen2.5:3b-instruct-q4_K_M
       OLLAMA_EMBED_BASE_URL: http://ollama:11434/v1
       OLLAMA_EMBED_MODEL: nomic-embed-text
-      OLLAMA_TIMEOUT_SECONDS: "120"
+      OLLAMA_TIMEOUT_SECONDS: "600"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
       TRAINING_DEVICE: cpu
@@ -101,7 +101,7 @@ services:
       FT_TRAINER_BACKEND: local_peft
       FT_ALLOW_SMOKE_FALLBACK: "true"
       FT_SMOKE_FALLBACK_BACKEND: deterministic_smoke
-      FT_TRAINER_MODEL_MAP_JSON: '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+      FT_TRAINER_MODEL_MAP_JSON: '{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
       OLLAMA_PUBLISH_ENABLED: "false"
       OLLAMA_MODEL_NAMESPACE: demo
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-worker
@@ -145,7 +145,7 @@ services:
       RAG_DB_PATH: /workspace/data/rag_index/rag.db
       OLLAMA_EMBED_BASE_URL: http://ollama:11434/v1
       OLLAMA_EMBED_MODEL: nomic-embed-text
-      OLLAMA_TIMEOUT_SECONDS: "120"
+      OLLAMA_TIMEOUT_SECONDS: "600"
       RAG_EXPECTED_EMBED_DIM: "768"
       RAG_VERIFY_SAMPLE_QUERY: maintenance automation
       UV_PROJECT_ENVIRONMENT: /tmp/uv-venv-api

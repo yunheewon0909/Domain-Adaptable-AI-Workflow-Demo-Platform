@@ -45,7 +45,7 @@ def test_execute_training_job_runs_real_path(
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
@@ -125,7 +125,7 @@ def test_execute_training_job_fails_when_adapter_artifacts_are_missing(
         "/ft-training-jobs",
         json={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": "qwen3.5:4b",
             "training_method": "sft_lora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"

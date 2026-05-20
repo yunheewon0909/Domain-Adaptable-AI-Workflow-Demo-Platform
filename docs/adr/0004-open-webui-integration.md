@@ -90,7 +90,7 @@ This keeps external chat clients from bypassing the artifact-only vs published d
 
 ## Open WebUI platform tool
 
-`/openwebui/platform_tools.py` serves a small Open WebUI Tool module that can be imported into the sidecar. It defaults to `http://api:8000` and exposes functions to list/query platform RAG collections, list workflows, enqueue workflow jobs, and read job status. This keeps user-facing chat affordances in Open WebUI while preserving the platform API as the source of truth for RAG/workflow state.
+`/openwebui/platform_tools.py` serves a small Open WebUI Tool module that can be imported into the sidecar. It defaults to `http://api:8000` and exposes functions to list/query platform RAG collections, list workflows, enqueue workflow jobs, run-and-wait workflow jobs, and read job status. `run_workflow_and_wait` is preferred for single-message chat UX because it avoids placeholder job-id polling while preserving the async job API underneath. This keeps user-facing chat affordances in Open WebUI while preserving the platform API as the source of truth for RAG/workflow state.
 
 To make the imported Tool useful on a fresh database, API startup deterministically seeds two demo RAG collections (`rag-collection-demo-ops`, `rag-collection-demo-enterprise`) from repo-tracked sample documents. The seed is idempotent and respects reviewer deletions (a deleted seed document is not silently restored). See the README "Seeded demo RAG collections" section for the operator contract.
 

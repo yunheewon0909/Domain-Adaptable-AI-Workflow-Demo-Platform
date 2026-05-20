@@ -58,6 +58,7 @@ def get_openwebui_manifest() -> dict[str, object]:
                     "query_rag_collection",
                     "list_workflows",
                     "enqueue_workflow_job",
+                    "run_workflow_and_wait",
                     "get_job_status",
                 ],
                 "install_hint": (
