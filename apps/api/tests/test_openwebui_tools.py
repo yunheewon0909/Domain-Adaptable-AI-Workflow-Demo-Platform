@@ -72,6 +72,10 @@ def test_platform_tools_exposes_expected_methods() -> None:
         "list_workflows",
         "list_workflow_sources",
         "list_selectable_models",
+        "list_platform_models",
+        "get_model_detail",
+        "get_model_lineage",
+        "run_platform_inference",
         "enqueue_workflow_job",
         "run_workflow_and_wait",
         "get_job_status",
@@ -120,6 +124,10 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "def list_workflows" in body
     assert "def list_workflow_sources" in body
     assert "def list_selectable_models" in body
+    assert "def list_platform_models" in body
+    assert "def get_model_detail" in body
+    assert "def get_model_lineage" in body
+    assert "def run_platform_inference" in body
     assert "def enqueue_workflow_job" in body
     assert "def run_workflow_and_wait" in body
     assert "def get_job_status" in body
@@ -145,6 +153,10 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
         "list_workflows",
         "list_workflow_sources",
         "list_selectable_models",
+        "list_platform_models",
+        "get_model_detail",
+        "get_model_lineage",
+        "run_platform_inference",
         "enqueue_workflow_job",
         "run_workflow_and_wait",
         "get_job_status",
@@ -681,16 +693,27 @@ def test_list_selectable_models_returns_only_selectable() -> None:
 
     canned_models = [
         {
-            "model_id": "model-1",
-            "name": "GPT-4",
-            "provider": "openai",
+            "id": "model-1",
+            "display_name": "GPT-4",
             "status": "active",
+            "publish_status": "published",
+            "source_type": "base",
+            "description": "ready model",
+            "tags_json": ["chat"],
+            "readiness": {"selectable": True, "selectable_reason": None},
         },
         {
-            "model_id": "model-2",
-            "name": "Review-Only",
-            "provider": "huggingface",
+            "id": "model-2",
+            "display_name": "Review-Only",
             "status": "registered",
+            "publish_status": "draft",
+            "source_type": "trained",
+            "description": "not ready",
+            "tags_json": [],
+            "readiness": {
+                "selectable": False,
+                "selectable_reason": "awaiting review",
+            },
         },
     ]
     tools._request = lambda method, path, *, json_body=None: (200, canned_models)  # type: ignore[attr-defined]
@@ -699,7 +722,242 @@ def test_list_selectable_models_returns_only_selectable() -> None:
     assert decoded["ok"] is True
     assert len(decoded["models"]) == 1
     assert decoded["models"][0]["model_id"] == "model-1"
-    assert "selectable" not in decoded["models"][0]
+    assert decoded["models"][0]["selectable"] is True
+    assert decoded["models"][0]["name"] == "GPT-4"
+    assert decoded["models"][0]["tags"] == ["chat"]
+
+
+def _canned_models_fixture() -> list[dict]:
+    return [
+        {
+            "id": "model-1",
+            "display_name": "GPT-4",
+            "status": "active",
+            "publish_status": "published",
+            "source_type": "base",
+            "description": "ready model",
+            "tags_json": ["chat"],
+            "readiness": {"selectable": True, "selectable_reason": None},
+            "warnings": [],
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-02T00:00:00Z",
+        },
+        {
+            "id": "model-2",
+            "display_name": "Review-Only",
+            "status": "registered",
+            "publish_status": "draft",
+            "source_type": "trained",
+            "description": "not ready",
+            "tags_json": [],
+            "readiness": {
+                "selectable": False,
+                "selectable_reason": "awaiting review",
+            },
+            "warnings": ["missing artifact"],
+            "created_at": "2025-01-03T00:00:00Z",
+            "updated_at": "2025-01-04T00:00:00Z",
+        },
+    ]
+
+
+def test_list_platform_models_default_returns_selectable_only() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools._request = lambda method, path, *, json_body=None: (200, _canned_models_fixture())  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_platform_models())
+    assert decoded["ok"] is True
+    assert decoded["total"] == 2
+    assert decoded["selectable_count"] == 1
+    assert len(decoded["models"]) == 1
+    assert decoded["models"][0]["model_id"] == "model-1"
+    assert decoded["models"][0]["selectable"] is True
+
+
+def test_list_platform_models_include_review_only_returns_all() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools._request = lambda method, path, *, json_body=None: (200, _canned_models_fixture())  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_platform_models(include_review_only=True))
+    assert decoded["ok"] is True
+    assert decoded["total"] == 2
+    assert decoded["selectable_count"] == 1
+    assert len(decoded["models"]) == 2
+    ids = {m["model_id"] for m in decoded["models"]}
+    assert ids == {"model-1", "model-2"}
+    by_id = {m["model_id"]: m for m in decoded["models"]}
+    assert by_id["model-2"]["selectable"] is False
+    assert by_id["model-2"]["selectable_reason"] == "awaiting review"
+
+
+def test_list_platform_models_returns_error_envelope() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools._request = lambda method, path, *, json_body=None: (500, {"detail": "boom"})  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.list_platform_models())
+    assert decoded["ok"] is False
+    assert decoded["action"] == "list_platform_models"
+    assert decoded["http_status"] == 500
+
+
+def test_get_model_detail_returns_projected_with_warnings_and_timestamps() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned = _canned_models_fixture()[1]
+    calls: list[tuple[str, str]] = []
+
+    def _fake_request(method, path, *, json_body=None):
+        calls.append((method, path))
+        return 200, canned
+
+    tools._request = _fake_request  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.get_model_detail("model-2"))
+    assert decoded["ok"] is True
+    assert calls == [("GET", "/models/model-2")]
+    model = decoded["model"]
+    assert model["model_id"] == "model-2"
+    assert model["name"] == "Review-Only"
+    assert model["selectable"] is False
+    assert model["selectable_reason"] == "awaiting review"
+    assert model["warnings"] == ["missing artifact"]
+    assert model["created_at"] == "2025-01-03T00:00:00Z"
+    assert model["updated_at"] == "2025-01-04T00:00:00Z"
+
+
+def test_get_model_detail_returns_error_envelope_for_missing() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "Model not found"})  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.get_model_detail("does-not-exist"))
+    assert decoded["ok"] is False
+    assert decoded["action"] == "get_model_detail"
+    assert decoded["http_status"] == 404
+
+
+def test_get_model_lineage_returns_raw_lineage() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_lineage = {
+        "model_id": "model-1",
+        "source_type": "trained",
+        "base_model_name": "llama3:8b",
+        "trainer_model_name": "axolotl",
+        "trainer_backend": "qlora",
+        "artifact_id": "artifact-1",
+        "artifact_type": "lora_adapter",
+        "artifact_format": "gguf",
+        "published_model_name": "ops-llama3-8b",
+        "status": "active",
+        "publish_status": "published",
+        "readiness": {"selectable": True, "selectable_reason": None},
+        "warnings": [],
+        "lineage_json": {"steps": []},
+    }
+    calls: list[tuple[str, str]] = []
+
+    def _fake_request(method, path, *, json_body=None):
+        calls.append((method, path))
+        return 200, canned_lineage
+
+    tools._request = _fake_request  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.get_model_lineage("model-1"))
+    assert decoded["ok"] is True
+    assert calls == [("GET", "/models/model-1/lineage")]
+    assert decoded["lineage"] == canned_lineage
+
+
+def test_get_model_lineage_returns_error_envelope_for_missing() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "not found"})  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.get_model_lineage("missing"))
+    assert decoded["ok"] is False
+    assert decoded["action"] == "get_model_lineage"
+    assert decoded["http_status"] == 404
+
+
+def test_run_platform_inference_returns_answer() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def _fake_request(method, path, *, json_body=None):
+        calls.append((method, path, json_body))
+        return 200, {
+            "answer": "42",
+            "model_id": "model-1",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+        }
+
+    tools._request = _fake_request  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.run_platform_inference("model-1", "what is the answer?")
+    )
+    assert decoded["ok"] is True
+    assert decoded["answer"] == "42"
+    assert decoded["model_id"] == "model-1"
+    assert decoded["usage"] == {"prompt_tokens": 5, "completion_tokens": 1}
+    assert calls == [
+        ("POST", "/inference/run", {"model_id": "model-1", "prompt": "what is the answer?"})
+    ]
+
+
+def test_run_platform_inference_passes_rag_collection_and_top_k() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def _fake_request(method, path, *, json_body=None):
+        calls.append((method, path, json_body))
+        return 200, {"answer": "grounded", "model_id": "model-1"}
+
+    tools._request = _fake_request  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.run_platform_inference(
+            "model-1",
+            "summarize maintenance",
+            rag_collection_id="rag-c1",
+            top_k=20,
+        )
+    )
+    assert decoded["ok"] is True
+    assert calls[0] == (
+        "POST",
+        "/inference/run",
+        {
+            "model_id": "model-1",
+            "prompt": "summarize maintenance",
+            "rag_collection_id": "rag-c1",
+            "top_k": 10,
+        },
+    )
+
+
+def test_run_platform_inference_returns_error_envelope_on_failure() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+    tools._request = lambda method, path, *, json_body=None: (  # type: ignore[attr-defined]
+        500,
+        {"detail": "Ollama unreachable"},
+    )
+
+    decoded = json.loads(tools.run_platform_inference("model-1", "hi"))
+    assert decoded["ok"] is False
+    assert decoded["action"] == "run_platform_inference"
+    assert decoded["http_status"] == 500
 
 
 def test_enqueue_workflow_job_returns_dataset_source_type() -> None:

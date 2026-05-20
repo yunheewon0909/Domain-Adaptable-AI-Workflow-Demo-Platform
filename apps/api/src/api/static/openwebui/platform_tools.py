@@ -277,11 +277,17 @@ class Tools:
     def _project_model(item: Any) -> Any:
         if not isinstance(item, dict):
             return item
+        readiness = item.get("readiness") if isinstance(item.get("readiness"), dict) else {}
         return {
-            "model_id": item.get("model_id") or item.get("id"),
-            "name": item.get("name"),
-            "provider": item.get("provider"),
+            "model_id": item.get("id"),
+            "name": item.get("display_name"),
+            "description": item.get("description"),
             "status": item.get("status"),
+            "publish_status": item.get("publish_status"),
+            "source_type": item.get("source_type"),
+            "tags": item.get("tags_json") or [],
+            "selectable": readiness.get("selectable", False) if isinstance(readiness, dict) else False,
+            "selectable_reason": readiness.get("selectable_reason") if isinstance(readiness, dict) else None,
         }
 
     @staticmethod
@@ -543,14 +549,136 @@ class Tools:
         if status != 200:
             return self._error(status, body, action="list_selectable_models")
         raw_models = body if isinstance(body, list) else []
-        # Platform API does not expose a ``selectable`` boolean; use
-        # ``status == "active"`` as the selectability signal instead.
         selectable = [
             self._project_model(item)
             for item in raw_models
-            if isinstance(item, dict) and item.get("status") == "active"
+            if isinstance(item, dict)
+            and isinstance(item.get("readiness"), dict)
+            and item["readiness"].get("selectable", False)
         ]
         return self._format({"ok": True, "models": selectable})
+
+    # ---- Models registry ----------------------------------------------
+
+    def list_platform_models(self, include_review_only: bool = False) -> str:
+        """List platform models from the registry.
+
+        Use this when the user asks "what models are available", "which models
+        can I run", or before calling get_model_detail / run_platform_inference.
+        By default only selectable models are returned; set include_review_only
+        to True to also include models still in review or not yet published.
+
+        :param include_review_only: When False (default), only readiness.selectable
+            models are returned. When True, all registry entries are returned.
+        :return: JSON string with the projected model list, total count, and
+            selectable_count.
+        """
+        status, body = self._request("GET", "/models")
+        if status != 200:
+            return self._error(status, body, action="list_platform_models")
+        raw_models = body if isinstance(body, list) else []
+        dict_models = [item for item in raw_models if isinstance(item, dict)]
+        selectable_count = sum(
+            1
+            for item in dict_models
+            if isinstance(item.get("readiness"), dict)
+            and item["readiness"].get("selectable", False)
+        )
+        if include_review_only:
+            filtered = dict_models
+        else:
+            filtered = [
+                item
+                for item in dict_models
+                if isinstance(item.get("readiness"), dict)
+                and item["readiness"].get("selectable", False)
+            ]
+        models = [self._project_model(item) for item in filtered]
+        return self._format(
+            {
+                "ok": True,
+                "models": models,
+                "total": len(dict_models),
+                "selectable_count": selectable_count,
+            }
+        )
+
+    def get_model_detail(self, model_id: str) -> str:
+        """Fetch full detail for one platform model.
+
+        Use this when the user asks "tell me about model X" or wants warnings,
+        timestamps, and full projected fields. Returns the projected model plus
+        warnings, created_at, updated_at.
+
+        :param model_id: Model id from list_platform_models.
+        :return: JSON string with model detail, or an error envelope on 404.
+        """
+        encoded_id = urllib.parse.quote(model_id, safe="")
+        status, body = self._request("GET", f"/models/{encoded_id}")
+        if status != 200:
+            return self._error(status, body, action="get_model_detail")
+        projected = self._project_model(body) if isinstance(body, dict) else {}
+        if isinstance(projected, dict) and isinstance(body, dict):
+            projected["warnings"] = body.get("warnings") or []
+            projected["created_at"] = body.get("created_at")
+            projected["updated_at"] = body.get("updated_at")
+        return self._format({"ok": True, "model": projected})
+
+    def get_model_lineage(self, model_id: str) -> str:
+        """Fetch lineage metadata for one platform model.
+
+        Use this when the user asks about a model's base model, trainer,
+        artifact, or published name. Returns the raw lineage dict from the
+        platform unchanged (it is already compact).
+
+        :param model_id: Model id from list_platform_models.
+        :return: JSON string with the lineage dict, or an error envelope on 404.
+        """
+        encoded_id = urllib.parse.quote(model_id, safe="")
+        status, body = self._request("GET", f"/models/{encoded_id}/lineage")
+        if status != 200:
+            return self._error(status, body, action="get_model_lineage")
+        return self._format({"ok": True, "lineage": body})
+
+    def run_platform_inference(
+        self,
+        model_id: str,
+        prompt: str,
+        rag_collection_id: str | None = None,
+        top_k: int | None = None,
+    ) -> str:
+        """Run a single-turn inference against a platform model.
+
+        Use this when the user wants a direct answer from a specific platform
+        model, optionally grounded in a RAG collection. For evidence-grounded
+        multi-step workflows prefer run_workflow_and_wait instead.
+
+        :param model_id: Model id from list_platform_models (must be selectable).
+        :param prompt: User prompt to send to the model.
+        :param rag_collection_id: Optional RAG collection id for grounding.
+        :param top_k: Optional retrieval top_k (only meaningful with
+            rag_collection_id). Clamped to 1..10.
+        :return: JSON string with the answer and model_id, or an error envelope
+            on failure (Ollama down, invalid model, etc.).
+        """
+        body_payload: dict[str, Any] = {"model_id": model_id, "prompt": prompt}
+        if rag_collection_id is not None:
+            body_payload["rag_collection_id"] = rag_collection_id
+        if top_k is not None:
+            body_payload["top_k"] = max(1, min(int(top_k), 10))
+        status, body = self._request("POST", "/inference/run", json_body=body_payload)
+        if status != 200:
+            return self._error(status, body, action="run_platform_inference")
+        if not isinstance(body, dict):
+            return self._format({"ok": True, "answer": None, "model_id": model_id, "raw": body})
+        return self._format(
+            {
+                "ok": True,
+                "answer": body.get("answer"),
+                "model_id": body.get("model_id") or model_id,
+                "usage": body.get("usage"),
+            }
+        )
 
     def enqueue_workflow_job(
         self,
