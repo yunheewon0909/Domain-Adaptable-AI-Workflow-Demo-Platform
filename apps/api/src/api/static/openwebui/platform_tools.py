@@ -105,6 +105,8 @@ class Tools:
         if json_body is not None:
             data = json.dumps(json_body).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        if method not in ("GET", "POST", "DELETE"):
+            return 0, {"error": "unsupported_method", "detail": method}
         req = urllib.request.Request(url=url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(
@@ -176,6 +178,60 @@ class Tools:
             "query": payload.get("query"),
             "top_k": payload.get("top_k"),
             "results": results,
+        }
+
+    @staticmethod
+    def _project_document(item: Any) -> Any:
+        # Listing projection: drop text_preview and metadata blobs so listing
+        # responses stay small. Expose owner_tag and size_bytes (from
+        # text_length) so chat models can disambiguate seeded vs uploaded docs.
+        if not isinstance(item, dict):
+            return item
+        metadata = item.get("metadata_json") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        size_bytes = item.get("preview_length")
+        if size_bytes is None:
+            size_bytes = metadata.get("text_length")
+        return {
+            "id": item.get("id"),
+            "collection_id": item.get("collection_id"),
+            "filename": item.get("filename"),
+            "mime_type": item.get("mime_type"),
+            "source_type": item.get("source_type"),
+            "status": item.get("status"),
+            "size_bytes": size_bytes,
+            "owner_tag": metadata.get("owner_tag"),
+        }
+
+    @staticmethod
+    def _project_document_detail(item: Any) -> Any:
+        # Detail projection: include a truncated text_preview so the chat model
+        # can summarize a single document without pulling multi-kilobyte blobs
+        # of full text.
+        if not isinstance(item, dict):
+            return item
+        metadata = item.get("metadata_json") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        size_bytes = item.get("preview_length")
+        if size_bytes is None:
+            size_bytes = metadata.get("text_length")
+        text_preview = str(item.get("text_preview") or "")
+        return {
+            "id": item.get("id"),
+            "collection_id": item.get("collection_id"),
+            "filename": item.get("filename"),
+            "mime_type": item.get("mime_type"),
+            "source_type": item.get("source_type"),
+            "status": item.get("status"),
+            "checksum": item.get("checksum"),
+            "size_bytes": size_bytes,
+            "owner_tag": metadata.get("owner_tag"),
+            "parse_method": item.get("parse_method") or metadata.get("parse_method"),
+            "text_preview": text_preview[:1000],
+            "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"),
         }
 
     @staticmethod
@@ -283,6 +339,102 @@ class Tools:
         if status != 200:
             return self._error(status, body, action="query_rag_collection")
         return self._format({"ok": True, "retrieval": self._project_retrieval(body)})
+
+    def get_rag_collection(self, collection_id: str) -> str:
+        """Fetch full detail for one RAG collection.
+
+        Use this when the user asks "tell me about collection X", "describe
+        the Ops handbook collection", or otherwise wants more than the compact
+        list_rag_collections projection. The returned envelope includes the
+        collection's embedding model, chunking policy, document count, and
+        timestamps.
+
+        :param collection_id: Collection id from list_rag_collections.
+        :return: JSON string with full collection detail, or an error envelope
+            when the collection does not exist.
+        """
+        encoded_id = urllib.parse.quote(collection_id, safe="")
+        status, body = self._request("GET", f"/rag-collections/{encoded_id}")
+        if status != 200:
+            return self._error(status, body, action="get_rag_collection")
+        return self._format({"ok": True, "collection": body})
+
+    def list_rag_documents(self, collection_id: str) -> str:
+        """List documents belonging to a RAG collection.
+
+        Use this when the user asks "what's in collection X", "show me the
+        files in the Ops handbook", or before calling get_rag_document /
+        delete_rag_document. Returns a compact projection (id, filename,
+        mime_type, size_bytes, owner_tag) with text_preview omitted to keep
+        the chat context lean.
+
+        :param collection_id: Collection id from list_rag_collections.
+        :return: JSON string with the document list, or an error envelope when
+            the collection does not exist.
+        """
+        encoded_id = urllib.parse.quote(collection_id, safe="")
+        status, body = self._request(
+            "GET", f"/rag-collections/{encoded_id}/documents"
+        )
+        if status != 200:
+            return self._error(status, body, action="list_rag_documents")
+        documents = (
+            [self._project_document(item) for item in body]
+            if isinstance(body, list)
+            else body
+        )
+        return self._format(
+            {"ok": True, "collection_id": collection_id, "documents": documents}
+        )
+
+    def get_rag_document(self, document_id: str) -> str:
+        """Fetch full detail for one RAG document.
+
+        Use this when the user asks "what does document X contain" or wants
+        the parsed preview of a specific file. The returned envelope includes
+        a text_preview truncated to 1000 characters; for longer excerpts run
+        query_rag_collection instead.
+
+        :param document_id: Document id from list_rag_documents.
+        :return: JSON string with document detail, or an error envelope when
+            the document does not exist.
+        """
+        encoded_id = urllib.parse.quote(document_id, safe="")
+        status, body = self._request("GET", f"/rag-documents/{encoded_id}")
+        if status != 200:
+            return self._error(status, body, action="get_rag_document")
+        return self._format(
+            {"ok": True, "document": self._project_document_detail(body)}
+        )
+
+    def delete_rag_document(self, document_id: str) -> str:
+        """Delete a RAG document. DESTRUCTIVE; confirm with the user first.
+
+        This permanently removes the document record and its stored file from
+        the platform; the chunks are removed from retrieval on the next
+        reindex. Always confirm the user's intent before calling this; the
+        operation cannot be undone.
+
+        :param document_id: Document id from list_rag_documents.
+        :return: JSON string with a confirmation envelope (deleted=true,
+            storage_deleted, collection_id), or an error envelope when the
+            document does not exist.
+        """
+        encoded_id = urllib.parse.quote(document_id, safe="")
+        status, body = self._request("DELETE", f"/rag-documents/{encoded_id}")
+        if status != 200:
+            return self._error(status, body, action="delete_rag_document")
+        result = body if isinstance(body, dict) else {"raw": body}
+        return self._format(
+            {
+                "ok": True,
+                "action": "delete_rag_document",
+                "document_id": result.get("document_id") or document_id,
+                "collection_id": result.get("collection_id"),
+                "deleted": bool(result.get("deleted", True)),
+                "storage_deleted": bool(result.get("storage_deleted", False)),
+            }
+        )
 
     # ---- Workflows -----------------------------------------------------
 

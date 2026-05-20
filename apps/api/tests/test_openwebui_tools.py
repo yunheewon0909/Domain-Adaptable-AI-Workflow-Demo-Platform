@@ -65,6 +65,10 @@ def test_platform_tools_exposes_expected_methods() -> None:
     for method_name in (
         "list_rag_collections",
         "query_rag_collection",
+        "get_rag_collection",
+        "list_rag_documents",
+        "get_rag_document",
+        "delete_rag_document",
         "list_workflows",
         "enqueue_workflow_job",
         "run_workflow_and_wait",
@@ -106,6 +110,10 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "class Valves" in body
     assert "def list_rag_collections" in body
     assert "def query_rag_collection" in body
+    assert "def get_rag_collection" in body
+    assert "def list_rag_documents" in body
+    assert "def get_rag_document" in body
+    assert "def delete_rag_document" in body
     assert "def list_workflows" in body
     assert "def enqueue_workflow_job" in body
     assert "def run_workflow_and_wait" in body
@@ -124,6 +132,10 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
     assert set(tool["methods"]) >= {
         "list_rag_collections",
         "query_rag_collection",
+        "get_rag_collection",
+        "list_rag_documents",
+        "get_rag_document",
+        "delete_rag_document",
         "list_workflows",
         "enqueue_workflow_job",
         "run_workflow_and_wait",
@@ -155,6 +167,8 @@ def platform_tools_against_client(client: TestClient):
             response = client.get(path)
         elif method == "POST":
             response = client.post(path, json=json_body)
+        elif method == "DELETE":
+            response = client.delete(path)
         else:
             raise AssertionError(f"unexpected method: {method}")
         try:
@@ -391,6 +405,168 @@ def test_run_workflow_and_wait_times_out_with_real_job_id_for_later_polling() ->
     assert decoded["job_id"] == "job-99"
     assert decoded["status"] == "timeout"
     assert "job_id='job-99'" in decoded["next_step"]
+
+
+def test_get_rag_collection_uses_real_endpoint(
+    platform_tools_against_client,
+) -> None:
+    """Call get_rag_collection with a non-existent id via the TestClient.
+
+    The endpoint returns 404, which exercises the error envelope path through
+    the real API routing while proving the URL path and method match.
+    """
+    raw = platform_tools_against_client.get_rag_collection("does-not-exist")
+    decoded = json.loads(raw)
+    assert decoded["ok"] is False
+    assert decoded["action"] == "get_rag_collection"
+    assert decoded["http_status"] == 404
+
+
+def test_list_rag_documents_returns_compact_projection() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned = [
+        {
+            "id": "rag-doc-1",
+            "collection_id": "rag-c1",
+            "filename": "maintenance.md",
+            "mime_type": "text/markdown",
+            "source_type": "upload",
+            "status": "parsed",
+            "checksum": "abc123",
+            "metadata_json": {
+                "text_preview": "x" * 4000,
+                "text_length": 4000,
+                "owner_tag": "ops",
+                "parse_method": "utf8",
+            },
+            "text_preview": "x" * 4000,
+            "preview_length": 4000,
+            "preview_excerpt": "x" * 500,
+            "parse_method": "utf8",
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-02T00:00:00Z",
+        }
+    ]
+    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
+
+    decoded = json.loads(
+        tools.list_rag_documents("rag-c1")
+    )
+    assert decoded["ok"] is True
+    assert decoded["collection_id"] == "rag-c1"
+    entry = decoded["documents"][0]
+    assert entry["id"] == "rag-doc-1"
+    assert entry["filename"] == "maintenance.md"
+    assert entry["mime_type"] == "text/markdown"
+    assert entry["size_bytes"] == 4000
+    assert entry["owner_tag"] == "ops"
+    assert "text_preview" not in entry, (
+        "text_preview should be omitted from listing projection"
+    )
+
+
+def test_get_rag_document_returns_detail_with_truncated_preview() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned = {
+        "id": "rag-doc-2",
+        "collection_id": "rag-c1",
+        "filename": "runbook.md",
+        "mime_type": "text/markdown",
+        "source_type": "upload",
+        "status": "parsed",
+        "checksum": "def456",
+        "metadata_json": {
+            "text_preview": "A" * 3000,
+            "text_length": 3000,
+            "owner_tag": "ops",
+            "parse_method": "utf8",
+        },
+        "text_preview": "A" * 3000,
+        "preview_length": 3000,
+        "preview_excerpt": "A" * 500,
+        "parse_method": "utf8",
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-02T00:00:00Z",
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.get_rag_document("rag-doc-2"))
+    assert decoded["ok"] is True
+    doc = decoded["document"]
+    assert doc["id"] == "rag-doc-2"
+    assert doc["filename"] == "runbook.md"
+    # text_preview should be truncated to 1000 chars
+    assert len(doc["text_preview"]) == 1000, (
+        "text_preview must be truncated to 1000 characters"
+    )
+    assert doc["text_preview"] == "A" * 1000
+    assert doc["size_bytes"] == 3000
+    assert doc["owner_tag"] == "ops"
+
+
+def test_delete_rag_document_returns_success_envelope() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned = {
+        "document_id": "rag-doc-1",
+        "collection_id": "rag-c1",
+        "deleted": True,
+        "storage_deleted": False,
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.delete_rag_document("rag-doc-1"))
+    assert decoded["ok"] is True
+    assert decoded["action"] == "delete_rag_document"
+    assert decoded["document_id"] == "rag-doc-1"
+    assert decoded["deleted"] is True
+
+
+def test_delete_rag_document_returns_error_for_missing() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_error = {"detail": "RAG document not found"}
+    tools._request = lambda method, path, *, json_body=None: (  # type: ignore[attr-defined]
+        404,
+        canned_error,
+    )
+
+    decoded = json.loads(tools.delete_rag_document("does-not-exist"))
+    assert decoded["ok"] is False
+    assert decoded["action"] == "delete_rag_document"
+    assert decoded["http_status"] == 404
+
+
+def test_get_rag_collection_detail_via_e2e_returns_404_for_missing(
+    platform_tools_against_client,
+) -> None:
+    """E2E: calling get_rag_collection on a non-existent id returns a 404 error envelope."""
+    raw = platform_tools_against_client.get_rag_collection("does-not-exist-e2e")
+    decoded = json.loads(raw)
+    assert decoded["ok"] is False
+    assert decoded["http_status"] == 404
+
+
+def test_list_rag_documents_via_e2e(platform_tools_against_client) -> None:
+    """E2E: listing documents for a non-existent collection returns a 404 error envelope."""
+    raw = platform_tools_against_client.list_rag_documents("does-not-exist-collection")
+    decoded = json.loads(raw)
+    assert decoded["ok"] is False
+    assert decoded["http_status"] == 404
+
+
+def test_delete_rag_document_via_e2e(platform_tools_against_client) -> None:
+    """E2E: deleting a non-existent document returns a 404 error envelope."""
+    raw = platform_tools_against_client.delete_rag_document("does-not-exist-doc")
+    decoded = json.loads(raw)
+    assert decoded["ok"] is False
+    assert decoded["http_status"] == 404
 
 
 def test_get_job_status_returns_compact_projection() -> None:

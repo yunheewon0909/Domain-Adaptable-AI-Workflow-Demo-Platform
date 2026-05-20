@@ -56,6 +56,10 @@ def get_openwebui_manifest() -> dict[str, object]:
                 "methods": [
                     "list_rag_collections",
                     "query_rag_collection",
+                    "get_rag_collection",
+                    "list_rag_documents",
+                    "get_rag_document",
+                    "delete_rag_document",
                     "list_workflows",
                     "enqueue_workflow_job",
                     "run_workflow_and_wait",
