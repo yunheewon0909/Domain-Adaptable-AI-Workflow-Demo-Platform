@@ -518,6 +518,13 @@ What this gives a reviewer:
 - `query_rag_collection("rag-collection-demo-ops", "maintenance ingestion")` returns ranked excerpts for the maintenance workflow.
 - `enqueue_workflow_job("briefing", "Summarize the seeded ops handbook.", rag_collection_id="rag-collection-demo-ops")` produces a grounded workflow result without manual document upload.
 
+**Phase 2 — RAG management parity** added read/delete document operations so a reviewer can inspect collection detail, list documents inside a collection, view a single document's text preview, and remove stale documents:
+
+- `get_rag_collection("rag-collection-demo-ops")` returns full collection detail (embedding model, chunking policy, timestamps).
+- `list_rag_documents("rag-collection-demo-ops")` returns compact entries (id, filename, mime_type, size_bytes, owner_tag) without text_preview.
+- `get_rag_document("rag-doc-seed-ops-maintenance")` returns detail with a 1000-char text_preview truncation.
+- `delete_rag_document("rag-doc-seed-ops-maintenance")` permanently removes the document (destructive; the chat model confirms before calling).
+
 **Phase 3 — Workflow reviewer parity** extends the tool surface with source/model discovery and job result summarization:
 
 - `list_workflow_sources()` combines RAG collections + legacy datasets so the chat model can present both options without knowing IDs up front.
