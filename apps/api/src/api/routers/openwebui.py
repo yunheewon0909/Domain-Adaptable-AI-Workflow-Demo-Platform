@@ -71,6 +71,12 @@ def get_openwebui_manifest() -> dict[str, object]:
                     "run_workflow_and_wait",
                     "get_job_status",
                     "summarize_job_result",
+                    "list_ft_datasets",
+                    "list_ft_dataset_versions",
+                    "get_ft_dataset_version_summary",
+                    "list_ft_training_jobs",
+                    "get_ft_training_job",
+                    "get_ft_training_logs",
                 ],
                 "install_hint": (
                     "Open WebUI -> Workspace -> Tools -> + (New), paste the "

@@ -481,11 +481,11 @@ Step-by-step from a fresh Open WebUI install:
 3. Grab the tool source. Inside Compose: `curl http://api:8000/openwebui/platform_tools.py`. From the host: `curl http://127.0.0.1:8000/openwebui/platform_tools.py`.
 4. In Open WebUI go to **Workspace → Tools → + (New)**, paste the file contents, save.
 5. Open the Tool's **Valves** panel. Inside the Compose network leave `api_base_url=http://api:8000`. From host-side Open WebUI set it to `http://127.0.0.1:8000`.
-6. Enable the Tool on a chat (chat **Settings → Tools**) and ask the model to call `list_rag_collections`, `query_rag_collection`, or `run_workflow_and_wait`.
+6. Enable the Tool on a chat (chat **Settings → Tools**) and ask the model to discover available RAG collections, run a workflow, or inspect job results.
 
 `GET /openwebui/manifest.json` lists the exposed tool methods if a reviewer wants to discover the surface without reading the Python file first.
 
-Exposed tool calls:
+Exposed tool calls (across Phase 1–5):
 
 - `list_rag_collections()` — list platform `rag_collections` rows and document counts
 - `query_rag_collection(collection_id, query, top_k)` — retrieve platform-managed evidence excerpts
@@ -495,11 +495,23 @@ Exposed tool calls:
 - `delete_rag_document(document_id)` — permanently remove a document (destructive; confirms with user)
 - `list_workflows()` — list queue-backed workflow definitions (includes `recommended_prompts` for known workflows)
 - `list_workflow_sources()` — combine RAG collections + legacy datasets into one source picker
-- `list_selectable_models()` — list only inference-ready platform models (`status=active`)
+- `list_selectable_models()` — list only inference-ready platform models (`readiness.selectable`)
+- `list_platform_models(include_review_only=False)` — full registry list with `selectable_count`; defaults to selectable only
+- `get_model_detail(model_id)` — single model detail with warnings and timestamps
+- `get_model_lineage(model_id)` — lineage metadata (base model, trainer, artifact, publish status)
+- `run_platform_inference(model_id, prompt, rag_collection_id, top_k)` — single-turn inference with optional RAG grounding
+- `list_ft_datasets()` — list fine-tuning datasets (dataset_id, name, description, version_count, created_at)
+- `list_ft_dataset_versions(dataset_id)` — list versions for one FT dataset (version_id, version_number, status, row_count, created_at)
+- `get_ft_dataset_version_summary(version_id)` — row-count / status summary for one FT dataset version
+- `list_ft_training_jobs()` — list FT training jobs (job_id, status, dataset_name, base_model, training_method, timestamps)
+- `get_ft_training_job(job_id)` — single FT training job detail with error, artifact_id, logs_url_hint
+- `get_ft_training_logs(job_id)` — fetch raw training log text for one FT training job
 - `enqueue_workflow_job(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k)` — enqueue a workflow run (returns `source_type`, `model_id`, `rag_collection_id`, `dataset_key` in the envelope)
 - `run_workflow_and_wait(workflow_key, prompt, dataset_key, rag_collection_id, model_id, top_k, max_wait_seconds)` — enqueue and wait in one chat tool call, avoiding placeholder job-id polling
 - `get_job_status(job_id)` — poll queued/running workflow jobs and inspect results
 - `summarize_job_result(job_id)` — concise summary for succeeded (extracts key output), failed (highlights error), or still-running jobs
+
+**Phase 1 — RAG/Workflow bridge** provides the foundation: list RAG collections, query evidence, list and run workflows, and poll job status. Phases 2 and 3 (below) extend the surface with RAG management and workflow reviewer parity.
 
 This is intentionally an importable tool artifact, not a vendored Open WebUI fork. Stock Open WebUI still owns chats/users/tool assignment, while the tool calls the platform API for RAG/workflow state.
 
@@ -534,6 +546,28 @@ What this gives a reviewer:
 - `summarize_job_result(job_id)` returns a concise view: extracted output for succeeded jobs, highlighted error for failed ones, or current status for still-running ones.
 
 End-to-end chat flow: "List available workflows and sources" → `list_workflows()` + `list_workflow_sources()` → "Run the briefing workflow against the ops handbook" → `enqueue_workflow_job("briefing", ..., rag_collection_id="rag-collection-demo-ops")` → `summarize_job_result(job_id)`.
+
+**Phase 4 — Models registry parity** exposes the model registry so a reviewer can inspect model readiness, lineage, and run inference from chat:
+
+- `list_platform_models()` returns selectable models by default; pass `include_review_only=True` to see artifact-only rows with explanations.
+- `get_model_detail("model-1")` returns display name, status, publish status, tags, warnings, and `selectable` / `selectable_reason` from `readiness`.
+- `get_model_lineage("model-1")` shows base model name, trainer backend, artifact id, and publish names.
+- `run_platform_inference("model-1", "Summarize the ops handbook", rag_collection_id="rag-collection-demo-ops")` runs inference grounded in RAG evidence.
+
+End-to-end chat flow: "What models are available?" → `list_platform_models()` → "Show me details for the default model" → `get_model_detail("model-1")` → "Run inference on the ops handbook" → `run_platform_inference("model-1", "Summarize the ops handbook", rag_collection_id="rag-collection-demo-ops")`.
+
+The existing `list_selectable_models()` helper continues to work and now uses `readiness.selectable` (was `status=active`) for consistency with the model registry API.
+
+**Phase 5 — Fine-tuning lifecycle** adds read-only visibility into the fine-tuning datasets, dataset versions, training jobs, and training logs so a reviewer can inspect what was trained, on what data, and why a run failed — without leaving the Open WebUI chat. Write operations (creating datasets, enqueuing training jobs) remain on the platform admin surface for safety.
+
+- `list_ft_datasets()` returns each dataset with a `version_count` so the chat can pick which dataset to drill into.
+- `list_ft_dataset_versions("ft-dataset-1")` extracts the embedded versions from the dataset detail endpoint and projects them to `(version_id, version_number, status, row_count, created_at)`.
+- `get_ft_dataset_version_summary("ft-version-1")` returns the platform's already-compact summary (status, row_count, splits, row_summary) for one version, with no row payloads.
+- `list_ft_training_jobs()` returns a compact projection (job_id, status, dataset_name, base_model, training_method, timestamps); large fields like `log_text`, `metrics_json`, and `artifacts` are dropped.
+- `get_ft_training_job("ft-job-1")` returns the projection plus `error` (extracted from `error_json`), the first `artifact_id`, and a `logs_url_hint` pointing at `get_ft_training_logs`.
+- `get_ft_training_logs("ft-job-1")` normalizes both JSON (`log_text`) and text/plain log responses into `{"ok": true, "job_id": ..., "logs": "..."}`.
+
+End-to-end chat flow: "What fine-tuning datasets do we have?" → `list_ft_datasets()` → "Show me versions of the ops dataset" → `list_ft_dataset_versions("ft-dataset-1")` → "Summarize version v1" → `get_ft_dataset_version_summary("ft-version-1")` → "Which training jobs ran on it?" → `list_ft_training_jobs()` → "Why did job ft-job-2 fail?" → `get_ft_training_job("ft-job-2")` then `get_ft_training_logs("ft-job-2")`.
 
 Seed semantics:
 
