@@ -58,6 +58,11 @@ class Settings:
     training_artifact_dir: str
     ft_max_seq_length: int
     ft_default_training_method: str
+    ft_mlx_iters: int
+    ft_mlx_steps_per_eval: int
+    ft_mlx_val_batches: int
+    ft_mlx_save_every: int
+    ft_mlx_lora_layers: int
     ft_trainer_backend: str
     ft_allow_smoke_fallback: bool
     ft_smoke_fallback_backend: str
@@ -127,9 +132,22 @@ def get_settings() -> Settings:
             os.getenv("FT_MAX_SEQ_LENGTH"), default=1024, minimum=128
         ),
         ft_default_training_method=os.getenv(
-            "FT_DEFAULT_TRAINING_METHOD", "sft_lora"
+            "FT_DEFAULT_TRAINING_METHOD", "sft_qlora"
         ).strip()
-        or "sft_lora",
+        or "sft_qlora",
+        ft_mlx_iters=_to_int(os.getenv("FT_MLX_ITERS"), default=1000, minimum=10),
+        ft_mlx_steps_per_eval=_to_int(
+            os.getenv("FT_MLX_STEPS_PER_EVAL"), default=200, minimum=1
+        ),
+        ft_mlx_val_batches=_to_int(
+            os.getenv("FT_MLX_VAL_BATCHES"), default=10, minimum=1
+        ),
+        ft_mlx_save_every=_to_int(
+            os.getenv("FT_MLX_SAVE_EVERY"), default=500, minimum=1
+        ),
+        ft_mlx_lora_layers=_to_int(
+            os.getenv("FT_MLX_LORA_LAYERS"), default=16, minimum=1
+        ),
         ft_trainer_backend=os.getenv("FT_TRAINER_BACKEND", "local_peft").strip()
         or "local_peft",
         ft_allow_smoke_fallback=_to_bool(
