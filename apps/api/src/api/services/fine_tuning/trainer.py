@@ -397,8 +397,8 @@ def _run_mlx_qlora_training(
     output_dir: Path,
 ) -> TrainingArtifacts:
     """Run MLX QLoRA training via subprocess (mlx_lm.lora + mlx_lm.fuse)."""
+    import shutil
     import subprocess
-    import sys
     import time
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -432,8 +432,11 @@ def _run_mlx_qlora_training(
     ]
 
     # Step 1: MLX LoRA training
+    lora_exe = shutil.which("mlx_lm.lora")
+    if not lora_exe:
+        raise RuntimeError("mlx_lm.lora CLI is required. Install with: brew install mlx-lm")
     lora_cmd = [
-        sys.executable, "-m", "mlx_lm", "lora",
+        lora_exe,
         "--model", config.trainer_model_name,
         "--data", str(mlx_data_dir),
         "--train",
@@ -482,8 +485,11 @@ def _run_mlx_qlora_training(
 
     # Step 2: Fuse adapter into base model
     logs.append(f"fusing model to {fused_dir}")
+    fuse_exe = shutil.which("mlx_lm.fuse")
+    if not fuse_exe:
+        raise RuntimeError("mlx_lm.fuse CLI is required. Install with: brew install mlx-lm")
     fuse_cmd = [
-        sys.executable, "-m", "mlx_lm", "fuse",
+        fuse_exe,
         "--model", config.trainer_model_name,
         "--adapter-path", str(adapter_dir),
         "--save-path", str(fused_dir),
