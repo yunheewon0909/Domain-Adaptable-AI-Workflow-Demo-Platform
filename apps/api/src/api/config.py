@@ -64,6 +64,10 @@ class Settings:
     ft_trainer_model_map_json: str
     ollama_publish_enabled: bool
     ollama_model_namespace: str | None
+    lmstudio_base_url: str
+    lmstudio_chat_model: str
+    lmstudio_embed_model: str
+    lmstudio_timeout_seconds: float
 
 
 @lru_cache
@@ -140,4 +144,9 @@ def get_settings() -> Settings:
             os.getenv("OLLAMA_PUBLISH_ENABLED"), default=False
         ),
         ollama_model_namespace=os.getenv("OLLAMA_MODEL_NAMESPACE"),
+        # LM Studio settings (optional override; when set, replaces Ollama)
+        lmstudio_base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+        lmstudio_chat_model=os.getenv("LMSTUDIO_CHAT_MODEL", ""),
+        lmstudio_embed_model=os.getenv("LMSTUDIO_EMBED_MODEL", ""),
+        lmstudio_timeout_seconds=float(os.getenv("LMSTUDIO_TIMEOUT_SECONDS", "600")),
     )
