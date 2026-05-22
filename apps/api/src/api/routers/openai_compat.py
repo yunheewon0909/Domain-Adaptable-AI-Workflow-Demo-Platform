@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_engine
 from api.dependencies import get_llm_client
-from api.llm import LLMClient, LLMClientError
+from api.llm import LLMClient, LLMClientError, LMStudioChatClient
 from api.services.model_registry import list_models
 from api.services.rag.collections import preview_collection_retrieval
 
@@ -69,7 +69,7 @@ def _friendly_model_name(raw_name: str | None) -> str:
 def _exposed_model_id(model: dict[str, Any]) -> str:
     tags = _model_tags(model)
     friendly = _friendly_model_name(
-        str(model.get("serving_model_name") or model.get("ollama_model_name") or "")
+        str(model.get("serving_model_name") or "")
     )
     if "default" in tags:
         return f"{friendly} - default platform model"
@@ -159,7 +159,6 @@ def _resolve_selectable_model(session: Session, requested_model: str) -> dict[st
         model
         for model in models
         if model.get("serving_model_name") == requested
-        or model.get("ollama_model_name") == requested
         or model.get("published_model_name") == requested
     ]
     if not matches_by_serving:
@@ -301,13 +300,99 @@ def _run_chat_completion(
             "rag_collection_id": request.rag_collection_id,
             "retrieval_preview": retrieval_preview,
             "notes": [
-                "Token counts are not reported by the upstream Ollama OpenAI shim; usage fields are placeholders.",
+                "Token counts are placeholders; LM Studio's OpenAI shim does not report usage.",
                 "RAG-collection grounding is opt-in via rag_collection_id; ordinary OpenAI clients that do not send it remain plain chat.",
-                "Streaming responses are compatibility SSE wrappers around a single completed upstream call.",
             ],
         },
     }
     return response, completion_id, exposed_model_id, created
+
+
+def _build_lmstudio_messages(
+    *, question: str, context: str
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Answer using only the provided context when possible. "
+                "If context is insufficient, say so briefly."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {question}",
+        },
+    ]
+
+
+def _stream_via_lmstudio(
+    *,
+    llm_client: LLMClient,
+    question: str,
+    context: str,
+    serving_model_name: str,
+    temperature: float,
+    max_tokens: int | None,
+    completion_id: str,
+    exposed_model_id: str,
+    created: int,
+    platform_meta: dict[str, Any],
+) -> Iterator[str]:
+    if not isinstance(llm_client, LMStudioChatClient):
+        # Fall back to buffered single-chunk SSE for non-streaming clients.
+        yield from _stream_chat_completion(
+            {
+                "choices": [{"message": {"content": ""}}],
+                "x_domain_platform": platform_meta,
+            },
+            completion_id,
+            exposed_model_id,
+            created,
+        )
+        return
+
+    try:
+        upstream_iter = llm_client.stream_chat_messages(
+            messages=_build_lmstudio_messages(question=question, context=context),
+            model=serving_model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        for chunk in upstream_iter:
+            # Rewrite the upstream id+model so external clients see the
+            # platform's exposed identifiers, not LM Studio's raw model id.
+            chunk = dict(chunk)
+            chunk["id"] = completion_id
+            chunk["model"] = exposed_model_id
+            chunk["created"] = created
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    except LLMClientError as exc:
+        error_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": exposed_model_id,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": f"\n[stream error: {exc}]"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
+
+    final_chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": exposed_model_id,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "x_domain_platform": platform_meta,
+    }
+    yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 def _stream_chat_completion(
@@ -357,10 +442,87 @@ def post_v1_chat_completion(
     request: ChatCompletionRequest,
     llm_client: LLMClient = Depends(get_llm_client),
 ) -> Any:
+    if request.stream and isinstance(llm_client, LMStudioChatClient):
+        with Session(get_engine()) as session:
+            model = _resolve_selectable_model(session, request.model)
+        question, context = _build_prompt(request.messages)
+
+        retrieval_preview: dict[str, Any] | None = None
+        if request.rag_collection_id:
+            with Session(get_engine()) as session:
+                try:
+                    retrieval_preview = preview_collection_retrieval(
+                        session,
+                        collection_id=request.rag_collection_id,
+                        query=question,
+                        top_k=request.top_k,
+                    )
+                except KeyError as exc:
+                    raise HTTPException(
+                        status_code=404, detail="RAG collection not found"
+                    ) from exc
+            rag_context = (
+                "\n\n".join(
+                    f"[{item['filename']}]\n{item['excerpt']}"
+                    for item in retrieval_preview.get("results", [])
+                )
+                or "No matching RAG collection context found."
+            )
+            context = (
+                f"{context}\n\n"
+                "Use the following platform RAG collection evidence when it is relevant. "
+                "If it is insufficient, say so.\n\n"
+                f"{rag_context}"
+            )
+
+        serving_model_name = model.get("serving_model_name")
+        if not serving_model_name:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "selected model has no serving target; only runtime-ready/selectable "
+                    "models can be used through the OpenAI-compatible shim"
+                ),
+            )
+
+        completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+        created = int(time.time())
+        exposed_model_id = _exposed_model_id(model) if model.get("id") else str(
+            serving_model_name
+        )
+        platform_meta = {
+            "registry_model_id": model.get("id"),
+            "serving_model_name": serving_model_name,
+            "source_type": model.get("source_type"),
+            "readiness": model.get("readiness"),
+            "rag_collection_id": request.rag_collection_id,
+            "retrieval_preview": retrieval_preview,
+            "notes": [
+                "Stream chunks are proxied directly from LM Studio with id+model rewritten to the platform identifiers.",
+                "RAG-collection grounding is opt-in via rag_collection_id.",
+            ],
+        }
+        return StreamingResponse(
+            _stream_via_lmstudio(
+                llm_client=llm_client,
+                question=question,
+                context=context,
+                serving_model_name=str(serving_model_name),
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                completion_id=completion_id,
+                exposed_model_id=exposed_model_id,
+                created=created,
+                platform_meta=platform_meta,
+            ),
+            media_type="text/event-stream",
+        )
+
     response, completion_id, exposed_model_id, created = _run_chat_completion(
         request, llm_client
     )
     if request.stream:
+        # Fallback for non-LM-Studio clients (test fakes etc.): buffer + wrap.
         return StreamingResponse(
             _stream_chat_completion(response, completion_id, exposed_model_id, created),
             media_type="text/event-stream",

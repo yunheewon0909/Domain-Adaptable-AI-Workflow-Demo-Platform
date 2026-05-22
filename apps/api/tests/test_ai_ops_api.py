@@ -59,7 +59,7 @@ def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
     adapter_dir = tmp_path / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)
     (adapter_dir / "adapter_config.json").write_text("{}", encoding="utf-8")
-    (adapter_dir / "adapter_model.safetensors").write_text("stub", encoding="utf-8")
+    (adapter_dir / "adapters.safetensors").write_text("stub", encoding="utf-8")
     report_path = tmp_path / "training_report.json"
     report_path.write_text(json.dumps({"ok": True}), encoding="utf-8")
     logs_path = tmp_path / "training.log"
@@ -71,7 +71,7 @@ def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
         logs_path=str(logs_path),
         metrics={"train_runtime": 0.1, "train_loss": 0.01},
         evaluation={"status": "not_run", "baseline_comparison": "not_implemented"},
-        trainer_backend="local_peft",
+        trainer_backend="mlx_qlora",
         trainer_model_name="hf-internal/testing-tiny-random-gpt2",
         device="cpu",
     )
@@ -80,8 +80,7 @@ def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
 def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen3.5:4b")
-    monkeypatch.setenv("OLLAMA_FALLBACK_MODEL", "qwen2.5:3b-instruct-q4_K_M")
+    monkeypatch.setenv("LMSTUDIO_CHAT_MODEL", "qwen3.5:4b")
     get_settings.cache_clear()
 
     with Session(get_engine()) as session:
@@ -91,7 +90,7 @@ def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
                 display_name="Old default",
                 source_type="base",
                 base_model_name="qwen2.5:7b-instruct-q4_K_M",
-                ollama_model_name="qwen2.5:7b-instruct-q4_K_M",
+                serving_model_name="qwen2.5:7b-instruct-q4_K_M",
                 published_model_name="qwen2.5:7b-instruct-q4_K_M",
                 status="active",
                 publish_status="published",
@@ -108,7 +107,7 @@ def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
 
         current = session.scalar(
             select(ModelRegistryRecord).where(
-                ModelRegistryRecord.ollama_model_name == "qwen3.5:4b"
+                ModelRegistryRecord.serving_model_name == "qwen3.5:4b"
             )
         )
         assert current is not None
@@ -116,7 +115,7 @@ def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
     listing = client.get("/models")
     assert listing.status_code == 200
     active_models = [model for model in listing.json() if model["status"] == "active"]
-    assert [model["ollama_model_name"] for model in active_models] == ["qwen3.5:4b"]
+    assert [model["serving_model_name"] for model in active_models] == ["qwen3.5:4b"]
 
 
 def _create_locked_ft_version(client: TestClient, *, dataset_name: str) -> str:
@@ -302,7 +301,7 @@ def test_real_training_requires_locked_dataset_version(client: TestClient) -> No
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
             },
@@ -318,8 +317,8 @@ def test_training_job_model_registry_and_inference_flow(
     app.dependency_overrides[get_llm_client] = lambda: FakeLLMClient()
     try:
         monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
-        monkeypatch.setenv("OLLAMA_PUBLISH_ENABLED", "true")
-        monkeypatch.setenv("OLLAMA_MODEL_NAMESPACE", "demo")
+        monkeypatch.setenv("ADAPTER_PUBLISH_ENABLED", "true")
+        monkeypatch.setenv("MLX_MODEL_NAMESPACE", "demo")
         get_settings.cache_clear()
 
         def _fake_run_training_backend(*args, **kwargs):
@@ -370,7 +369,7 @@ def test_training_job_model_registry_and_inference_flow(
             json={
                 "dataset_version_id": version_id,
                 "base_model_name": "qwen3.5:4b",
-                "training_method": "sft_lora",
+                "training_method": "sft_qlora",
                 "hyperparams_json": {
                     "epochs": 1,
                     "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
@@ -395,7 +394,7 @@ def test_training_job_model_registry_and_inference_flow(
         training_detail = client.get(f"/ft-training-jobs/{training_job_id}")
         assert training_detail.status_code == 200
         assert training_detail.json()["status"] == "succeeded"
-        assert training_detail.json()["trainer_backend"] == "local_peft"
+        assert training_detail.json()["trainer_backend"] == "mlx_qlora"
         assert (
             training_detail.json()["trainer_model_name"]
             == "hf-internal/testing-tiny-random-gpt2"
@@ -443,7 +442,7 @@ def test_training_job_model_registry_and_inference_flow(
         )
         assert publish_response.json()["readiness"]["runtime_ready"] is False
         assert any(
-            "Automatic Ollama import is not implemented" in warning
+            "Automatic LM Studio import is not implemented" in warning
             for warning in publish_response.json()["warnings"]
         )
 
@@ -479,7 +478,7 @@ def test_training_job_model_registry_and_inference_flow(
             json={
                 "prompt": "generate summary",
                 "model_id": model_id,
-                "ollama_model_name": "qwen2.5:3b-instruct-q4_K_M",
+                "serving_model_name": "qwen2.5:3b-instruct-q4_K_M",
             },
         )
         assert ambiguous_inference_response.status_code == 400
@@ -491,8 +490,8 @@ def test_publish_disabled_returns_truthful_artifact_ready_status(
     client: TestClient, monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
-    monkeypatch.setenv("OLLAMA_PUBLISH_ENABLED", "false")
-    monkeypatch.setenv("OLLAMA_MODEL_NAMESPACE", "demo")
+    monkeypatch.setenv("ADAPTER_PUBLISH_ENABLED", "false")
+    monkeypatch.setenv("MLX_MODEL_NAMESPACE", "demo")
     get_settings.cache_clear()
 
     def _fake_run_training_backend(*args, **kwargs):
@@ -536,7 +535,7 @@ def test_publish_disabled_returns_truthful_artifact_ready_status(
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
             },
@@ -570,16 +569,11 @@ def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
         "https://huggingface.co/hf-internal/testing-tiny-random-gpt2 via from_pretrained"
     )
 
-    monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._require_training_dependencies",
-        lambda: None,
-    )
-
     def _raise_hf_resolution_failure(*args, **kwargs):
         raise RuntimeError(hf_error)
 
     monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._run_local_peft_training",
+        "api.services.fine_tuning.trainer._run_mlx_qlora_training",
         _raise_hf_resolution_failure,
     )
 
@@ -591,7 +585,7 @@ def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "smoke_test": True,
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
@@ -603,7 +597,7 @@ def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
         result = complete_training_job(session, training_job_id=training_job_id)
 
     assert result["status"] == "succeeded"
-    assert result["trainer_backend"] == "local_peft+smoke_fallback"
+    assert result["trainer_backend"] == "mlx_qlora+smoke_fallback"
     assert result["trainer_model_name"] == DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME
     assert result["artifact_validation"]["artifact_valid"] is True
     assert result["artifact_validation"]["smoke_fallback_used"] is True
@@ -613,14 +607,14 @@ def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
         in result["artifact_validation"]["warnings"]
     )
     assert (
-        "Use host MPS/local_peft path for real trainer validation."
+        "Use the Mac-native MLX QLoRA path for real trainer validation."
         in result["artifact_validation"]["warnings"]
     )
     assert len(result["registered_models"]) == 1
     registered_model = result["registered_models"][0]
     assert registered_model["status"] == "artifact_ready"
     assert registered_model["publish_status"] == "publish_ready"
-    assert registered_model["trainer_backend"] == "local_peft+smoke_fallback"
+    assert registered_model["trainer_backend"] == "mlx_qlora+smoke_fallback"
     assert registered_model["trainer_model_name"] == DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME
     assert registered_model["readiness"]["selectable"] is False
     assert registered_model["serving_model_name"] is None
@@ -638,16 +632,11 @@ def test_hf_resolution_failure_stays_classified_when_smoke_fallback_is_disabled(
         "https://huggingface.co/hf-internal/testing-tiny-random-gpt2 via from_pretrained"
     )
 
-    monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._require_training_dependencies",
-        lambda: None,
-    )
-
     def _raise_hf_resolution_failure(*args, **kwargs):
         raise RuntimeError(hf_error)
 
     monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._run_local_peft_training",
+        "api.services.fine_tuning.trainer._run_mlx_qlora_training",
         _raise_hf_resolution_failure,
     )
 
@@ -659,7 +648,7 @@ def test_hf_resolution_failure_stays_classified_when_smoke_fallback_is_disabled(
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "smoke_test": True,
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
@@ -779,7 +768,7 @@ def test_training_failure_is_classified_for_ui(
 
     def _failing_run_training_backend(*args, **kwargs):
         raise RuntimeError(
-            "torch is required for real fine-tuning. Install training dependencies first."
+            "mlx_lm.lora CLI is required. Install with: brew install mlx-lm"
         )
 
     monkeypatch.setattr(
@@ -820,7 +809,7 @@ def test_training_failure_is_classified_for_ui(
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
             },
@@ -828,7 +817,7 @@ def test_training_failure_is_classified_for_ui(
     ).json()["id"]
 
     with Session(get_engine()) as session:
-        with pytest.raises(RuntimeError, match="torch is required"):
+        with pytest.raises(RuntimeError, match="mlx_lm.lora CLI is required"):
             complete_training_job(session, training_job_id=training_job_id)
 
     detail_response = client.get(f"/ft-training-jobs/{training_job_id}")
@@ -837,11 +826,11 @@ def test_training_failure_is_classified_for_ui(
     assert detail_response.json()["error_json"]["phase"] == "training"
     assert detail_response.json()["error_json"]["category"] == "dependency_missing"
     assert (
-        "required fine-tuning dependencies are missing"
+        "required MLX training tooling is missing"
         in detail_response.json()["error_json"]["user_message"]
     )
     assert (
-        "Install the training dependencies"
+        "Install or update the Mac-native MLX toolchain"
         in detail_response.json()["error_json"]["remediation"]
     )
 
