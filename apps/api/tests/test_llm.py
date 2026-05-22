@@ -3,21 +3,55 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from api.llm import LLMClientError, OllamaChatClient
+from api.llm import LLMClientError, LMStudioChatClient
 
 
-def test_generate_answer_raises_last_provider_error_when_requested_model_fails(
+def test_generate_answer_returns_assistant_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = OllamaChatClient(
-        base_url="http://ollama:11434/v1",
-        default_model="qwen3.5:4b",
-        fallback_model="qwen2.5:3b-instruct-q4_K_M",
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="lmstudio/qwen2.5-7b-instruct-mlx",
+        timeout_seconds=30,
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, timeout):
+        captured["url"] = url
+        captured["payload"] = json
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"choices": [{"message": {"content": "  hello world  "}}]},
+        )
+
+    monkeypatch.setattr("api.llm.httpx.post", fake_post)
+
+    result = client.generate_answer(question="hi", context="ctx")
+
+    assert result.answer == "hello world"
+    assert result.model == "lmstudio/qwen2.5-7b-instruct-mlx"
+    assert result.used_fallback is False
+    assert captured["url"] == "http://127.0.0.1:1234/v1/chat/completions"
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "lmstudio/qwen2.5-7b-instruct-mlx"
+    assert payload["temperature"] == 0
+
+
+def test_generate_answer_raises_llm_client_error_on_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="lmstudio/qwen2.5-7b-instruct-mlx",
         timeout_seconds=30,
     )
 
     def fake_post(*args, **kwargs):
-        request = httpx.Request("POST", "http://ollama:11434/v1/chat/completions")
+        request = httpx.Request("POST", "http://127.0.0.1:1234/v1/chat/completions")
         response = httpx.Response(500, request=request, text="provider exploded")
         raise httpx.HTTPStatusError(
             "provider exploded", request=request, response=response
@@ -26,55 +60,38 @@ def test_generate_answer_raises_last_provider_error_when_requested_model_fails(
     monkeypatch.setattr("api.llm.httpx.post", fake_post)
 
     with pytest.raises(LLMClientError, match="provider exploded"):
-        client.generate_answer(
-            question="hello",
-            context="world",
-            model="qwen2.5:3b-instruct-q4_K_M",
-        )
+        client.generate_answer(question="hello", context="world")
 
 
-def test_generate_answer_raises_fallback_error_when_all_candidates_fail(
+def test_generate_answer_raises_when_payload_missing_choices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = OllamaChatClient(
-        base_url="http://ollama:11434/v1",
-        default_model="qwen3.5:4b",
-        fallback_model="qwen2.5:3b-instruct-q4_K_M",
-        timeout_seconds=30,
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="lmstudio/qwen2.5-7b-instruct-mlx",
     )
 
-    calls: list[str] = []
-
     def fake_post(url, *, json, timeout):
-        model = json["model"]
-        calls.append(model)
         request = httpx.Request("POST", url)
-        response = httpx.Response(500, request=request, text=f"{model} failed")
-        raise httpx.HTTPStatusError(
-            f"{model} failed", request=request, response=response
-        )
+        return httpx.Response(200, request=request, json={"choices": []})
 
     monkeypatch.setattr("api.llm.httpx.post", fake_post)
 
-    with pytest.raises(LLMClientError, match="qwen2.5:3b-instruct-q4_K_M failed"):
+    with pytest.raises(LLMClientError, match="missing choices"):
         client.generate_answer(question="hello", context="world")
 
-    assert calls == ["qwen3.5:4b", "qwen2.5:3b-instruct-q4_K_M"]
 
-
-def test_generate_answer_uses_read_timeout_budget_for_slow_local_models(
+def test_generate_answer_uses_split_timeout_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = OllamaChatClient(
-        base_url="http://ollama:11434/v1",
-        default_model="qwen3.5:4b",
-        fallback_model="qwen2.5:3b-instruct-q4_K_M",
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="lmstudio/qwen2.5-7b-instruct-mlx",
         timeout_seconds=600,
     )
     observed: dict[str, object] = {}
 
     def fake_post(url, *, json, timeout):
-        observed["payload"] = json
         observed["timeout"] = timeout
         request = httpx.Request("POST", url)
         return httpx.Response(
@@ -88,7 +105,6 @@ def test_generate_answer_uses_read_timeout_budget_for_slow_local_models(
     result = client.generate_answer(question="hello", context="world")
 
     assert result.answer == "ok"
-    assert observed["payload"]["reasoning"] == {"effort": "none"}
     timeout = observed["timeout"]
     assert isinstance(timeout, httpx.Timeout)
     assert timeout.connect == 5.0

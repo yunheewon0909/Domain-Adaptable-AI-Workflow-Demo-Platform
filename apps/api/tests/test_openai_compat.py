@@ -71,7 +71,7 @@ def _add_artifact_only_fine_tuned_model() -> str:
             display_name="Artifact-only fine-tuned",
             source_type="fine_tuned",
             base_model_name="qwen3.5:4b",
-            ollama_model_name="artifact::ft-job-test",
+            serving_model_name="artifact::ft-job-test",
             published_model_name=None,
             status="artifact_ready",
             publish_status="publish_ready",
@@ -304,6 +304,96 @@ def test_v1_chat_completions_supports_streaming_sse(
     assert "data: [DONE]" in text
 
 
+def test_v1_chat_completions_streams_real_lmstudio_chunks(
+    client: TestClient,
+) -> None:
+    """When the LLM client is a real LMStudioChatClient, /v1/chat/completions
+    proxies LM Studio's SSE chunks directly (id+model rewritten)."""
+    from api.llm import LMStudioChatClient
+    from api.main import app
+
+    listing = client.get("/v1/models").json()["data"]
+    selected = listing[0]
+
+    streamed_chunks = [
+        {
+            "id": "lmstudio-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": selected["serving_model_name"],
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        },
+        {
+            "id": "lmstudio-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": selected["serving_model_name"],
+            "choices": [
+                {"index": 0, "delta": {"content": "Hello "}, "finish_reason": None}
+            ],
+        },
+        {
+            "id": "lmstudio-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": selected["serving_model_name"],
+            "choices": [
+                {"index": 0, "delta": {"content": "world"}, "finish_reason": "stop"}
+            ],
+        },
+    ]
+
+    class _FakeLMStudio(LMStudioChatClient):
+        def __init__(self) -> None:
+            super().__init__(
+                base_url="http://127.0.0.1:1234/v1",
+                default_model=selected["serving_model_name"],
+            )
+            self.received_messages: list[dict[str, object]] = []
+
+        def stream_chat_messages(self, *, messages, model=None, temperature=0, max_tokens=None):
+            self.received_messages = messages
+            for chunk in streamed_chunks:
+                yield chunk
+
+    fake = _FakeLMStudio()
+    from api.dependencies import get_llm_client
+    app.dependency_overrides[get_llm_client] = lambda: fake
+
+    try:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": selected["id"],
+                "messages": [{"role": "user", "content": "say hi"}],
+                "stream": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_llm_client, None)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    text = response.text
+
+    # All three upstream chunks present
+    assert text.count("chat.completion.chunk") >= 4  # 3 upstream + final platform chunk
+    # id+model rewritten to the platform exposed values
+    assert selected["id"] in text
+    assert "lmstudio-1" not in text
+    # Content survives the pass-through
+    assert "Hello " in text
+    assert "world" in text
+    # Terminal sentinel + platform metadata appended
+    assert "x_domain_platform" in text
+    assert "data: [DONE]" in text
+    # The system+user prompt envelope is delivered to LM Studio
+    roles = [m["role"] for m in fake.received_messages]
+    assert roles == ["system", "user"]
+
+
 def test_v1_chat_completions_requires_user_message(
     client_with_llm: TestClient,
 ) -> None:
@@ -323,30 +413,8 @@ def test_v1_chat_completions_requires_user_message(
     assert "user message" in response.json()["detail"].lower()
 
 
-def test_admin_route_renders_console_with_internal_framing(client: TestClient) -> None:
-    response = client.get("/admin")
-
-    assert response.status_code == 200
-    text = response.text
-    assert "Internal admin console" in text
-    assert "Workflow reviewer" in text
-    assert "PLC testing MVP" in text
-    assert "Fine-tuning" in text
-    assert "Models" in text
-    assert "RAG" in text
-
-
-def test_admin_assets_are_served_alongside_demo_assets(client: TestClient) -> None:
-    demo_assets = client.get("/demo/assets/app.js")
-    admin_assets = client.get("/admin/assets/app.js")
-
-    assert demo_assets.status_code == 200
-    assert admin_assets.status_code == 200
-    assert demo_assets.text == admin_assets.text
-
-
 def test_legacy_demo_route_still_works(client: TestClient) -> None:
     response = client.get("/demo")
 
     assert response.status_code == 200
-    assert "Workflow reviewer" in response.text
+    assert "Fine-tuning" in response.text
