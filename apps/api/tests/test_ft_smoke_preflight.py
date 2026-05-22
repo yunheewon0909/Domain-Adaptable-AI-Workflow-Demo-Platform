@@ -4,8 +4,8 @@ from pathlib import Path
 
 from api.services.fine_tuning.preflight import (
     CheckResult,
-    ComposeStatus,
     DeviceStatus,
+    LMStudioStatus,
     PackageStatus,
     PreflightConfig,
     exit_code_for_results,
@@ -18,63 +18,70 @@ def _config(
     tmp_path: Path,
     *,
     api_base_url: str = "http://127.0.0.1:8000",
-    worker_runtime: str = "host",
-    current_runtime: str = "host",
-    training_device: str = "auto",
-    training_allow_cpu: bool = False,
-    trainer_model_map_json: str = '{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}',
-    trainer_backend: str = "local_peft",
-    default_training_method: str = "sft_lora",
+    trainer_model_map_json: str = '{"qwen3.5:4b":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"}',
+    trainer_backend: str = "mlx_qlora",
+    default_training_method: str = "sft_qlora",
+    lmstudio_chat_model: str = "lmstudio-chat",
+    lmstudio_embed_model: str = "lmstudio-embed",
 ) -> PreflightConfig:
     return PreflightConfig(
         api_base_url=api_base_url,
-        worker_runtime=worker_runtime,
-        current_runtime=current_runtime,
-        training_device=training_device,
-        training_allow_cpu=training_allow_cpu,
-        artifact_dir=tmp_path / "artifacts",
+        artifact_dir=tmp_path,
         trainer_backend=trainer_backend,
         default_training_method=default_training_method,
         trainer_model_map_json=trainer_model_map_json,
         project_root=tmp_path,
+        lmstudio_base_url="http://127.0.0.1:1234/v1",
+        lmstudio_chat_model=lmstudio_chat_model,
+        lmstudio_embed_model=lmstudio_embed_model,
     )
 
 
-def _package_statuses(*, missing: tuple[str, ...] = ()) -> list[PackageStatus]:
+def _cli_statuses(*, missing: tuple[str, ...] = ()) -> list[PackageStatus]:
     return [
         PackageStatus(
             name=name,
             available=name not in missing,
-            detail="missing" if name in missing else "import ok",
+            detail="missing" if name in missing else f"/opt/homebrew/bin/{name} --help ok",
         )
-        for name in ("torch", "transformers", "peft", "datasets", "accelerate")
+        for name in ("mlx_lm.lora", "mlx_lm.fuse")
     ]
 
 
 def _device_status(
     *,
-    torch_available: bool = True,
-    cuda_available: bool = False,
-    mps_available: bool = False,
-    detail: str = "torch ok",
+    mlx_available: bool = True,
+    metal_available: bool = True,
+    detail: str = "python3.14: metal=true",
 ) -> DeviceStatus:
     return DeviceStatus(
-        torch_available=torch_available,
-        cuda_available=cuda_available,
-        mps_available=mps_available,
+        mlx_available=mlx_available,
+        metal_available=metal_available,
         detail=detail,
     )
 
 
-def _compose_status(*, running_services: tuple[str, ...] = ()) -> ComposeStatus:
-    return ComposeStatus(
-        available=True,
-        running_services=running_services,
-        detail=(
-            f"running services: {', '.join(running_services)}"
-            if running_services
-            else "no running compose services were reported"
-        ),
+def _result(results: list[CheckResult], summary: str) -> CheckResult:
+    for item in results:
+        if item.summary == summary:
+            return item
+    raise AssertionError(f"No CheckResult with summary={summary!r} in {results!r}")
+
+
+def _lmstudio_status(
+    *,
+    reachable: bool = True,
+    loaded: tuple[str, ...] = ("lmstudio-chat", "lmstudio-embed"),
+    chat_loaded: bool = True,
+    embed_loaded: bool = True,
+    detail: str = "2 model(s) loaded: lmstudio-chat, lmstudio-embed",
+) -> LMStudioStatus:
+    return LMStudioStatus(
+        reachable=reachable,
+        loaded_models=loaded,
+        chat_model_loaded=chat_loaded,
+        embed_model_loaded=embed_loaded,
+        detail=detail,
     )
 
 
@@ -83,20 +90,19 @@ def _run_preflight(
     *,
     api_ok: bool = True,
     api_detail: str = '{"status":"ok"}',
-    missing_dependencies: tuple[str, ...] = (),
+    missing_tools: tuple[str, ...] = (),
     device_status: DeviceStatus | None = None,
-    compose_status: ComposeStatus | None = None,
     artifact_ok: bool = True,
     artifact_detail: str | None = None,
+    lmstudio_status: LMStudioStatus | None = None,
 ) -> list[CheckResult]:
     device_status = device_status or _device_status()
-    compose_status = compose_status or _compose_status()
+    lmstudio_status = lmstudio_status or _lmstudio_status()
     return run_preflight(
         config,
         api_health_checker=lambda _: (api_ok, api_detail),
-        dependency_inspector=lambda: _package_statuses(missing=missing_dependencies),
+        dependency_inspector=lambda: _cli_statuses(missing=missing_tools),
         device_inspector=lambda: device_status,
-        compose_inspector=lambda _: compose_status,
         artifact_dir_checker=lambda _: (
             artifact_ok,
             artifact_detail
@@ -106,11 +112,8 @@ def _run_preflight(
                 else "artifact directory is not writable"
             ),
         ),
+        lmstudio_inspector=lambda *_args, **_kwargs: lmstudio_status,
     )
-
-
-def _result(results: list[CheckResult], summary: str) -> CheckResult:
-    return next(result for result in results if result.summary == summary)
 
 
 def test_preflight_fails_when_api_health_check_fails(tmp_path: Path) -> None:
@@ -119,86 +122,54 @@ def test_preflight_fails_when_api_health_check_fails(tmp_path: Path) -> None:
     results = _run_preflight(
         config,
         api_ok=False,
-        api_detail="connection refused",
+        api_detail="Connection refused",
     )
 
-    api_result = _result(results, "API health")
-    assert api_result.level == "fail"
-    assert "connection refused" in api_result.detail
+    health_result = _result(results, "API health")
+    assert health_result.level == "fail"
+    assert "Connection refused" in health_result.detail
     assert exit_code_for_results(results) == 1
 
 
-def test_preflight_fails_when_required_dependencies_are_missing(tmp_path: Path) -> None:
-    config = _config(tmp_path, training_allow_cpu=True)
+def test_preflight_fails_when_mlx_lm_cli_is_missing(tmp_path: Path) -> None:
+    config = _config(tmp_path)
 
-    results = _run_preflight(config, missing_dependencies=("torch",))
+    results = _run_preflight(config, missing_tools=("mlx_lm.lora",))
 
-    dependency_result = _result(results, "Python dependencies")
-    assert dependency_result.level == "fail"
-    assert "torch" in dependency_result.detail
+    cli_result = _result(results, "MLX CLI tools")
+    assert cli_result.level == "fail"
+    assert "mlx_lm.lora" in cli_result.detail
+    assert "brew install mlx mlx-lm" in cli_result.detail
 
 
-def test_preflight_fails_for_docker_mps_runtime(tmp_path: Path) -> None:
-    config = _config(
-        tmp_path,
-        worker_runtime="docker",
-        current_runtime="host",
-        training_device="mps",
-    )
+def test_preflight_fails_when_mlx_import_fails(tmp_path: Path) -> None:
+    config = _config(tmp_path)
 
     results = _run_preflight(
         config,
-        device_status=_device_status(mps_available=True),
-        compose_status=_compose_status(running_services=("postgres", "api", "worker")),
+        device_status=_device_status(
+            mlx_available=False,
+            metal_available=False,
+            detail="No module named mlx",
+        ),
     )
 
-    topology_result = _result(results, "MPS worker topology")
-    assert topology_result.level == "fail"
-    assert (
-        "Docker Linux workers should not be treated as MPS-capable"
-        in topology_result.detail
-    )
-    assert _result(results, "Runtime mismatch").level == "warn"
+    mlx_result = _result(results, "MLX Metal runtime")
+    assert mlx_result.level == "fail"
+    assert "No module named mlx" in mlx_result.detail
 
 
-def test_preflight_fails_when_host_mps_is_unavailable(tmp_path: Path) -> None:
-    config = _config(tmp_path, training_device="mps")
+def test_preflight_fails_when_metal_is_unavailable(tmp_path: Path) -> None:
+    config = _config(tmp_path)
 
     results = _run_preflight(
         config,
-        device_status=_device_status(mps_available=False),
+        device_status=_device_status(metal_available=False, detail="metal=false"),
     )
 
-    mps_result = _result(results, "MPS availability")
-    assert mps_result.level == "fail"
-    assert "torch.backends.mps.is_available() is false" in mps_result.detail
-
-
-def test_preflight_fails_when_cpu_runtime_is_not_explicitly_enabled(
-    tmp_path: Path,
-) -> None:
-    config = _config(tmp_path, training_device="cpu", training_allow_cpu=False)
-
-    results = _run_preflight(config)
-
-    cpu_result = _result(results, "CPU fallback policy")
-    assert cpu_result.level == "fail"
-    assert "TRAINING_DEVICE=cpu was requested" in cpu_result.detail
-
-
-def test_preflight_fails_auto_mode_without_accelerator_or_cpu_opt_in(
-    tmp_path: Path,
-) -> None:
-    config = _config(tmp_path, training_device="auto", training_allow_cpu=False)
-
-    results = _run_preflight(
-        config,
-        device_status=_device_status(cuda_available=False, mps_available=False),
-    )
-
-    auto_result = _result(results, "Auto device resolution")
-    assert auto_result.level == "fail"
-    assert "TRAINING_ALLOW_CPU=false" in auto_result.detail
+    metal_result = _result(results, "MLX Metal runtime")
+    assert metal_result.level == "fail"
+    assert "Metal is unavailable" in metal_result.detail
 
 
 def test_preflight_fails_when_artifact_directory_is_not_writable(
@@ -214,33 +185,30 @@ def test_preflight_fails_when_artifact_directory_is_not_writable(
 
     artifact_result = _result(results, "Artifact directory")
     assert artifact_result.level == "fail"
-    assert artifact_result.detail == "permission denied"
+    assert "permission denied" in artifact_result.detail
 
 
 def test_preflight_warns_when_trainer_model_map_is_empty(tmp_path: Path) -> None:
     config = _config(
         tmp_path,
         trainer_model_map_json="{}",
-        training_allow_cpu=True,
     )
 
     results = _run_preflight(config)
 
     model_map_result = _result(results, "Trainer model map")
     assert model_map_result.level == "warn"
-    assert "supplied explicitly in the enqueue payload" in model_map_result.detail
+    assert "trainer_model_name explicitly" in model_map_result.detail
 
 
-def test_preflight_accepts_host_mps_runtime(tmp_path: Path) -> None:
-    config = _config(tmp_path, training_device="mps")
+def test_preflight_accepts_mac_mlx_runtime(tmp_path: Path) -> None:
+    config = _config(tmp_path)
 
-    results = _run_preflight(
-        config,
-        device_status=_device_status(mps_available=True),
-    )
+    results = _run_preflight(config)
 
     assert exit_code_for_results(results) == 0
-    assert _result(results, "MPS availability").level == "ok"
+    assert _result(results, "MLX CLI tools").level == "ok"
+    assert _result(results, "MLX Metal runtime").level == "ok"
     assert _result(results, "Artifact directory").level == "ok"
     assert not any(result.level == "fail" for result in results)
 
@@ -249,36 +217,21 @@ def test_preflight_output_uses_tagged_lines() -> None:
     formatted = format_results(
         [
             CheckResult(level="ok", summary="API health", detail="ready"),
-            CheckResult(level="warn", summary="Worker/container status", detail="host"),
+            CheckResult(level="warn", summary="Trainer model map", detail="empty"),
             CheckResult(
-                level="fail", summary="Python dependencies", detail="missing torch"
+                level="fail", summary="MLX CLI tools", detail="missing mlx_lm.lora"
             ),
         ]
     )
 
     assert "[ok] API health: ready" in formatted
-    assert "[warn] Worker/container status: host" in formatted
-    assert "[fail] Python dependencies: missing torch" in formatted
-
-
-def test_docker_demo_defaults_are_documented_in_compose_and_env_example() -> None:
-    """compose.yml is now Mac-native: postgres only."""
-    project_root = Path(__file__).resolve().parents[3]
-    compose_text = (project_root / "compose.yml").read_text(encoding="utf-8")
-
-    # postgres remains
-    assert "postgres:" in compose_text
-    # Docker API/worker/ollama services removed
-    assert "api:" not in compose_text
-    assert "worker:" not in compose_text
-    assert "ollama:" not in compose_text
-    assert "rag_ingest:" not in compose_text
+    assert "[warn] Trainer model map: empty" in formatted
+    assert "[fail] MLX CLI tools: missing mlx_lm.lora" in formatted
 
 
 def test_preflight_fails_for_unsupported_backend(tmp_path: Path) -> None:
     config = _config(
         tmp_path,
-        training_allow_cpu=True,
         trainer_backend="mystery_backend",
     )
 
@@ -286,13 +239,12 @@ def test_preflight_fails_for_unsupported_backend(tmp_path: Path) -> None:
 
     backend_result = _result(results, "Trainer backend")
     assert backend_result.level == "fail"
-    assert "local_peft" in backend_result.detail
+    assert "mlx_qlora" in backend_result.detail
 
 
 def test_preflight_fails_for_unsupported_training_method(tmp_path: Path) -> None:
     config = _config(
         tmp_path,
-        training_allow_cpu=True,
         default_training_method="full_finetune",
     )
 
@@ -300,4 +252,4 @@ def test_preflight_fails_for_unsupported_training_method(tmp_path: Path) -> None
 
     method_result = _result(results, "Training method")
     assert method_result.level == "fail"
-    assert "sft_lora" in method_result.detail
+    assert "sft_qlora" in method_result.detail

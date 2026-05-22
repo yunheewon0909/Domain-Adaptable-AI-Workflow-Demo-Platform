@@ -9,7 +9,13 @@ from api.services.fine_tuning.dataset_formatters import DatasetExportResult
 from api.services.fine_tuning.trainer import TrainingArtifacts
 
 
-ADAPTER_WEIGHT_FILENAMES = ("adapter_model.safetensors", "adapter_model.bin")
+ADAPTER_WEIGHT_FILENAMES = (
+    "adapters.safetensors",
+    "adapters.npz",
+    # Legacy names are accepted so older artifacts remain inspectable.
+    "adapter_model.safetensors",
+    "adapter_model.bin",
+)
 
 
 def _path_metadata(path: Path) -> dict[str, Any]:
@@ -84,20 +90,27 @@ def validate_training_artifacts(
         )
     if merged_model_dir is None:
         warnings.append(
-            "No merged serving model was exported. The local output is a PEFT adapter artifact, not an Ollama model."
+            "No merged serving model was exported. The local output is an adapter artifact, not a serving model."
         )
     if smoke_fallback_used:
         warnings.extend(
             [
                 "Smoke fallback trainer was used.",
                 "This validates dataset/export/artifact/registry flow, not model quality.",
-                "Use host MPS/local_peft path for real trainer validation.",
+                "Use the Mac-native MLX QLoRA path for real trainer validation.",
             ]
         )
 
+    if smoke_fallback_used or training_artifacts.trainer_backend == "deterministic_smoke":
+        artifact_format = "deterministic_smoke_adapter"
+    elif training_artifacts.trainer_backend == "mlx_qlora":
+        artifact_format = "mlx_lora_adapter"
+    else:
+        artifact_format = "adapter"
+
     return {
         "artifact_valid": not missing,
-        "artifact_format": "peft_adapter",
+        "artifact_format": artifact_format,
         "base_model_name": base_model_name,
         "trainer_model_name": training_artifacts.trainer_model_name,
         "trainer_backend": training_artifacts.trainer_backend,
@@ -129,7 +142,7 @@ def validate_publish_artifacts(
 
     warnings = list(training_validation.get("warnings") or [])
     warnings.append(
-        "Publish-ready artifacts exist, but automatic Ollama import is not implemented by this repository."
+        "Publish-ready artifacts exist, but automatic LM Studio import is not implemented by this repository."
     )
     if not str(manifest_payload.get("candidate_model_name") or "").strip():
         warnings.append(
@@ -144,7 +157,7 @@ def validate_publish_artifacts(
         "checks": checks,
         "candidate_model_name": manifest_payload.get("candidate_model_name"),
         "runtime_ready": False,
-        "runtime_ready_reason": "A publish manifest/template exists, but no real Ollama serving model has been created yet.",
+        "runtime_ready_reason": "A publish manifest/template exists, but no real LM Studio serving model has been loaded yet.",
     }
 
 
@@ -160,21 +173,21 @@ def build_publish_manifest(
     manifest_dir.mkdir(parents=True, exist_ok=True)
     modelfile_path = manifest_dir / "Modelfile.template"
     model_name = None
-    if settings.ollama_model_namespace:
+    if settings.mlx_model_namespace:
         artifact_root_name = manifest_dir.parent.name
-        model_name = f"{settings.ollama_model_namespace}/{artifact_root_name}"
+        model_name = f"{settings.mlx_model_namespace}/{artifact_root_name}"
 
     modelfile_contents = "\n".join(
         [
             f"# Publish seam generated for {dataset_export.dataset_version_id}",
             f"# Serving base lineage: {base_model_name}",
             f"# Trainer base source: {trainer_model_name}",
-            "# This template is reviewer-facing only until an Ollama-compatible artifact is produced.",
+            "# This template is reviewer-facing only until an LM Studio serving artifact is loaded.",
             f"# Adapter directory: {training_artifacts.adapter_dir}",
             f"# Merged model directory: {training_artifacts.merged_model_dir or 'not exported'}",
             "",
             "# Example future directions:",
-            "# - convert a merged model to an Ollama-compatible format",
+            "# - load the merged MLX model into LM Studio",
             "# - replace this template with a validated Modelfile or import manifest",
         ]
     )
@@ -182,9 +195,9 @@ def build_publish_manifest(
 
     payload = {
         "status": "publish_ready",
-        "publish_target": "ollama",
-        "ollama_publish_enabled": settings.ollama_publish_enabled,
-        "automatic_ollama_import": False,
+        "publish_target": "lm_studio",
+        "lmstudio_publish_enabled": settings.adapter_publish_enabled,
+        "automatic_lmstudio_import": False,
         "candidate_model_name": model_name,
         "dataset_version_id": dataset_export.dataset_version_id,
         "base_model_name": base_model_name,
@@ -194,8 +207,8 @@ def build_publish_manifest(
         "modelfile_template_path": str(modelfile_path),
         "notes": [
             "Training completed and artifacts are ready for a future serving/import step.",
-            "This repo does not claim direct fine-tuning inside Ollama.",
-            "Automatic Ollama create/import is not implemented; manual conversion/import is still required before inference can use a fine-tuned serving model.",
+            "This repo does not claim direct fine-tuning inside LM Studio.",
+            "Automatic LM Studio load/import is not implemented; manual model loading is still required before inference can use a fine-tuned serving model.",
         ],
     }
     manifest_path = manifest_dir / "publish_manifest.json"

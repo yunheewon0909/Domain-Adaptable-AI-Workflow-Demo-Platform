@@ -46,7 +46,7 @@ def test_execute_training_job_runs_real_path(
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
             },
@@ -60,7 +60,7 @@ def test_execute_training_job_runs_real_path(
         logs_path = str(tmp_path / "training.log")
         metrics = {"train_loss": 0.01}
         evaluation = {"status": "not_run"}
-        trainer_backend = "local_peft"
+        trainer_backend = "mlx_qlora"
         trainer_model_name = "hf-internal/testing-tiny-random-gpt2"
         device = "cpu"
 
@@ -68,7 +68,7 @@ def test_execute_training_job_runs_real_path(
     Path(_Artifacts.adapter_dir, "adapter_config.json").write_text(
         "{}", encoding="utf-8"
     )
-    Path(_Artifacts.adapter_dir, "adapter_model.safetensors").write_text(
+    Path(_Artifacts.adapter_dir, "adapters.safetensors").write_text(
         "stub", encoding="utf-8"
     )
     Path(_Artifacts.report_path).write_text("{}", encoding="utf-8")
@@ -126,7 +126,7 @@ def test_execute_training_job_fails_when_adapter_artifacts_are_missing(
         json={
             "dataset_version_id": version_id,
             "base_model_name": "qwen3.5:4b",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2"
             },
@@ -140,7 +140,7 @@ def test_execute_training_job_fails_when_adapter_artifacts_are_missing(
         logs_path = str(tmp_path / "training.log")
         metrics = {"train_loss": 0.01}
         evaluation = {"status": "not_run"}
-        trainer_backend = "local_peft"
+        trainer_backend = "mlx_qlora"
         trainer_model_name = "hf-internal/testing-tiny-random-gpt2"
         device = "cpu"
 

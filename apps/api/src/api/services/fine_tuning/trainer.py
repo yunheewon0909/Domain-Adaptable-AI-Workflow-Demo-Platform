@@ -9,8 +9,8 @@ from api.config import Settings
 from api.services.fine_tuning.dataset_formatters import DatasetExportResult
 
 
-SUPPORTED_REAL_TRAINING_METHODS = {"sft_lora", "sft_qlora"}
-SUPPORTED_TRAINER_BACKENDS = {"local_peft", "deterministic_smoke", "mlx_qlora"}
+SUPPORTED_REAL_TRAINING_METHODS = {"sft_qlora"}
+SUPPORTED_TRAINER_BACKENDS = {"deterministic_smoke", "mlx_qlora"}
 DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME = "deterministic-smoke-trainer"
 HF_MODEL_RESOLUTION_ERROR_MARKERS = (
     "huggingface.co",
@@ -111,12 +111,7 @@ def build_training_config(
         raise RuntimeError(
             f"unsupported real training method: {normalized_method}. Supported methods: {sorted(SUPPORTED_REAL_TRAINING_METHODS)}"
         )
-    # Determine backend: MLX for sft_qlora, local_peft for sft_lora, or explicit
-    if normalized_method == "sft_qlora":
-        inferred_backend = "mlx_qlora"
-    else:
-        inferred_backend = settings.ft_trainer_backend.strip() or "local_peft"
-    trainer_backend = inferred_backend
+    trainer_backend = settings.ft_trainer_backend.strip() or "mlx_qlora"
     if trainer_backend not in SUPPORTED_TRAINER_BACKENDS:
         raise RuntimeError(
             f"unsupported trainer backend: {trainer_backend}. Supported backends: {sorted(SUPPORTED_TRAINER_BACKENDS)}"
@@ -163,57 +158,6 @@ def build_training_config(
     )
 
 
-# ---- Device detection (kept for local_peft compatibility) -------------
-
-
-def _detect_device(settings: Settings) -> str:
-    try:
-        import torch
-    except Exception as exc:
-        raise RuntimeError(
-            "torch is required for local_peft (non-MLX) training."
-        ) from exc
-
-    requested = settings.training_device
-    if requested == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("TRAINING_DEVICE=cuda but CUDA is not available")
-        return "cuda"
-    if requested == "mps":
-        if not torch.backends.mps.is_available():
-            raise RuntimeError("TRAINING_DEVICE=mps but MPS is not available")
-        return "mps"
-    if requested == "cpu":
-        if not settings.training_allow_cpu:
-            raise RuntimeError(
-                "CPU training is disabled by default. Set TRAINING_ALLOW_CPU=true only for tiny smoke-test models."
-            )
-        return "cpu"
-
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    if settings.training_allow_cpu:
-        return "cpu"
-    raise RuntimeError(
-        "No GPU accelerator is available and CPU training is disabled. Set TRAINING_DEVICE explicitly or enable TRAINING_ALLOW_CPU for tiny local smoke tests."
-    )
-
-
-def _require_training_dependencies() -> None:
-    missing: list[str] = []
-    for package_name in ["torch", "datasets", "transformers", "peft", "accelerate"]:
-        try:
-            __import__(package_name)
-        except Exception:
-            missing.append(package_name)
-    if missing:
-        raise RuntimeError(
-            "real fine-tuning dependencies (torch/peft) are missing: "
-            + ", ".join(sorted(missing))
-        )
-
 
 def run_training_backend(
     export_result: DatasetExportResult,
@@ -237,15 +181,11 @@ def run_training_backend(
             output_dir=output_dir,
             lineage_backend="deterministic_smoke",
         )
-    if config.trainer_backend == "mlx_qlora":
-        return _run_mlx_qlora_training(
-            export_result, config=config, settings=settings, output_dir=output_dir
-        )
-    if config.trainer_backend != "local_peft":
+    if config.trainer_backend != "mlx_qlora":
         raise RuntimeError(f"unsupported trainer backend: {config.trainer_backend}")
+
     try:
-        _require_training_dependencies()
-        return _run_local_peft_training(
+        return _run_mlx_qlora_training(
             export_result, config=config, settings=settings, output_dir=output_dir
         )
     except Exception as exc:
@@ -265,7 +205,7 @@ def run_training_backend(
                 export_result,
                 config=config,
                 output_dir=output_dir,
-                lineage_backend="local_peft+smoke_fallback",
+                lineage_backend="mlx_qlora+smoke_fallback",
                 root_cause=str(exc),
             )
         except Exception as fallback_exc:
@@ -308,20 +248,14 @@ def _run_deterministic_smoke_training(
 
     adapter_config = {
         "base_model_name_or_path": config.base_model_name,
-        "peft_type": "LORA",
-        "task_type": "CAUSAL_LM",
-        "r": config.lora_r,
-        "lora_alpha": config.lora_alpha,
-        "lora_dropout": config.lora_dropout,
-        "bias": "none",
-        "target_modules": ["q_proj", "v_proj"],
-        "inference_mode": True,
+        "adapter_type": "deterministic_smoke",
+        "training_method": config.training_method,
         "smoke_fallback": True,
     }
     (adapter_dir / "adapter_config.json").write_text(
         json.dumps(adapter_config, indent=2), encoding="utf-8"
     )
-    (adapter_dir / "adapter_model.safetensors").write_bytes(
+    (adapter_dir / "adapters.safetensors").write_bytes(
         b"deterministic-smoke-adapter-placeholder\n"
     )
 
@@ -354,7 +288,7 @@ def _run_deterministic_smoke_training(
             "used": True,
             "message": "Smoke fallback trainer was used",
             "quality_note": "This validates dataset/export/artifact/registry flow, not model quality",
-            "runtime_note": "Use host MLX backend for real trainer validation",
+            "runtime_note": "Use the Mac-native MLX QLoRA path for real trainer validation",
             "root_cause": root_cause,
         },
     }
@@ -367,7 +301,7 @@ def _run_deterministic_smoke_training(
         "smoke_fallback_used=true",
         "Smoke fallback trainer was used",
         "This validates dataset/export/artifact/registry flow, not model quality",
-        "Use host MLX backend for real trainer validation",
+        "Use the Mac-native MLX QLoRA path for real trainer validation",
     ]
     if root_cause:
         log_lines.append(f"fallback_trigger={root_cause}")
@@ -389,6 +323,14 @@ def _run_deterministic_smoke_training(
 # ---- MLX QLoRA backend ------------------------------------------------
 
 
+def _tail_text(path: Path, *, max_bytes: int = 2000) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return ""
+    return data[-max_bytes:].decode("utf-8", errors="replace").strip()
+
+
 def _run_mlx_qlora_training(
     export_result: DatasetExportResult,
     *,
@@ -396,7 +338,11 @@ def _run_mlx_qlora_training(
     settings: Settings,
     output_dir: Path,
 ) -> TrainingArtifacts:
-    """Run MLX QLoRA training via subprocess (mlx_lm.lora + mlx_lm.fuse)."""
+    """Run MLX QLoRA training via subprocess (mlx_lm.lora + mlx_lm.fuse).
+
+    Subprocess stdout/stderr is streamed directly to logs_path so memory usage
+    is bounded for long runs.
+    """
     import shutil
     import subprocess
     import time
@@ -408,20 +354,23 @@ def _run_mlx_qlora_training(
     report_path = output_dir / "training_report.json"
 
     # Build MLX training data dir (train.jsonl + valid.jsonl from export)
+    if not export_result.train_file:
+        raise RuntimeError(
+            "MLX QLoRA training requires a non-empty train split in the dataset export."
+        )
+
     mlx_data_dir = output_dir / "mlx_data"
     mlx_data_dir.mkdir(parents=True, exist_ok=True)
-
-    if export_result.train_file:
-        (mlx_data_dir / "train.jsonl").write_bytes(
-            Path(export_result.train_file).read_bytes()
-        )
+    (mlx_data_dir / "train.jsonl").write_bytes(
+        Path(export_result.train_file).read_bytes()
+    )
     if export_result.val_file:
         (mlx_data_dir / "valid.jsonl").write_bytes(
             Path(export_result.val_file).read_bytes()
         )
 
-    logs: list[str] = [
-        f"trainer_backend=mlx_qlora",
+    header_lines = [
+        "trainer_backend=mlx_qlora",
         f"base_model={config.base_model_name}",
         f"trainer_model={config.trainer_model_name}",
         f"iters={config.mlx_iters}",
@@ -431,10 +380,11 @@ def _run_mlx_qlora_training(
         f"learning_rate={config.learning_rate}",
     ]
 
-    # Step 1: MLX LoRA training
     lora_exe = shutil.which("mlx_lm.lora")
     if not lora_exe:
-        raise RuntimeError("mlx_lm.lora CLI is required. Install with: brew install mlx-lm")
+        raise RuntimeError(
+            "mlx_lm.lora CLI is required. Install with: brew install mlx-lm"
+        )
     lora_cmd = [
         lora_exe,
         "--model", config.trainer_model_name,
@@ -451,43 +401,44 @@ def _run_mlx_qlora_training(
         "--seed", str(config.seed),
         "--max-seq-length", str(config.max_seq_length),
     ]
-    logs.append(f"lora_cmd={' '.join(str(a) for a in lora_cmd)}")
+    header_lines.append("lora_cmd=" + " ".join(str(a) for a in lora_cmd))
     print(f"[MLX QLoRA] Starting training: {' '.join(str(a) for a in lora_cmd)}")
 
+    # Stream lora subprocess output directly to logs_path (bounded memory).
     start = time.monotonic()
-    result = subprocess.run(lora_cmd, capture_output=True, text=True)
+    with logs_path.open("w", encoding="utf-8") as log_fh:
+        log_fh.write("\n".join(header_lines) + "\n")
+        log_fh.write("--- mlx_lm.lora stdout/stderr ---\n")
+        log_fh.flush()
+        result = subprocess.run(
+            lora_cmd, stdout=log_fh, stderr=subprocess.STDOUT
+        )
     elapsed = time.monotonic() - start
 
-    logs.append(f"training_elapsed_s={elapsed:.1f}")
-    logs.append(f"training_returncode={result.returncode}")
-    if result.stdout:
-        logs.append(f"lora_stdout={result.stdout.strip()[-1000:]}")
-    if result.stderr:
-        logs.append(f"lora_stderr={result.stderr.strip()[-1000:]}")
+    with logs_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write(f"\ntraining_elapsed_s={elapsed:.1f}\n")
+        log_fh.write(f"training_returncode={result.returncode}\n")
 
     if result.returncode != 0:
-        logs_path.write_text("\n".join(logs) + "\n", encoding="utf-8")
         raise RuntimeError(
             f"MLX QLoRA training failed (exit={result.returncode}): "
-            f"{result.stderr.strip()[-500:]}"
+            f"{_tail_text(logs_path, max_bytes=500)}"
         )
 
-    # Check for adapter output
     adapter_weights = adapter_dir / "adapters.safetensors"
     if not adapter_weights.exists():
         # mlx-lm 0.20+ may use npz format
         adapter_weights = adapter_dir / "adapters.npz"
     if not adapter_weights.exists():
-        logs_path.write_text("\n".join(logs) + "\n", encoding="utf-8")
         raise RuntimeError(
             f"MLX QLoRA training completed but adapter not found at {adapter_dir}/*"
         )
 
-    # Step 2: Fuse adapter into base model
-    logs.append(f"fusing model to {fused_dir}")
     fuse_exe = shutil.which("mlx_lm.fuse")
     if not fuse_exe:
-        raise RuntimeError("mlx_lm.fuse CLI is required. Install with: brew install mlx-lm")
+        raise RuntimeError(
+            "mlx_lm.fuse CLI is required. Install with: brew install mlx-lm"
+        )
     fuse_cmd = [
         fuse_exe,
         "--model", config.trainer_model_name,
@@ -495,20 +446,24 @@ def _run_mlx_qlora_training(
         "--save-path", str(fused_dir),
     ]
     print(f"[MLX QLoRA] Fusing model: {' '.join(fuse_cmd)}")
-    fuse_result = subprocess.run(fuse_cmd, capture_output=True, text=True)
+
+    with logs_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write(f"\nfusing model to {fused_dir}\n")
+        log_fh.write("--- mlx_lm.fuse stdout/stderr ---\n")
+        log_fh.flush()
+        fuse_result = subprocess.run(
+            fuse_cmd, stdout=log_fh, stderr=subprocess.STDOUT
+        )
+
     if fuse_result.returncode != 0:
-        logs.append(f"fuse_stderr={fuse_result.stderr.strip()[-500:]}")
-        logs_path.write_text("\n".join(logs) + "\n", encoding="utf-8")
         raise RuntimeError(
             f"MLX model fusion failed (exit={fuse_result.returncode}): "
-            f"{fuse_result.stderr.strip()[-500:]}"
+            f"{_tail_text(logs_path, max_bytes=500)}"
         )
-    logs.append("fusion succeeded")
 
-    # Write logs
-    logs_path.write_text("\n".join(logs) + "\n", encoding="utf-8")
+    with logs_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write("\nfusion succeeded\n")
 
-    # Build report
     metrics = {
         "train_runtime_s": round(elapsed, 1),
         "mlx_returncode": result.returncode,
@@ -537,181 +492,4 @@ def _run_mlx_qlora_training(
         trainer_backend="mlx_qlora",
         trainer_model_name=config.trainer_model_name,
         device="mlx",
-    )
-
-
-# ---- Local PEFT backend (kept for backward compat) --------------------
-
-
-def _run_local_peft_training(
-    export_result: DatasetExportResult,
-    *,
-    config: TrainingConfig,
-    settings: Settings,
-    output_dir: Path,
-) -> TrainingArtifacts:
-    import torch
-    from datasets import load_dataset
-    from peft import LoraConfig, TaskType, get_peft_model
-    from transformers import (
-        AutoModelForCausalLM,
-        AutoTokenizer,
-        DataCollatorForLanguageModeling,
-        Trainer,
-        TrainingArguments,
-        set_seed,
-    )
-
-    device = _detect_device(settings)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    adapter_dir = output_dir / "adapter"
-    logs_path = output_dir / "training.log"
-    report_path = output_dir / "training_report.json"
-    merged_model_dir = output_dir / "merged_model"
-
-    set_seed(config.seed)
-    logs: list[str] = [
-        f"trainer_backend={config.trainer_backend}",
-        f"trainer_model_name={config.trainer_model_name}",
-        f"device={device}",
-        f"training_method={config.training_method}",
-    ]
-
-    tokenizer = AutoTokenizer.from_pretrained(config.trainer_model_name)
-    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    torch_dtype = None
-    if device == "cuda" and torch.cuda.is_bf16_supported():
-        torch_dtype = torch.bfloat16
-
-    model = AutoModelForCausalLM.from_pretrained(
-        config.trainer_model_name,
-        torch_dtype=torch_dtype,
-    )
-    if tokenizer.pad_token_id is not None:
-        model.config.pad_token_id = tokenizer.pad_token_id
-
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=config.lora_r,
-        lora_alpha=config.lora_alpha,
-        lora_dropout=config.lora_dropout,
-    )
-    model = get_peft_model(model, lora_config)
-
-    data_files: dict[str, str] = {}
-    if export_result.train_file:
-        data_files["train"] = export_result.train_file
-    if export_result.val_file:
-        data_files["validation"] = export_result.val_file
-    dataset_dict = load_dataset("json", data_files=data_files)
-
-    def _tokenize(batch: dict[str, list[Any]]) -> dict[str, Any]:
-        texts = [str(item) for item in batch.get("text", [])]
-        encoded = tokenizer(
-            texts,
-            truncation=True,
-            max_length=config.max_seq_length,
-            padding=False,
-        )
-        encoded["labels"] = [list(item) for item in encoded["input_ids"]]
-        return encoded
-
-    tokenized_train = dataset_dict["train"].map(
-        _tokenize,
-        batched=True,
-        remove_columns=dataset_dict["train"].column_names,
-    )
-    tokenized_val = None
-    if "validation" in dataset_dict:
-        tokenized_val = dataset_dict["validation"].map(
-            _tokenize,
-            batched=True,
-            remove_columns=dataset_dict["validation"].column_names,
-        )
-
-    training_args = TrainingArguments(
-        output_dir=str(output_dir / "trainer_state"),
-        overwrite_output_dir=True,
-        num_train_epochs=config.epochs,
-        learning_rate=config.learning_rate,
-        per_device_train_batch_size=config.batch_size,
-        per_device_eval_batch_size=config.per_device_eval_batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        eval_strategy=(
-            config.eval_strategy
-            if tokenized_val is not None and config.eval_strategy != "no"
-            else "no"
-        ),
-        save_strategy="no",
-        logging_strategy="epoch",
-        report_to=[],
-        seed=config.seed,
-        max_steps=config.max_steps,
-        fp16=device == "cuda" and not torch.cuda.is_bf16_supported(),
-        bf16=device == "cuda" and torch.cuda.is_bf16_supported(),
-    )
-
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer, mlm=False
-    )
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_train,
-        eval_dataset=tokenized_val,
-        data_collator=data_collator,
-    )
-
-    train_result = trainer.train()
-    logs.append(f"train_runtime_s={round(train_result.metrics.get('train_runtime', 0), 1)}")
-    logs.append(f"train_loss={round(train_result.metrics.get('train_loss', 0), 4)}")
-    trainer.save_model(str(adapter_dir))
-    logs.append(f"adapter saved to {adapter_dir}")
-
-    if config.export_merged_model:
-        merged_model_dir.mkdir(parents=True, exist_ok=True)
-        model = model.merge_and_unload()
-        model.save_pretrained(str(merged_model_dir))
-        tokenizer.save_pretrained(str(merged_model_dir))
-        logs.append(f"merged model saved to {merged_model_dir}")
-    else:
-        merged_model_dir = None
-
-    if tokenized_val is not None and config.eval_strategy != "no":
-        eval_metrics = trainer.evaluate()
-        eval_dict = dict(eval_metrics)
-    else:
-        eval_dict = {"status": "skipped"}
-
-    logs_path.write_text("\n".join(logs) + "\n", encoding="utf-8")
-
-    report_payload = {
-        "config": {
-            **asdict(config),
-            "trainer_backend": config.trainer_backend,
-        },
-        "device": device,
-        "export": export_result.format_summary,
-        "metrics": dict(train_result.metrics),
-        "evaluation": eval_dict,
-        "artifacts": {
-            "adapter_dir": str(adapter_dir),
-            "merged_model_dir": str(merged_model_dir) if merged_model_dir else None,
-        },
-    }
-    report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
-
-    return TrainingArtifacts(
-        adapter_dir=str(adapter_dir),
-        report_path=str(report_path),
-        merged_model_dir=str(merged_model_dir) if merged_model_dir else None,
-        logs_path=str(logs_path),
-        metrics=dict(train_result.metrics),
-        evaluation=eval_dict,
-        trainer_backend=config.trainer_backend,
-        trainer_model_name=config.trainer_model_name,
-        device=device,
     )
