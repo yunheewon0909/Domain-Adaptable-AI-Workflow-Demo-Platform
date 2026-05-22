@@ -58,8 +58,6 @@ def test_platform_tools_exposes_expected_methods() -> None:
     assert valves.api_base_url == "http://api:8000"
     assert valves.request_timeout_seconds >= 1
     assert 1 <= valves.default_top_k <= 10
-    assert 1 <= valves.workflow_wait_timeout_seconds <= 600
-    assert 1 <= valves.workflow_poll_interval_seconds <= 30
 
     instance = tools_cls()
     for method_name in (
@@ -69,15 +67,11 @@ def test_platform_tools_exposes_expected_methods() -> None:
         "list_rag_documents",
         "get_rag_document",
         "delete_rag_document",
-        "list_workflows",
-        "list_workflow_sources",
         "list_selectable_models",
         "list_platform_models",
         "get_model_detail",
         "get_model_lineage",
         "run_platform_inference",
-        "enqueue_workflow_job",
-        "run_workflow_and_wait",
         "get_job_status",
         "summarize_job_result",
         "list_ft_datasets",
@@ -127,15 +121,11 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "def list_rag_documents" in body
     assert "def get_rag_document" in body
     assert "def delete_rag_document" in body
-    assert "def list_workflows" in body
-    assert "def list_workflow_sources" in body
     assert "def list_selectable_models" in body
     assert "def list_platform_models" in body
     assert "def get_model_detail" in body
     assert "def get_model_lineage" in body
     assert "def run_platform_inference" in body
-    assert "def enqueue_workflow_job" in body
-    assert "def run_workflow_and_wait" in body
     assert "def get_job_status" in body
     assert "def summarize_job_result" in body
     assert "def list_ft_datasets" in body
@@ -162,15 +152,11 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
         "list_rag_documents",
         "get_rag_document",
         "delete_rag_document",
-        "list_workflows",
-        "list_workflow_sources",
         "list_selectable_models",
         "list_platform_models",
         "get_model_detail",
         "get_model_lineage",
         "run_platform_inference",
-        "enqueue_workflow_job",
-        "run_workflow_and_wait",
         "get_job_status",
         "summarize_job_result",
         "list_ft_datasets",
@@ -224,16 +210,6 @@ def test_list_rag_collections_uses_real_endpoint(platform_tools_against_client) 
     decoded = json.loads(raw)
     assert decoded["ok"] is True
     assert isinstance(decoded["collections"], list)
-
-
-def test_list_workflows_uses_real_endpoint(platform_tools_against_client) -> None:
-    raw = platform_tools_against_client.list_workflows()
-    decoded = json.loads(raw)
-    assert decoded["ok"] is True
-    assert isinstance(decoded["workflows"], list)
-    assert decoded["workflows"], "default starter ships at least one workflow"
-    first = decoded["workflows"][0]
-    assert "key" in first and "title" in first
 
 
 def test_get_job_status_returns_error_envelope_for_missing_job(
@@ -316,142 +292,6 @@ def test_query_rag_collection_returns_compact_projection() -> None:
     assert len(retrieval["results"][0]["excerpt"]) == 500
     assert "metadata_json" not in retrieval["results"][0]
     assert "document_count" not in retrieval
-
-
-def test_list_workflows_returns_compact_projection() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned_workflows = [
-        {
-            "key": "briefing",
-            "title": "Briefing",
-            "description": "Summarize evidence",
-            "prompt_label": "Briefing prompt",
-            "output_fields": ["summary"],
-            "created_at": "2025-01-01T00:00:00Z",
-            "implementation_detail": "x" * 2000,
-        }
-    ]
-    tools._request = lambda method, path, *, json_body=None: (200, canned_workflows)  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_workflows())
-    assert decoded["ok"] is True
-    workflow = decoded["workflows"][0]
-    assert workflow["key"] == "briefing"
-    assert workflow["summary"] == "Summarize evidence"
-    assert workflow["output_fields"] == ["summary"]
-    assert workflow["recommended_prompts"] == [
-        "Summarize the latest ops findings",
-        "What are the key maintenance issues?",
-    ]
-    assert "created_at" not in workflow
-    assert "implementation_detail" not in workflow
-
-
-def test_enqueue_workflow_job_promotes_job_id_for_chat_followup() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned_job = {
-        "job_id": "job-42",
-        "status": "queued",
-        "workflow_key": "briefing",
-        "dataset_key": None,
-    }
-    tools._request = lambda method, path, *, json_body=None: (202, canned_job)  # type: ignore[attr-defined]
-
-    decoded = json.loads(
-        tools.enqueue_workflow_job(
-            "briefing",
-            "maintenance ingestion briefing",
-            rag_collection_id="rag-c1",
-            top_k=2,
-        )
-    )
-    assert decoded["ok"] is True
-    assert decoded["job_id"] == "job-42"
-    assert decoded["status"] == "queued"
-    assert decoded["source_type"] == "rag"
-    assert decoded["model_id"] is None
-    assert decoded["rag_collection_id"] == "rag-c1"
-    assert decoded["dataset_key"] is None
-    assert "job_id='job-42'" in decoded["next_step"]
-    assert "payload_json" not in decoded["job"]
-
-
-def test_run_workflow_and_wait_returns_completed_job_without_placeholder_polling() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools.valves.workflow_poll_interval_seconds = 1
-
-    calls = []
-    queued_job = {
-        "job_id": "job-42",
-        "status": "queued",
-        "workflow_key": "briefing",
-        "dataset_key": None,
-    }
-    completed_job = {
-        "id": "job-42",
-        "status": "succeeded",
-        "workflow_key": "briefing",
-        "dataset_key": None,
-        "payload_json": {"prompt": "x" * 1000},
-        "result_json": {"summary": "done"},
-        "attempts": 1,
-        "max_attempts": 1,
-    }
-
-    def _fake_request(method, path, *, json_body=None):
-        calls.append((method, path, json_body))
-        if method == "POST":
-            return 202, queued_job
-        return 200, completed_job
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(
-        tools.run_workflow_and_wait(
-            "briefing",
-            "maintenance ingestion briefing",
-            rag_collection_id="rag-c1",
-            top_k=2,
-            max_wait_seconds=2,
-        )
-    )
-    assert decoded["ok"] is True
-    assert decoded["job_id"] == "job-42"
-    assert decoded["status"] == "succeeded"
-    assert decoded["job"]["result_json"] == {"summary": "done"}
-    assert "payload_json" not in decoded["job"]
-    assert calls[0] == (
-        "POST",
-        "/workflows/briefing/jobs",
-        {"prompt": "maintenance ingestion briefing", "rag_collection_id": "rag-c1", "k": 2},
-    )
-    assert calls[1][0:2] == ("GET", "/jobs/job-42")
-
-
-def test_run_workflow_and_wait_times_out_with_real_job_id_for_later_polling() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools.valves.workflow_poll_interval_seconds = 1
-
-    queued_job = {
-        "job_id": "job-99",
-        "status": "running",
-        "workflow_key": "briefing",
-    }
-    tools._request = lambda method, path, *, json_body=None: (202 if method == "POST" else 200, queued_job)  # type: ignore[attr-defined]
-
-    decoded = json.loads(
-        tools.run_workflow_and_wait("briefing", "slow prompt", max_wait_seconds=1)
-    )
-    assert decoded["ok"] is True
-    assert decoded["job_id"] == "job-99"
-    assert decoded["status"] == "timeout"
-    assert "job_id='job-99'" in decoded["next_step"]
 
 
 def test_get_rag_collection_uses_real_endpoint(
@@ -626,7 +466,6 @@ def test_get_job_status_returns_compact_projection() -> None:
         "status": "succeeded",
         "workflow_key": "briefing",
         "dataset_key": "ops",
-        "plc_suite_id": None,
         "payload_json": {"prompt": "long", "evidence": ["x" * 2000]},
         "result_json": {"answer": "ok"},
         "attempts": 1,
@@ -647,62 +486,6 @@ def test_get_job_status_returns_compact_projection() -> None:
     assert "payload_json" not in job, (
         "payload_json is the request input; dropping it keeps polling responses small"
     )
-
-
-def test_list_workflows_omits_recommended_prompts_for_unknown_keys() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned_workflows = [
-        {
-            "key": "unknown_workflow",
-            "title": "Unknown",
-            "description": "A test workflow",
-            "prompt_label": "Test prompt",
-            "output_fields": ["result"],
-        }
-    ]
-    tools._request = lambda method, path, *, json_body=None: (200, canned_workflows)  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_workflows())
-    workflow = decoded["workflows"][0]
-    assert "recommended_prompts" not in workflow
-
-
-def test_list_workflow_sources_returns_combined_sources() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    def _fake_request(method, path, *, json_body=None):
-        if path == "/rag-collections":
-            return 200, [
-                {
-                    "id": "rag-c1",
-                    "name": "Ops",
-                    "description": "ops handbook",
-                    "embedding_model": "nomic-embed-text",
-                    "document_count": 1,
-                }
-            ]
-        if path == "/datasets":
-            return 200, [
-                {
-                    "dataset_key": "ops",
-                    "name": "Ops Dataset",
-                    "description": "legacy ops data",
-                }
-            ]
-        return 200, {}
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_workflow_sources())
-    assert decoded["ok"] is True
-    sources = decoded["sources"]
-    assert len(sources["rag_collections"]) == 1
-    assert sources["rag_collections"][0]["id"] == "rag-c1"
-    assert len(sources["datasets"]) == 1
-    assert sources["datasets"][0]["dataset_key"] == "ops"
 
 
 def test_list_selectable_models_returns_only_selectable() -> None:
@@ -976,33 +759,6 @@ def test_run_platform_inference_returns_error_envelope_on_failure() -> None:
     assert decoded["ok"] is False
     assert decoded["action"] == "run_platform_inference"
     assert decoded["http_status"] == 500
-
-
-def test_enqueue_workflow_job_returns_dataset_source_type() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned_job = {
-        "job_id": "job-43",
-        "status": "queued",
-        "workflow_key": "briefing",
-        "dataset_key": "ops",
-    }
-    tools._request = lambda method, path, *, json_body=None: (202, canned_job)  # type: ignore[attr-defined]
-
-    decoded = json.loads(
-        tools.enqueue_workflow_job(
-            "briefing",
-            "maintenance ingestion briefing",
-            dataset_key="ops",
-            model_id="model-1",
-        )
-    )
-    assert decoded["ok"] is True
-    assert decoded["source_type"] == "dataset"
-    assert decoded["model_id"] == "model-1"
-    assert decoded["dataset_key"] == "ops"
-    assert decoded["rag_collection_id"] is None
 
 
 def test_summarize_job_result_returns_summary_for_succeeded() -> None:

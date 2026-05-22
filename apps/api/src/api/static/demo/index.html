@@ -16,25 +16,9 @@
           <span class="hero-pill" aria-hidden="true">Local &middot; static UI &middot; vanilla JS</span>
         </div>
         <nav class="mode-rail" role="tablist" aria-label="Reviewer demo modes">
-          <button id="mode-workflow" type="button" class="mode-button mode-card active" data-mode="workflow" aria-selected="true">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">01</span>
-              <span class="mode-card-kind">review</span>
-            </span>
-            <span class="mode-card-title">Workflow reviewer</span>
-            <span class="mode-card-copy">Inspect legacy datasets, RAG sources, and runtime models in one shell.</span>
-          </button>
-          <button id="mode-plc" type="button" class="mode-button mode-card" data-mode="plc" aria-selected="false">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">02</span>
-              <span class="mode-card-kind">testing</span>
-            </span>
-            <span class="mode-card-title">PLC testing MVP</span>
-            <span class="mode-card-copy">Import suites, queue runs, and inspect testcase-level pass/fail detail.</span>
-          </button>
           <button id="mode-ft" type="button" class="mode-button mode-card" data-mode="ft" aria-selected="false">
             <span class="mode-card-meta">
-              <span class="mode-card-badge">03</span>
+              <span class="mode-card-badge">01</span>
               <span class="mode-card-kind">dataset</span>
             </span>
             <span class="mode-card-title">Fine-tuning</span>
@@ -42,7 +26,7 @@
           </button>
           <button id="mode-models" type="button" class="mode-button mode-card" data-mode="models" aria-selected="false">
             <span class="mode-card-meta">
-              <span class="mode-card-badge">04</span>
+              <span class="mode-card-badge">02</span>
               <span class="mode-card-kind">registry</span>
             </span>
             <span class="mode-card-title">Models</span>
@@ -50,7 +34,7 @@
           </button>
           <button id="mode-rag" type="button" class="mode-button mode-card" data-mode="rag" aria-selected="false">
             <span class="mode-card-meta">
-              <span class="mode-card-badge">05</span>
+              <span class="mode-card-badge">03</span>
               <span class="mode-card-kind">retrieval</span>
             </span>
             <span class="mode-card-title">RAG</span>
@@ -71,332 +55,6 @@
             <span class="hero-pill" aria-hidden="true">vanilla JS &middot; static</span>
           </div>
         </header>
-
-        <section id="workflow-mode" class="demo-mode">
-          <section class="mode-start" aria-label="Workflow reviewer quick start">
-            <div class="mode-start-head">
-              <div>
-                <span class="mode-start-eyebrow">Workflow reviewer</span>
-                <h3 class="mode-start-title">Run a workflow review</h3>
-                <p class="mode-start-copy">Pick a workflow source, choose a runtime-ready inference model, then review the run output.</p>
-              </div>
-              <span class="tag">source &middot; model &middot; review</span>
-            </div>
-            <div class="mode-start-actions">
-              <a class="secondary-button" href="#workflow-source-select">Choose source</a>
-              <a class="secondary-button" href="#workflow-model-select">Choose model</a>
-              <a class="secondary-button" href="#workflow-list">Pick workflow</a>
-              <a class="secondary-button" href="#run-button">Run workflow</a>
-            </div>
-          </section>
-        <section class="panel controls">
-          <div class="form-grid">
-            <div class="field">
-              <label for="workflow-source-select">Workflow source</label>
-              <select id="workflow-source-select"></select>
-            </div>
-
-            <div class="field">
-              <label for="workflow-model-select">Workflow inference model</label>
-              <select id="workflow-model-select"></select>
-            </div>
-          </div>
-
-          <div class="button-row">
-            <button id="workflow-refresh-button" type="button" class="secondary-button">Refresh sources &amp; models</button>
-          </div>
-
-          <div id="workflow-source-summary" class="callout empty">Choose a legacy dataset or RAG collection source for workflow review.</div>
-          <div id="workflow-model-summary" class="callout empty">Workflow model status will appear here. Only runtime-ready/selectable models can be chosen here.</div>
-
-          <div class="field">
-            <span class="label">Workflow</span>
-            <div id="workflow-list" class="workflow-list"></div>
-          </div>
-
-          <div class="field">
-            <label for="prompt-input">Prompt</label>
-            <textarea id="prompt-input" rows="5" placeholder="Describe the question, decision, or report you want to run."></textarea>
-          </div>
-
-          <button id="run-button" class="run-button">Run workflow</button>
-          <p id="run-hint" class="hint"></p>
-        </section>
-
-        <section class="grid">
-          <article class="panel">
-            <h2>Job status</h2>
-            <pre id="job-status" class="mono empty">No workflow run yet.</pre>
-          </article>
-
-          <article class="panel">
-            <h2>Result</h2>
-            <div id="result-panel" class="result-panel empty">Run a workflow to see structured output plus source and model metadata.</div>
-          </article>
-        </section>
-
-        <section class="panel evidence-panel">
-          <h2>Evidence</h2>
-          <div id="evidence-panel" class="evidence-list empty">Evidence and source/model context will appear here after a successful run.</div>
-        </section>
-      </section>
-
-      <section id="plc-mode" class="demo-mode" hidden>
-        <section class="mode-start" aria-label="PLC testing quick start">
-          <div class="mode-start-head">
-            <div>
-              <span class="mode-start-eyebrow">PLC testing MVP</span>
-              <h3 class="mode-start-title">Import a suite and inspect deterministic run evidence</h3>
-              <p class="mode-start-copy">Start from a CSV/XLSX suite, choose a target, and review testcase-level IO logs without calling an LLM.</p>
-            </div>
-            <span class="tag">import &middot; run &middot; IO logs</span>
-          </div>
-          <div class="mode-start-actions">
-            <a class="secondary-button" href="#plc-suite-file">Import suite</a>
-            <a class="secondary-button" href="#plc-target-select">Choose target</a>
-            <a class="secondary-button" href="#plc-run-button">Run selected cases</a>
-          </div>
-        </section>
-        <section class="grid plc-overview-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>PLC dashboard</h2>
-                <p class="section-copy">Imported suite count, queue depth, recent runs, and recurring failure hotspots.</p>
-              </div>
-              <button id="plc-summary-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="filter-toolbar plc-toolbar compact-toolbar">
-              <div class="field">
-                <label for="plc-dashboard-scope">Dashboard scope</label>
-                <select id="plc-dashboard-scope">
-                  <option value="selected">Selected suite only</option>
-                  <option value="all">All suites</option>
-                </select>
-              </div>
-            </div>
-            <p id="plc-summary-scope" class="muted-line">Dashboard refresh follows the selected suite scope.</p>
-            <div id="plc-summary-cards" class="stat-grid empty">PLC dashboard metrics will appear here.</div>
-            <div class="grid nested-grid plc-summary-grid">
-              <div class="detail-stack">
-                <h3 class="subsection-title">Recent runs</h3>
-                <div id="plc-recent-runs" class="stack-list empty">No PLC runs yet.</div>
-              </div>
-              <div class="detail-stack">
-                <h3 class="subsection-title">Failure hotspots</h3>
-                <div id="plc-failure-hotspots" class="stack-list empty">No failures captured yet.</div>
-              </div>
-              <div class="detail-stack">
-                <h3 class="subsection-title">Target status</h3>
-                <div id="plc-target-statuses" class="stack-list empty">Target status snapshots will appear here.</div>
-              </div>
-              <div class="detail-stack">
-                <h3 class="subsection-title">Instruction failure profile</h3>
-                <div id="plc-instruction-failure-stats" class="stack-list empty">Instruction failure trends will appear here.</div>
-              </div>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Import PLC suite</h2>
-                <p class="section-copy">Upload a CSV or XLSX suite file without client-side spreadsheet parsing.</p>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="field">
-                <label for="plc-suite-title">Suite title</label>
-                <input id="plc-suite-title" type="text" placeholder="Optional override for the imported suite title." />
-              </div>
-              <div class="field">
-                <label for="plc-suite-file">Suite file</label>
-                <input id="plc-suite-file" type="file" accept=".csv,.xlsx" />
-              </div>
-              <button id="plc-import-button" type="button" class="run-button">Import suite</button>
-              <p id="plc-import-hint" class="hint">Choose a CSV or XLSX file to import PLC testcases.</p>
-            </div>
-          </article>
-        </section>
-
-        <section class="grid plc-browser-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Imported suites</h2>
-                <p class="section-copy">Browse all available PLC suites before drilling into testcase summaries.</p>
-              </div>
-              <button id="plc-suites-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div id="plc-suite-list" class="stack-list empty">No PLC suites imported yet.</div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Testcase preview</h2>
-                <p class="section-copy">Inspect suite metadata, testcase-level inputs and expectations, and normalization previews.</p>
-              </div>
-              <button id="plc-normalization-refresh" type="button" class="secondary-button">Refresh preview</button>
-            </div>
-            <div class="filter-toolbar plc-toolbar">
-              <div class="field">
-                <label for="plc-testcase-filter">Filter testcases</label>
-                <input id="plc-testcase-filter" type="search" placeholder="Search case key, instruction, tag, or description." />
-              </div>
-              <div class="field">
-                <label for="plc-testcase-instruction-filter">Instruction</label>
-                <select id="plc-testcase-instruction-filter">
-                  <option value="">All instructions</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-testcase-input-type-filter">Input type</label>
-                <select id="plc-testcase-input-type-filter">
-                  <option value="">All input types</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-testcase-outcome-filter">Expected outcome</label>
-                <select id="plc-testcase-outcome-filter">
-                  <option value="">All expected outcomes</option>
-                  <option value="pass">Expected pass</option>
-                  <option value="fail">Expected fail</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-testcase-suggestion-filter">Suggestion status</label>
-                <select id="plc-testcase-suggestion-filter">
-                  <option value="">All suggestion states</option>
-                  <option value="pending">Pending review</option>
-                  <option value="accepted">Accepted</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="review-required">Review required</option>
-                  <option value="none">No saved suggestion</option>
-                </select>
-              </div>
-            </div>
-            <p id="plc-testcase-filter-summary" class="muted-line">Suite testcases will appear here.</p>
-            <div id="plc-suite-detail" class="detail-stack empty">Select a suite to inspect testcase summaries.</div>
-            <div id="plc-testcase-list" class="stack-list empty">Suite testcases will appear here.</div>
-            <div id="plc-testcase-detail" class="detail-stack empty">Select a testcase to inspect normalized inputs and expected outputs.</div>
-            <div class="section-heading minor-section-heading">
-              <div>
-                <h3 class="subsection-title">Suggestion review</h3>
-                <p class="section-copy">Persist normalization previews and review saved suggestions without leaving the shared demo shell.</p>
-              </div>
-              <div class="button-row">
-                <button id="plc-normalization-persist" type="button" class="secondary-button">Persist suggestion</button>
-                <button id="plc-suggestions-refresh" type="button" class="secondary-button">Refresh saved suggestions</button>
-              </div>
-            </div>
-            <div id="plc-normalization-panel" class="detail-stack empty">Normalization suggestions will appear here.</div>
-            <div id="plc-suggestion-list" class="stack-list empty">Persisted suggestions will appear here after you select a testcase.</div>
-            <div id="plc-suggestion-detail" class="detail-stack empty">Select a saved suggestion to inspect review state and payload detail.</div>
-          </article>
-        </section>
-
-        <section class="grid plc-run-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Run controls</h2>
-                <p class="section-copy">Queue a suite-level run or scope execution to the currently selected testcase. PLC stub execution does not call an LLM.</p>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="field">
-                <label for="plc-target-select">Target</label>
-                <select id="plc-target-select"></select>
-              </div>
-              <div id="plc-target-summary" class="callout empty">Available PLC targets will appear here.</div>
-              <label for="plc-run-selected-only" class="field-toggle">
-                <input id="plc-run-selected-only" type="checkbox" />
-                <span>Run only the selected testcase</span>
-              </label>
-              <button id="plc-run-button" type="button" class="run-button">Enqueue PLC run</button>
-              <p id="plc-run-hint" class="hint">Select a suite, optionally narrow the scope to one testcase, then enqueue the run.</p>
-              <p class="muted-line">The PLC stub path stays deterministic and rule-based. It does not call an LLM.</p>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>PLC runs</h2>
-                <p class="section-copy">Queued, running, and completed PLC jobs for the selected suite.</p>
-              </div>
-              <button id="plc-runs-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="filter-toolbar plc-toolbar">
-              <div class="field">
-                <label for="plc-run-filter">Filter runs</label>
-                <input id="plc-run-filter" type="search" placeholder="Search run id, suite, or target." />
-              </div>
-              <div class="field">
-                <label for="plc-run-target-filter">Target</label>
-                <select id="plc-run-target-filter">
-                  <option value="">All targets</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-run-status-filter">Run status</label>
-                <select id="plc-run-status-filter">
-                  <option value="">All run statuses</option>
-                  <option value="queued">Queued</option>
-                  <option value="running">Running</option>
-                  <option value="succeeded">Succeeded</option>
-                  <option value="failed">Failed</option>
-                </select>
-              </div>
-              <label for="plc-run-problems-only" class="field-toggle">
-                <input id="plc-run-problems-only" type="checkbox" />
-                <span>Problem runs only</span>
-              </label>
-            </div>
-            <p id="plc-run-filter-summary" class="muted-line">Queued and completed PLC runs will appear here.</p>
-            <div id="plc-run-list" class="stack-list empty">Queued and completed PLC runs will appear here.</div>
-          </article>
-        </section>
-
-        <section class="panel">
-          <div class="section-heading">
-            <div>
-              <h2>Run detail</h2>
-              <p class="section-copy">Inspect run-level pass/fail counts plus testcase-level expected vs actual behavior.</p>
-            </div>
-            <button id="plc-run-detail-refresh" type="button" class="secondary-button">Refresh selected run</button>
-          </div>
-          <div id="plc-run-lifecycle" class="run-lifecycle empty">Select a PLC run to inspect queued, running, succeeded, and failed lifecycle state.</div>
-          <div id="plc-run-summary" class="detail-stack empty">Select a PLC run to inspect pass/fail counts and testcase-level detail.</div>
-          <div class="filter-toolbar plc-toolbar">
-            <div class="field">
-              <label for="plc-run-item-filter">Filter run items</label>
-              <input id="plc-run-item-filter" type="search" placeholder="Search testcase id, case key, instruction, or failure reason." />
-            </div>
-            <div class="field">
-              <label for="plc-run-item-status-filter">Item status</label>
-              <select id="plc-run-item-status-filter">
-                <option value="">All item statuses</option>
-                <option value="queued">Queued</option>
-                <option value="running">Running</option>
-                <option value="passed">Passed</option>
-                <option value="failed">Failed</option>
-                <option value="error">Error</option>
-              </select>
-            </div>
-            <label for="plc-run-item-problems-only" class="field-toggle">
-              <input id="plc-run-item-problems-only" type="checkbox" />
-              <span>Failed or error only</span>
-            </label>
-          </div>
-          <p id="plc-run-item-filter-summary" class="muted-line">Run items will appear here after a PLC run starts.</p>
-          <div class="grid plc-item-grid">
-            <div id="plc-run-item-list" class="stack-list empty">Run items will appear here after a PLC run starts.</div>
-            <div id="plc-run-item-detail" class="detail-stack empty">Select a testcase result to inspect expected vs actual output, failure reason, raw I/O snippets, and executor logs.</div>
-          </div>
-        </section>
-      </section>
 
       <section id="ft-mode" class="demo-mode" hidden>
         <section class="mode-start" aria-label="Fine-tuning quick start">
@@ -575,14 +233,14 @@
               </div>
               <div class="field">
                 <label for="ft-training-method">Training method</label>
-                <input id="ft-training-method" type="text" value="sft_lora" />
+                <input id="ft-training-method" type="text" value="sft_qlora" />
               </div>
               <div class="field">
                 <label for="ft-training-hyperparams-json">Hyperparameters JSON</label>
                 <textarea id="ft-training-hyperparams-json" rows="4" placeholder='{"epochs":1}'>{}</textarea>
               </div>
               <button id="ft-enqueue-training-button" type="button" class="run-button">Enqueue training job</button>
-              <p id="ft-training-hint" class="hint">Select a locked dataset version, run preflight first for any new worker runtime, use a host worker for Apple Silicon MPS or <code>./scripts/ft_smoke_preflight.sh --worker-runtime docker</code> for Docker checks, then enqueue training. Smoke jobs validate adapter artifacts and do not publish an Ollama model.</p>
+              <p id="ft-training-hint" class="hint">Select a locked dataset version and run <code>./scripts/ft_smoke_preflight.sh</code> on the macOS host before enqueueing training. Smoke jobs validate adapter artifacts; they do not load an LM Studio serving model.</p>
             </div>
           </article>
 
@@ -605,7 +263,7 @@
           <div class="section-heading">
             <div>
               <h2>Smoke test guide</h2>
-                <p class="section-copy">Use the local helper script or the reviewer UI helpers to verify the SFT + LoRA artifact path. Run preflight first for the worker runtime you plan to use, then keep smoke outcomes in review-only artifact territory until a real serving model exists.</p>
+                <p class="section-copy">Use the local helper script or the reviewer UI helpers to verify the SFT + QLoRA artifact path. Run preflight first on the macOS host, then keep smoke outcomes in review-only artifact territory until a real serving model is loaded in LM Studio.</p>
             </div>
             <div class="button-row">
               <button id="ft-fill-smoke-preset-button" type="button" class="secondary-button">Fill smoke hyperparameter preset</button>
@@ -613,18 +271,16 @@
               <button id="ft-enqueue-smoke-training-button" type="button" class="secondary-button">Enqueue smoke training</button>
             </div>
           </div>
-          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Docker demo defaults are CPU-friendly for tiny smoke tests, while a host worker is still recommended for Apple Silicon MPS validation. If the smoke fallback trainer was used, that still only validates the dataset/export/artifact/registry pipeline and keeps the result review-only. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
+          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. The Mac-native MLX path validates the artifact pipeline against a tiny trainer model. If the smoke fallback trainer was used, that still only validates the dataset/export/artifact/registry pipeline and keeps the result review-only. Smoke training validates adapter artifact creation, not LM Studio serving readiness. Artifact-ready rows remain review-only.</p>
           <div class="smoke-guide-grid">
             <section class="callout warning">
               <p class="callout-title">Runtime preflight</p>
               <div class="smoke-guide-stack">
-                <p>Run preflight first. Docker demo defaults are CPU-friendly for tiny smoke tests.</p>
-                <p>Host worker recommended for Apple Silicon MPS validation.</p>
-                <p>Docker worker is not macOS MPS-capable.</p>
-                <p>Do not treat CPU smoke defaults as guidance for large-model training.</p>
+                <p>Run preflight on the macOS host before enqueueing.</p>
+                <p>Preflight validates brew <code>mlx-lm</code> CLI tools and Metal availability.</p>
+                <p>Smoke runs target a tiny trainer model. Do not treat them as guidance for large-model training.</p>
                 <div class="smoke-guide-command-list">
-                  <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime host</pre>
-                  <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime docker</pre>
+                  <pre class="mono">./scripts/ft_smoke_preflight.sh</pre>
                 </div>
               </div>
             </section>
@@ -637,18 +293,18 @@
               <p class="callout-title">Smoke fallback notes</p>
               <p>Smoke fallback trainer was used.</p>
               <p>This validates dataset/export/artifact/registry flow, not model quality.</p>
-              <p>Use host MPS/local_peft path for real trainer validation.</p>
+              <p>Use the Mac-native MLX QLoRA path for real trainer validation.</p>
             </section>
             <section class="callout">
               <p class="callout-title">Expected artifacts</p>
               <div class="badge-row">
-                <span class="tag">data/model_artifacts/&lt;job_id&gt;/trainer_output/adapter/</span>
+                <span class="tag">data/model_artifacts/&lt;job_id&gt;/trainer_output/adapters/</span>
                 <span class="tag">training_report.json</span>
                 <span class="tag">training.log</span>
                 <span class="tag">publish/publish_manifest.json</span>
                 <span class="tag">Modelfile.template</span>
               </div>
-              <p>Expect adapter, report, log, and publish-manifest files under <code>data/model_artifacts/&lt;job_id&gt;/</code> after a successful smoke run. Smoke training validates adapter artifact creation, not Ollama serving readiness.</p>
+              <p>Expect adapter, report, log, and publish-manifest files under <code>data/model_artifacts/&lt;job_id&gt;/</code> after a successful smoke run. Smoke training validates adapter artifact creation, not LM Studio serving readiness.</p>
             </section>
             <section class="callout warning">
               <p class="callout-title">Registry expectations</p>
@@ -827,7 +483,7 @@
             <div class="section-heading">
               <div>
                 <h2>Collection documents</h2>
-                <p class="section-copy">Upload documents here, review document metadata and previews, and delete collection-managed files without touching the legacy workflow rag.db index.</p>
+                <p class="section-copy">Upload documents here, review document metadata and previews, and delete collection-managed files.</p>
               </div>
               <button id="rag-documents-refresh" type="button" class="secondary-button">Refresh</button>
             </div>

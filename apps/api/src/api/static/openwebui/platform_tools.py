@@ -1,5 +1,5 @@
 """
-title: Domain Adaptable AI Platform - RAG & Workflows
+title: Domain Adaptable AI Platform - RAG, Models, FT
 author: Domain Adaptable AI Platform
 author_url: https://github.com/
 funding_url: https://github.com/
@@ -66,21 +66,6 @@ class Tools:
             ge=1,
             le=10,
             description="Default top_k used for RAG queries when the chat does not specify one.",
-        )
-        workflow_wait_timeout_seconds: int = Field(
-            default=180,
-            ge=1,
-            le=600,
-            description=(
-                "Maximum time run_workflow_and_wait waits for an async workflow "
-                "job before returning a timeout envelope."
-            ),
-        )
-        workflow_poll_interval_seconds: int = Field(
-            default=5,
-            ge=1,
-            le=30,
-            description="Polling interval used by run_workflow_and_wait.",
         )
 
     def __init__(self) -> None:
@@ -559,56 +544,7 @@ class Tools:
             }
         )
 
-    # ---- Workflows -----------------------------------------------------
-
-    def list_workflows(self) -> str:
-        """List the platform's workflow catalog.
-
-        Use this when the user asks what platform workflows can be run,
-        or before calling enqueue_workflow_job. The returned list includes
-        each workflow's key, title, prompt label, and output fields.
-
-        :return: JSON string with the workflow catalog.
-        """
-        status, body = self._request("GET", "/workflows")
-        if status != 200:
-            return self._error(status, body, action="list_workflows")
-        workflows = (
-            [self._project_workflow(item) for item in body]
-            if isinstance(body, list)
-            else body
-        )
-        return self._format({"ok": True, "workflows": workflows})
-
-    def list_workflow_sources(self) -> str:
-        """List available workflow sources: RAG collections and legacy datasets."""
-        rag_status, rag_body = self._request("GET", "/rag-collections")
-        if rag_status != 200:
-            return self._error(rag_status, rag_body, action="list_workflow_sources.rag_collections")
-        rag_collections = (
-            [self._project_collection(item) for item in rag_body]
-            if isinstance(rag_body, list)
-            else rag_body
-        )
-
-        ds_status, ds_body = self._request("GET", "/datasets")
-        if ds_status != 200:
-            return self._error(ds_status, ds_body, action="list_workflow_sources.datasets")
-        datasets = (
-            [self._project_dataset(item) for item in ds_body]
-            if isinstance(ds_body, list)
-            else ds_body
-        )
-
-        return self._format(
-            {
-                "ok": True,
-                "sources": {
-                    "rag_collections": rag_collections,
-                    "datasets": datasets,
-                },
-            }
-        )
+    # ---- Selectable models --------------------------------------------
 
     def list_selectable_models(self) -> str:
         """List platform models that are ready for inference selection."""
@@ -746,175 +682,6 @@ class Tools:
                 "usage": body.get("usage"),
             }
         )
-
-    def enqueue_workflow_job(
-        self,
-        workflow_key: str,
-        prompt: str,
-        dataset_key: str | None = None,
-        rag_collection_id: str | None = None,
-        model_id: str | None = None,
-        top_k: int | None = None,
-    ) -> str:
-        """Enqueue a platform workflow run as an async job.
-
-        This is fire-and-forget: it returns a job id immediately, and the
-        worker process executes the workflow asynchronously. Use
-        get_job_status with the returned job_id to poll for completion and
-        read the final result_json.
-
-        Most evidence-grounded workflows require either ``dataset_key`` or
-        ``rag_collection_id``; if both are omitted the platform may return a
-        404 error envelope. Prefer ``rag_collection_id`` from
-        list_rag_collections when available.
-
-        :param workflow_key: Workflow key from list_workflows().
-        :param prompt: User prompt to drive the workflow.
-        :param dataset_key: Optional legacy dataset_key for evidence retrieval.
-        :param rag_collection_id: Optional RAG collection id for grounding.
-        :param model_id: Optional platform model registry id; defaults to the
-            platform's default selectable model when omitted.
-        :param top_k: Optional retrieval top_k.
-        :return: JSON string with at least job_id and status (typically
-            "queued"). Call get_job_status(job_id) to fetch the result.
-        """
-        body_payload: dict[str, Any] = {"prompt": prompt}
-        if dataset_key is not None:
-            body_payload["dataset_key"] = dataset_key
-        if rag_collection_id is not None:
-            body_payload["rag_collection_id"] = rag_collection_id
-        if model_id is not None:
-            body_payload["model_id"] = model_id
-        if top_k is not None:
-            body_payload["k"] = max(1, min(int(top_k), 8))
-
-        encoded_key = urllib.parse.quote(workflow_key, safe="")
-        status, body = self._request(
-            "POST",
-            f"/workflows/{encoded_key}/jobs",
-            json_body=body_payload,
-        )
-        if status not in (200, 202):
-            return self._error(status, body, action="enqueue_workflow_job")
-        job = self._project_job(body)
-        job_id = job.get("id") if isinstance(job, dict) else None
-        source_type: str | None = None
-        if rag_collection_id is not None:
-            source_type = "rag"
-        elif dataset_key is not None:
-            source_type = "dataset"
-        return self._format(
-            {
-                "ok": True,
-                "job_id": job_id,
-                "status": job.get("status") if isinstance(job, dict) else None,
-                "workflow_key": job.get("workflow_key") if isinstance(job, dict) else workflow_key,
-                "source_type": source_type,
-                "model_id": model_id,
-                "rag_collection_id": rag_collection_id,
-                "dataset_key": dataset_key,
-                "job": job,
-                "next_step": (
-                    f"Call get_job_status with job_id={job_id!r}; do not use a "
-                    "placeholder. Poll until status is 'succeeded' or 'failed'."
-                ),
-            }
-        )
-
-    def run_workflow_and_wait(
-        self,
-        workflow_key: str,
-        prompt: str,
-        dataset_key: str | None = None,
-        rag_collection_id: str | None = None,
-        model_id: str | None = None,
-        top_k: int | None = None,
-        max_wait_seconds: int | None = None,
-    ) -> str:
-        """Enqueue a workflow and wait for its final status in one tool call.
-
-        Prefer this for Open WebUI chat UX when the user asks to run a
-        workflow and see the result, because it avoids fragile multi-turn
-        polling and prevents placeholder job ids. It returns the compact final
-        job, including result_json when status is "succeeded". If the job is
-        still running after the wait budget, it returns ok=true with status
-        "timeout" and the real job_id so the user can later call
-        get_job_status(job_id).
-
-        :param workflow_key: Workflow key from list_workflows().
-        :param prompt: User prompt to drive the workflow.
-        :param dataset_key: Optional legacy dataset_key for evidence retrieval.
-        :param rag_collection_id: Optional RAG collection id for grounding.
-        :param model_id: Optional platform model registry id.
-        :param top_k: Optional retrieval top_k.
-        :param max_wait_seconds: Optional per-call wait budget, clamped by the
-            Valve's workflow_wait_timeout_seconds.
-        :return: JSON string with job_id, final/timeout status, and compact job.
-        """
-        body_payload: dict[str, Any] = {"prompt": prompt}
-        if dataset_key is not None:
-            body_payload["dataset_key"] = dataset_key
-        if rag_collection_id is not None:
-            body_payload["rag_collection_id"] = rag_collection_id
-        if model_id is not None:
-            body_payload["model_id"] = model_id
-        if top_k is not None:
-            body_payload["k"] = max(1, min(int(top_k), 8))
-
-        encoded_key = urllib.parse.quote(workflow_key, safe="")
-        status, body = self._request(
-            "POST",
-            f"/workflows/{encoded_key}/jobs",
-            json_body=body_payload,
-        )
-        if status not in (200, 202):
-            return self._error(status, body, action="run_workflow_and_wait.enqueue")
-
-        job = self._project_job(body)
-        job_id = job.get("id") if isinstance(job, dict) else None
-        if not job_id:
-            return self._format(
-                {
-                    "ok": False,
-                    "action": "run_workflow_and_wait.enqueue",
-                    "error": "missing_job_id",
-                    "job": job,
-                }
-            )
-
-        configured_budget = int(self.valves.workflow_wait_timeout_seconds)
-        if max_wait_seconds is not None:
-            configured_budget = min(configured_budget, max(1, int(max_wait_seconds)))
-        poll_interval = int(self.valves.workflow_poll_interval_seconds)
-        deadline = time.monotonic() + configured_budget
-
-        while True:
-            current_status = job.get("status") if isinstance(job, dict) else None
-            if current_status in ("succeeded", "failed", "cancelled"):
-                return self._format(
-                    {
-                        "ok": current_status == "succeeded",
-                        "job_id": job_id,
-                        "status": current_status,
-                        "job": job,
-                    }
-                )
-            if time.monotonic() >= deadline:
-                return self._format(
-                    {
-                        "ok": True,
-                        "job_id": job_id,
-                        "status": "timeout",
-                        "job": job,
-                        "next_step": f"Call get_job_status with job_id={job_id!r} later.",
-                    }
-                )
-            time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
-            encoded_id = urllib.parse.quote(str(job_id), safe="")
-            status, body = self._request("GET", f"/jobs/{encoded_id}")
-            if status != 200:
-                return self._error(status, body, action="run_workflow_and_wait.poll")
-            job = self._project_job(body)
 
     # ---- Jobs ----------------------------------------------------------
 

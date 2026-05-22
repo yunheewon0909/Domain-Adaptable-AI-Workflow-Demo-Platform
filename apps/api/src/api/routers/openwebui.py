@@ -51,7 +51,7 @@ def get_openwebui_manifest() -> dict[str, object]:
         "tools": [
             {
                 "id": "platform_tools",
-                "title": "Domain Adaptable AI Platform - RAG & Workflows",
+                "title": "Domain Adaptable AI Platform - RAG, Models, FT",
                 "url_path": f"/openwebui/{_PLATFORM_TOOLS_FILENAME}",
                 "methods": [
                     "list_rag_collections",
@@ -60,15 +60,11 @@ def get_openwebui_manifest() -> dict[str, object]:
                     "list_rag_documents",
                     "get_rag_document",
                     "delete_rag_document",
-                    "list_workflows",
-                    "list_workflow_sources",
                     "list_selectable_models",
                     "list_platform_models",
                     "get_model_detail",
                     "get_model_lineage",
                     "run_platform_inference",
-                    "enqueue_workflow_job",
-                    "run_workflow_and_wait",
                     "get_job_status",
                     "summarize_job_result",
                     "list_ft_datasets",
