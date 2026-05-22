@@ -53,7 +53,6 @@ def main() -> None:
     job = wait_for_job(job_id, timeout_seconds=180)
     ensure(job.get("status") == "succeeded", f"Workflow job did not succeed: {job}")
     error_text = str(job.get("error") or "")
-    ensure("nvidia" not in error_text.lower(), "Workflow job error leaked noisy nvidia install output")
     ensure("uv pip" not in error_text.lower(), "Workflow job error leaked noisy uv install output")
 
     result_json = json_dict(job.get("result_json"), "Workflow job result_json")

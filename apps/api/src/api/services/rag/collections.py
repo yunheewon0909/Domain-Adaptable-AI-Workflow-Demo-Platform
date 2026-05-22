@@ -128,7 +128,7 @@ def create_collection(
         id=_next_prefixed_id(session, RAGCollectionRecord, "rag-collection"),
         name=name.strip(),
         description=description.strip() if description else None,
-        embedding_model=(embedding_model or settings.ollama_embed_model).strip(),
+        embedding_model=(embedding_model or settings.lmstudio_embed_model).strip(),
         chunking_policy_json=chunking_policy_json
         or {
             "chunk_size": settings.rag_chunk_size,
@@ -409,7 +409,7 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
                 id=spec.collection_id,
                 name=spec.name,
                 description=spec.description,
-                embedding_model=settings.ollama_embed_model,
+                embedding_model=settings.lmstudio_embed_model,
                 chunking_policy_json={
                     "chunk_size": settings.rag_chunk_size,
                     "chunk_overlap": settings.rag_chunk_overlap,
@@ -425,6 +425,7 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
         # document should not see it silently restored on the next restart;
         # deleting the whole collection is the documented way to re-seed.
         if is_new_collection:
+            assert collection is not None  # narrowed: created on the branch above
             for doc_spec in spec.documents:
                 source_path = project_root / doc_spec.source_path
                 if not source_path.is_file():

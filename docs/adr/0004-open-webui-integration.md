@@ -2,6 +2,10 @@
 
 ## Status
 
+Superseded (2026-05-23): the Mac-native transition removed `compose.yml`, so the Docker Compose sidecar is no longer available. The importable Open WebUI Tool artifact (`/openwebui/platform_tools.py`) is retained as the supported integration: users running Open WebUI themselves (Docker Desktop, brew, etc.) can still point it at the platform's `/v1/*` shim and import the tool.
+
+Original decision (preserved for history):
+
 Accepted (sidecar + platform-shim integration)
 
 ## Context
@@ -75,7 +79,7 @@ Open WebUI does not read from Postgres, does not see `data/rag_index/`, does not
 
 - **`/demo` workflow reviewer**: stays the authoritative reviewer flow for evidence-grounded, model-selectable workflow runs against legacy `rag.db` and collection-managed RAG sources. Open WebUI offers a generic chat path against the same underlying Ollama models; it does not run our workflow validator and does not enforce our degraded-output fallback.
 - **`/demo` PLC testing MVP**: not addressed by Open WebUI. PLC suite import, queue-backed runs, deterministic stub executor, validator, and reviewer drill-downs remain the only path.
-- **`/demo` Fine-tuning**: unaffected. Open WebUI does not see `ft_datasets`, `ft_dataset_versions`, `ft_dataset_rows`, training jobs, or artifact directories. It cannot enqueue or observe `sft_lora` jobs.
+- **`/demo` Fine-tuning**: unaffected. Open WebUI does not see `ft_datasets`, `ft_dataset_versions`, `ft_dataset_rows`, training jobs, or artifact directories. It cannot enqueue or observe `sft_qlora` jobs.
 - **`/demo` Models**: still the source of truth for the model registry, artifact-vs-published readiness, and `Use for inference`. Open WebUI now reaches models through `/v1/models`, so it should show only runtime-ready/selectable platform rows rather than whatever raw models happen to exist in Ollama.
 - **`/demo` RAG**: stays authoritative for `rag_collections` and `rag_documents`. The shim can accept an optional `rag_collection_id` for platform-managed grounding, but stock Open WebUI chats do not yet send that field; a tool/function/custom request layer is still needed for user-selectable platform RAG inside Open WebUI.
 

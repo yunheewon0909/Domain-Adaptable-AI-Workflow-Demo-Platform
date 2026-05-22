@@ -6,7 +6,7 @@ API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8000}"
 DATASET_FILE="${DATASET_FILE:-examples/ft_smoke_instruction_dataset.jsonl}"
 BASE_MODEL_NAME="${BASE_MODEL_NAME:-qwen2.5:7b-instruct-q4_K_M}"
 TRAINER_MODEL_NAME="${TRAINER_MODEL_NAME:-hf-internal/testing-tiny-random-gpt2}"
-TRAINING_METHOD="${TRAINING_METHOD:-sft_lora}"
+TRAINING_METHOD="${TRAINING_METHOD:-sft_qlora}"
 
 require_file() {
   local path="$1"

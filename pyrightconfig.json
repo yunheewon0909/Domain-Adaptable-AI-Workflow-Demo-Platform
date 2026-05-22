@@ -1,12 +1,10 @@
 {
   "venvPath": ".",
   "venv": ".venv",
-  "extraPaths": ["apps/api/src", "apps/worker/src"],
+  "extraPaths": ["apps/api/src"],
   "include": [
     "apps/api/src",
-    "apps/api/tests",
-    "apps/worker/src",
-    "apps/worker/tests"
+    "apps/api/tests"
   ],
   "typeCheckingMode": "basic"
 }

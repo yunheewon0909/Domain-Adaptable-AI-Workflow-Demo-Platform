@@ -35,7 +35,7 @@ def main() -> None:
     trainer_backend = str(training.get("trainer_backend") or "")
     trainer_model_name = str(training.get("trainer_model_name") or "")
     ensure(
-        trainer_backend in {"local_peft+smoke_fallback", "deterministic_smoke", "local_peft"},
+        trainer_backend in {"mlx_qlora+smoke_fallback", "deterministic_smoke", "mlx_qlora"},
         f"Unexpected trainer_backend for FT smoke job: {trainer_backend}",
     )
     artifact_validation = json_dict(training.get("artifact_validation"), "FT training artifact_validation")
@@ -49,7 +49,7 @@ def main() -> None:
         print_ok("FT smoke fallback path was exercised")
     else:
         print_ok(
-            "FT smoke job succeeded without fallback; runtime appears to have completed the local_peft path directly"
+            "FT smoke job succeeded without fallback; runtime appears to have completed the mlx_qlora path directly"
         )
 
     artifact_paths = json_dict(training.get("artifact_paths"), "FT training artifact_paths")
@@ -57,7 +57,7 @@ def main() -> None:
     ensure(adapter_dir.is_dir(), f"Adapter dir does not exist: {adapter_dir}")
     ensure((adapter_dir / "adapter_config.json").is_file(), "adapter_config.json was missing")
     ensure(
-        (adapter_dir / "adapter_model.safetensors").is_file() or (adapter_dir / "adapter_model.bin").is_file(),
+        (adapter_dir / "adapters.safetensors").is_file() or (adapter_dir / "adapters.npz").is_file(),
         "adapter weights were missing",
     )
     ensure(artifact_path(artifact_paths.get("training_report_path")).is_file(), "training_report.json was missing")

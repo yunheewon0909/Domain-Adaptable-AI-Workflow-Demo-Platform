@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from api.services.rag.embedding_client import EmbeddingClientError, OllamaEmbeddingClient
+from api.services.rag.embedding_client import EmbeddingClientError, LMStudioEmbeddingClient
 
 
 class _FakeResponse:
@@ -11,7 +11,7 @@ class _FakeResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            request = httpx.Request("POST", "http://localhost:11434/v1/embeddings")
+            request = httpx.Request("POST", "http://127.0.0.1:1234/v1/embeddings")
             response = httpx.Response(self.status_code, request=request)
             raise httpx.HTTPStatusError("request failed", request=request, response=response)
 
@@ -19,7 +19,7 @@ class _FakeResponse:
         return self._payload
 
 
-def test_ollama_embedding_client_parses_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lmstudio_embedding_client_parses_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_post(url: str, *, json: dict[str, object], timeout: float) -> _FakeResponse:
@@ -37,23 +37,23 @@ def test_ollama_embedding_client_parses_vectors(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr("api.services.rag.embedding_client.httpx.post", fake_post)
 
-    client = OllamaEmbeddingClient(
-        base_url="http://localhost:11434/v1",
-        model="nomic-embed-text",
+    client = LMStudioEmbeddingClient(
+        base_url="http://127.0.0.1:1234/v1",
+        model="mxbai-embed-large-mlx",
         timeout_seconds=12,
     )
     vectors = client.embed_texts(["first", "second"])
 
     assert vectors == [[1.0, 2.0, 3.0], [4.5, 5.0, 6.25]]
-    assert captured["url"] == "http://localhost:11434/v1/embeddings"
+    assert captured["url"] == "http://127.0.0.1:1234/v1/embeddings"
     assert captured["json"] == {
-        "model": "nomic-embed-text",
+        "model": "mxbai-embed-large-mlx",
         "input": ["first", "second"],
     }
     assert captured["timeout"] == 12
 
 
-def test_ollama_embedding_client_rejects_payload_size_mismatch(
+def test_lmstudio_embedding_client_rejects_payload_size_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_post(url: str, *, json: dict[str, object], timeout: float) -> _FakeResponse:
@@ -62,9 +62,9 @@ def test_ollama_embedding_client_rejects_payload_size_mismatch(
 
     monkeypatch.setattr("api.services.rag.embedding_client.httpx.post", fake_post)
 
-    client = OllamaEmbeddingClient(
-        base_url="http://localhost:11434/v1",
-        model="nomic-embed-text",
+    client = LMStudioEmbeddingClient(
+        base_url="http://127.0.0.1:1234/v1",
+        model="mxbai-embed-large-mlx",
     )
 
     with pytest.raises(EmbeddingClientError, match="expected 2 vectors"):
