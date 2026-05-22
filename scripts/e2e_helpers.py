@@ -333,12 +333,6 @@ def wait_for_ft_training_job(training_job_id: str, timeout_seconds: int = 180) -
     )
 
 
-def wait_for_plc_run(run_id: str, timeout_seconds: int = 120) -> dict[str, object]:
-    return _wait_for_terminal_payload(
-        path=f"/plc-test-runs/{run_id}", timeout_seconds=timeout_seconds, label=f"PLC run {run_id}"
-    )
-
-
 def list_models() -> list[dict[str, object]]:
     payload = json_list(request_json("GET", "/models", expected_status=200), "/models response")
     return [item for item in payload if isinstance(item, dict)]
@@ -464,7 +458,7 @@ def enqueue_ft_smoke_training(version_id: str, *, trainer_model_name: str = "hf-
         json_body={
             "dataset_version_id": version_id,
             "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
-            "training_method": "sft_lora",
+            "training_method": "sft_qlora",
             "hyperparams_json": {
                 "smoke_test": True,
                 "epochs": 1,
