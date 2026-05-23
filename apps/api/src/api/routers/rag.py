@@ -118,6 +118,59 @@ def get_rag_document(document_id: str) -> dict[str, Any]:
     return document
 
 
+@router.get("/rag-documents/{document_id}/content")
+def get_rag_document_content(document_id: str) -> dict[str, Any]:
+    """Return the full document text + metadata for the demo viewer.
+
+    `/rag-documents/{id}` returns only the 4KB `text_preview` cap.
+    This endpoint reads the original stored file from disk and returns
+    the full text (up to a 256KB safety cap so a 1MB document doesn't
+    bloat the response). Binary files come back base64-encoded as a
+    fallback.
+    """
+    from pathlib import Path
+
+    with Session(get_engine()) as session:
+        document = get_document(session, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="RAG document not found")
+    storage_path_raw = str(
+        (document.get("metadata_json") or {}).get("storage_path") or ""
+    ).strip()
+    if not storage_path_raw:
+        raise HTTPException(
+            status_code=404,
+            detail="document has no stored content on disk",
+        )
+    path = Path(storage_path_raw)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=410,
+            detail="stored document file is missing on disk",
+        )
+    raw = path.read_bytes()
+    truncated = len(raw) > 262_144
+    if truncated:
+        raw = raw[:262_144]
+    try:
+        text = raw.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        import base64
+
+        text = base64.b64encode(raw).decode("ascii")
+        encoding = "base64"
+    return {
+        "document_id": document.get("id"),
+        "filename": document.get("filename"),
+        "mime_type": document.get("mime_type"),
+        "byte_length": path.stat().st_size,
+        "encoding": encoding,
+        "truncated": truncated,
+        "content": text,
+    }
+
+
 @router.delete("/rag-documents/{document_id}")
 def delete_rag_document(document_id: str) -> dict[str, Any]:
     with Session(get_engine()) as session:

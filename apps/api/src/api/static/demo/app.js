@@ -175,13 +175,42 @@ async function renderKbDocs() {
       docs
         .map(
           (d) => `
-            <li class="flex items-center justify-between gap-2">
-              <span class="truncate">${escapeHtml(d.filename || d.id)}</span>
-              <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-delete text-xs text-muted-fg hover:text-fg underline">delete</button>
+            <li class="space-y-1">
+              <div class="flex items-center justify-between gap-2">
+                <span class="truncate">${escapeHtml(d.filename || d.id)} <span class="text-xs text-muted-fg">(${d.preview_length || 0}b)</span></span>
+                <div class="flex gap-3 text-xs">
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-view text-muted-fg hover:text-fg underline">view</button>
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-delete text-muted-fg hover:text-destructive underline">delete</button>
+                </div>
+              </div>
+              <pre data-doc-body="${escapeHtml(d.id)}" class="hidden mt-1 max-h-48 overflow-auto rounded-md border border-border bg-muted p-2 text-xs whitespace-pre-wrap"></pre>
             </li>`,
         )
         .join('') +
       '</ul>';
+    dom.kbDocs.querySelectorAll('.kb-doc-view').forEach((btn) => {
+      btn.addEventListener('click', async (event) => {
+        const id = event.currentTarget.getAttribute('data-doc-id');
+        if (!id) return;
+        const body = dom.kbDocs.querySelector(`pre[data-doc-body="${CSS.escape(id)}"]`);
+        if (!body) return;
+        if (!body.classList.contains('hidden')) {
+          body.classList.add('hidden');
+          return;
+        }
+        body.classList.remove('hidden');
+        body.textContent = '…loading…';
+        try {
+          const payload = await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`);
+          const tail = payload.truncated ? '\n\n…[truncated]' : '';
+          body.textContent = (payload.encoding === 'base64'
+            ? `[binary ${payload.byte_length}b — base64]\n${payload.content.slice(0, 2000)}…`
+            : payload.content) + tail;
+        } catch (error) {
+          body.textContent = `Failed to load content: ${error.message}`;
+        }
+      });
+    });
     dom.kbDocs.querySelectorAll('.kb-doc-delete').forEach((btn) => {
       btn.addEventListener('click', async (event) => {
         const id = event.currentTarget.getAttribute('data-doc-id');
@@ -422,38 +451,88 @@ dom.trainStart.addEventListener('click', async () => {
 // ---- models -----------------------------------------------------------------
 
 async function refreshModels() {
+  // Pull all LM Studio LLMs (loaded + idle) so reviewers can pick + auto
+  // load any local model. Fall back to `/v1/models` (selectable only) if
+  // the LM Studio surface isn't available.
+  let llms = [];
   try {
-    const reply = await fetchJson('/v1/models');
-    state.models = (reply && reply.data) || [];
+    const reply = await fetchJson('/lmstudio/models');
+    llms = ((reply && reply.models) || []).filter((m) => m.type === 'llm');
   } catch {
-    state.models = [];
+    try {
+      const fallback = await fetchJson('/v1/models');
+      llms = ((fallback && fallback.data) || []).map((m) => ({
+        modelKey: m.serving_model_name || m.id,
+        loaded: true,
+        displayName: m.id,
+      }));
+    } catch {
+      llms = [];
+    }
   }
-  // The chat picker shows exposed_id (display-friendly), but training
-  // needs the serving_model_name so the trainer can resolve the local
-  // LM Studio model dir. Render both selects from the same source.
-  if (!state.models.length) {
-    dom.chatModel.innerHTML = '<option value="">— no selectable models —</option>';
+  state.models = llms;
+  if (!llms.length) {
+    dom.chatModel.innerHTML = '<option value="">— no LM Studio models —</option>';
     if (dom.trainBase)
-      dom.trainBase.innerHTML = '<option value="">— no selectable models —</option>';
+      dom.trainBase.innerHTML = '<option value="">— no LM Studio models —</option>';
     state.selectedModelId = null;
     return;
   }
-  const optionsHtml = state.models
-    .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`)
+  const optionsHtml = llms
+    .map((m) => {
+      const id = m.modelKey || m.indexedModelIdentifier || m.path;
+      const badge = m.loaded ? '✓ loaded' : 'idle';
+      const label = `${id} — ${badge}`;
+      return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+    })
     .join('');
   dom.chatModel.innerHTML = optionsHtml;
   if (dom.trainBase) dom.trainBase.innerHTML = optionsHtml;
-  if (!state.selectedModelId || !state.models.some((m) => m.id === state.selectedModelId)) {
-    state.selectedModelId = state.models[0].id;
+  const firstLoaded = llms.find((m) => m.loaded) || llms[0];
+  if (!state.selectedModelId || !llms.some((m) => (m.modelKey || m.path) === state.selectedModelId)) {
+    state.selectedModelId = firstLoaded.modelKey || firstLoaded.path;
   }
   dom.chatModel.value = state.selectedModelId;
   if (dom.trainBase) dom.trainBase.value = state.selectedModelId;
   renderChatSuggestions();
 }
 
-dom.chatModel.addEventListener('change', (event) => {
-  state.selectedModelId = event.target.value || null;
+async function ensureModelLoaded(modelId) {
+  const entry = state.models.find((m) => (m.modelKey || m.path) === modelId);
+  if (!entry) return false;
+  if (entry.loaded) return true;
+  setKbHint(`Loading ${modelId} in LM Studio…`);
+  try {
+    await fetchJson('/lmstudio/models/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_id: modelId, identifier: modelId }),
+    });
+    setKbHint(`Loaded ${modelId}.`);
+    await refreshModels();
+    return true;
+  } catch (error) {
+    setKbHint(`Failed to load ${modelId}: ${error.message}`);
+    return false;
+  }
+}
+
+dom.chatModel.addEventListener('change', async (event) => {
+  const value = event.target.value || null;
+  state.selectedModelId = value;
+  if (value) {
+    await ensureModelLoaded(value);
+  }
 });
+
+if (dom.trainBase) {
+  dom.trainBase.addEventListener('change', async (event) => {
+    const value = event.target.value || null;
+    if (value) {
+      await ensureModelLoaded(value);
+    }
+  });
+}
 
 const CHAT_SUGGESTIONS = [
   'Summarize this knowledge base in 3 bullet points.',
