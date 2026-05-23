@@ -1137,10 +1137,28 @@ def get_training_job_logs(
             FTModelArtifactRecord.artifact_type == "training_report",
         )
     )
+    # Tail the on-disk training.log so the demo poller can show live
+    # subprocess output while `mlx_lm.lora` is still running. The file
+    # lives at a deterministic path under the artifact dir; it may not
+    # exist yet during the very first seconds of the run, or for a
+    # deterministic_smoke job that wrote a tiny synthetic log.
+    log_tail: str | None = None
+    log_path = _artifacts_root() / training_job_id / "trainer_output" / "training.log"
+    if log_path.is_file():
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        # Cap to the last ~16 KB so a long run doesn't bloat the response.
+        if len(text) > 16384:
+            text = text[-16384:]
+        log_tail = text or None
     return {
         "training_job_id": training_job_id,
         "status": training_job.status,
         "log_text": training_job.log_text,
+        "log_tail": log_tail,
+        "log_path": str(log_path) if log_path.is_file() else None,
         "report_artifact": _serialize_artifact(report_artifact),
     }
 

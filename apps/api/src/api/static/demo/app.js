@@ -287,11 +287,17 @@ async function refreshTrainingLogs() {
     const response = await fetch(`/ft-training-jobs/${encodeURIComponent(state.training.jobId)}/logs`);
     if (!response.ok) return;
     const text = await response.text();
+    // Prefer the live `log_tail` (subprocess stdout) when present; fall
+    // back to the static `log_text` (DB column with the queued message
+    // or the final summary).
     let body = text;
     try {
       const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === 'object' && typeof parsed.log_text === 'string') {
-        body = parsed.log_text;
+      if (parsed && typeof parsed === 'object') {
+        body =
+          (typeof parsed.log_tail === 'string' && parsed.log_tail) ||
+          (typeof parsed.log_text === 'string' && parsed.log_text) ||
+          text;
       }
     } catch {
       /* plain text */
