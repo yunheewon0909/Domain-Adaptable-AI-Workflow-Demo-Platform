@@ -108,7 +108,14 @@ def get_settings() -> Settings:
             "FT_SMOKE_FALLBACK_BACKEND", "deterministic_smoke"
         ).strip()
         or "deterministic_smoke",
-        ft_trainer_model_map_json=os.getenv("FT_TRAINER_MODEL_MAP_JSON", "{}"),
+        # Default map so the demo's Train button works out of the box: the
+        # default chat model `qwen3.5-4b-mlx` resolves to a tiny MLX
+        # checkpoint that brew `mlx_lm.lora` can download cleanly on first
+        # use. Reviewers can extend the map via env for other base models.
+        ft_trainer_model_map_json=os.getenv(
+            "FT_TRAINER_MODEL_MAP_JSON",
+            '{"qwen3.5-4b-mlx":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"}',
+        ),
         adapter_publish_enabled=_to_bool(
             os.getenv("ADAPTER_PUBLISH_ENABLED"), default=False
         ),

@@ -914,7 +914,12 @@ def complete_training_job(
         training_job.output_dir = str(artifact_dir)
         training_job.status = "training"
         failure_phase = "training"
-        session.flush()
+        # Commit the phase transition so the demo poller sees `training`
+        # while the long-running MLX subprocess is still busy. Without this,
+        # the row stays in `preparing_data` (or `queued` from a viewer's
+        # perspective due to transaction isolation) until the whole job
+        # finishes, which can be minutes-to-hours.
+        session.commit()
 
         settings = get_settings()
         training_output = run_training_backend(

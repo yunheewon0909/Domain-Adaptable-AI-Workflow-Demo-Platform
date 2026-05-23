@@ -84,7 +84,10 @@ def load_config() -> PreflightConfig:
             "FT_DEFAULT_TRAINING_METHOD", "sft_qlora"
         ).strip()
         or "sft_qlora",
-        trainer_model_map_json=os.getenv("FT_TRAINER_MODEL_MAP_JSON", "{}"),
+        trainer_model_map_json=os.getenv(
+            "FT_TRAINER_MODEL_MAP_JSON",
+            '{"qwen3.5-4b-mlx":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"}',
+        ),
         project_root=project_root,
         lmstudio_base_url=os.getenv(
             "LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1"
