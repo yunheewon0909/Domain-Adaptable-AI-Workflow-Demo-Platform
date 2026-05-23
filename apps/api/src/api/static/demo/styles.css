@@ -54,6 +54,30 @@ body {
   white-space: pre-wrap;
 }
 
+#chat-log .msg .body code {
+  background: hsl(var(--muted));
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+#chat-log .msg .body pre.mdpre {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  margin: 0.4rem 0;
+  overflow-x: auto;
+  font-size: 0.85em;
+}
+
+#chat-log .msg .body pre.mdpre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
 #chat-log .msg .sources {
   margin-top: 0.5rem;
   font-size: 0.7rem;
