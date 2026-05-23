@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.config import get_project_root, get_settings
@@ -124,21 +125,33 @@ def create_collection(
 ) -> dict[str, Any]:
     settings = get_settings()
     now = datetime.now(timezone.utc)
-    collection = RAGCollectionRecord(
-        id=_next_prefixed_id(session, RAGCollectionRecord, "rag-collection"),
-        name=name.strip(),
-        description=description.strip() if description else None,
-        embedding_model=(embedding_model or settings.lmstudio_embed_model).strip(),
-        chunking_policy_json=chunking_policy_json
-        or {
-            "chunk_size": settings.rag_chunk_size,
-            "chunk_overlap": settings.rag_chunk_overlap,
-        },
-        updated_at=now,
-    )
-    session.add(collection)
-    session.commit()
-    return get_collection(session, collection.id) or {"id": collection.id}
+    embedding = (embedding_model or settings.lmstudio_embed_model).strip()
+    policy = chunking_policy_json or {
+        "chunk_size": settings.rag_chunk_size,
+        "chunk_overlap": settings.rag_chunk_overlap,
+    }
+    # `_next_prefixed_id` does SELECT-then-INSERT, which races under
+    # concurrent POSTs and collides on the PK. Retry on IntegrityError
+    # the same way create_training_job does.
+    last_error: IntegrityError | None = None
+    for _ in range(5):
+        collection = RAGCollectionRecord(
+            id=_next_prefixed_id(session, RAGCollectionRecord, "rag-collection"),
+            name=name.strip(),
+            description=description.strip() if description else None,
+            embedding_model=embedding,
+            chunking_policy_json=policy,
+            updated_at=now,
+        )
+        session.add(collection)
+        try:
+            session.commit()
+            return get_collection(session, collection.id) or {"id": collection.id}
+        except IntegrityError as exc:
+            last_error = exc
+            session.rollback()
+    assert last_error is not None
+    raise last_error
 
 
 def list_collections(session: Session) -> list[dict[str, Any]]:
@@ -185,44 +198,61 @@ def add_collection_document(
         raise KeyError(collection_id)
 
     now = datetime.now(timezone.utc)
-    document_id = _next_prefixed_id(session, RAGDocumentRecord, "rag-doc")
     checksum = hashlib.sha256(content).hexdigest()
+    preview_text, parse_method = _extract_preview_text(content, mime_type)
+    status = "parsed" if preview_text else "uploaded"
     storage_dir = _collections_root() / collection_id / "documents"
     storage_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix
-    stored_filename = f"{document_id}{suffix}" if suffix else document_id
-    storage_path = storage_dir / _sanitize_filename(stored_filename)
-    storage_path.write_bytes(content)
 
-    preview_text, parse_method = _extract_preview_text(content, mime_type)
-    status = "parsed" if preview_text else "uploaded"
-    metadata_json = {
-        "storage_path": str(storage_path),
-        "text_preview": preview_text[:4000],
-        "text_length": len(preview_text),
-        "parse_method": parse_method,
-        "chunk_preview": [
-            preview_text[i : i + 300]
-            for i in range(0, min(len(preview_text), 900), 300)
-        ]
-        if preview_text
-        else [],
-    }
-    document = RAGDocumentRecord(
-        id=document_id,
-        collection_id=collection_id,
-        filename=filename,
-        mime_type=mime_type,
-        source_type=source_type,
-        status=status,
-        checksum=checksum,
-        metadata_json=metadata_json,
-        updated_at=now,
-    )
-    session.add(document)
-    collection.updated_at = now
-    session.commit()
-    return get_document(session, document.id) or {"id": document.id}
+    # Retry the SELECT-then-INSERT pattern on PK collision. Build the file
+    # path from the freshly-allocated id only after the row commits so a
+    # losing concurrent race doesn't leave an orphan file on disk under a
+    # stale document id.
+    last_error: IntegrityError | None = None
+    for _ in range(5):
+        document_id = _next_prefixed_id(session, RAGDocumentRecord, "rag-doc")
+        stored_filename = f"{document_id}{suffix}" if suffix else document_id
+        storage_path = storage_dir / _sanitize_filename(stored_filename)
+        metadata_json = {
+            "storage_path": str(storage_path),
+            "text_preview": preview_text[:4000],
+            "text_length": len(preview_text),
+            "parse_method": parse_method,
+            "chunk_preview": [
+                preview_text[i : i + 300]
+                for i in range(0, min(len(preview_text), 900), 300)
+            ]
+            if preview_text
+            else [],
+        }
+        document = RAGDocumentRecord(
+            id=document_id,
+            collection_id=collection_id,
+            filename=filename,
+            mime_type=mime_type,
+            source_type=source_type,
+            status=status,
+            checksum=checksum,
+            metadata_json=metadata_json,
+            updated_at=now,
+        )
+        session.add(document)
+        collection.updated_at = now
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            last_error = exc
+            session.rollback()
+            collection = session.get(RAGCollectionRecord, collection_id)
+            if collection is None:
+                raise KeyError(collection_id) from exc
+            continue
+        storage_path.write_bytes(content)
+        session.commit()
+        return get_document(session, document.id) or {"id": document.id}
+    assert last_error is not None
+    raise last_error
 
 
 def list_collection_documents(
