@@ -6,10 +6,12 @@ funding_url: https://github.com/
 version: 0.1.0
 license: MIT
 description: >
-  Open WebUI Tool that lets a chat call into the platform's RAG collections,
-  workflow catalog, and workflow job queue. Connects to the FastAPI service
-  at the configured base URL (defaults to http://api:8000 inside the Compose
-  network). Does NOT mutate platform data beyond enqueueing a workflow job.
+  Open WebUI Tool that lets a chat call into the platform's RAG
+  collections, model registry, and fine-tuning catalog. Connects to
+  the FastAPI service at the configured base URL (defaults to
+  http://host.docker.internal:8000 so a Docker-hosted Open WebUI
+  reaches the Mac host). Read-only by default; deletes a RAG
+  document only when the chat explicitly invokes delete_rag_document.
 
 This file is designed to be installed into Open WebUI as a Tool:
 
@@ -34,7 +36,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-_DEFAULT_BASE_URL = "http://api:8000"
+_DEFAULT_BASE_URL = "http://host.docker.internal:8000"
 _DEFAULT_TIMEOUT_SECONDS = 30
 
 
@@ -50,9 +52,10 @@ class Tools:
         api_base_url: str = Field(
             default=_DEFAULT_BASE_URL,
             description=(
-                "Base URL of the platform FastAPI service. Default is the "
-                "Compose-internal hostname; use http://127.0.0.1:8000 when "
-                "running Open WebUI outside the Compose network."
+                "Base URL of the platform FastAPI service. Default targets "
+                "the Mac host from a Docker-hosted Open WebUI; use "
+                "http://127.0.0.1:8000 when Open WebUI runs on the same Mac, "
+                "or the LAN / Tailscale address for remote clients."
             ),
         )
         request_timeout_seconds: int = Field(
@@ -220,45 +223,6 @@ class Tools:
         }
 
     @staticmethod
-    def _project_workflow(item: Any) -> Any:
-        if not isinstance(item, dict):
-            return item
-        key = item.get("key")
-        result: dict[str, Any] = {
-            "key": key,
-            "title": item.get("title"),
-            "summary": item.get("summary") or item.get("description"),
-            "prompt_label": item.get("prompt_label"),
-            "output_fields": item.get("output_fields"),
-        }
-        if key == "briefing":
-            result["recommended_prompts"] = [
-                "Summarize the latest ops findings",
-                "What are the key maintenance issues?",
-            ]
-        elif key == "recommendation":
-            result["recommended_prompts"] = [
-                "Recommend improvements based on recent data",
-                "What should we prioritize this week?",
-            ]
-        elif key == "report_generator":
-            result["recommended_prompts"] = [
-                "Generate a report on the current status",
-                "Create a weekly ops summary",
-            ]
-        return result
-
-    @staticmethod
-    def _project_dataset(item: Any) -> Any:
-        if not isinstance(item, dict):
-            return item
-        return {
-            "dataset_key": item.get("dataset_key") or item.get("key"),
-            "name": item.get("name"),
-            "description": item.get("description"),
-        }
-
-    @staticmethod
     def _project_model(item: Any) -> Any:
         if not isinstance(item, dict):
             return item
@@ -281,15 +245,10 @@ class Tools:
         # polling response stays small and result_json stands out.
         if not isinstance(item, dict):
             return item
-        # The enqueue endpoint returns a compact acknowledgement with
-        # ``job_id`` at top level, while the status endpoint returns the full
-        # job resource with ``id``. Normalize both shapes so chat follow-up and
-        # run_workflow_and_wait never lose the real job identifier.
         return {
             "id": item.get("id") or item.get("job_id"),
+            "type": item.get("type"),
             "status": item.get("status"),
-            "workflow_key": item.get("workflow_key"),
-            "dataset_key": item.get("dataset_key"),
             "attempts": item.get("attempts"),
             "max_attempts": item.get("max_attempts"),
             "error": item.get("error"),
@@ -387,8 +346,10 @@ class Tools:
                 "platform_response": body,
                 "hint": (
                     "Check that api_base_url is reachable from the Open WebUI "
-                    "container. Inside Compose use http://api:8000, on the host "
-                    "use http://127.0.0.1:8000."
+                    "host. From Docker Open WebUI use "
+                    "http://host.docker.internal:8000; same-host use "
+                    "http://127.0.0.1:8000; remote use the LAN / Tailscale "
+                    "address of the Mac."
                 ),
             }
         )
@@ -653,8 +614,7 @@ class Tools:
         """Run a single-turn inference against a platform model.
 
         Use this when the user wants a direct answer from a specific platform
-        model, optionally grounded in a RAG collection. For evidence-grounded
-        multi-step workflows prefer run_workflow_and_wait instead.
+        model, optionally grounded in a RAG collection.
 
         :param model_id: Model id from list_platform_models (must be selectable).
         :param prompt: User prompt to send to the model.
@@ -688,11 +648,11 @@ class Tools:
     def get_job_status(self, job_id: str) -> str:
         """Fetch the current status of a platform job.
 
-        Use this after enqueue_workflow_job to poll for completion. When
-        status is "succeeded" the result_json field carries the workflow
-        output. When status is "failed" the error field explains why.
+        Use this to poll a queued job (e.g. an FT training job) for
+        completion. When status is "succeeded" the result_json field carries
+        the job output. When status is "failed" the error field explains why.
 
-        :param job_id: Job id returned by enqueue_workflow_job.
+        :param job_id: Job id from the response of the enqueue call.
         :return: JSON string describing the job (status, attempts, error,
             result_json, timestamps).
         """
@@ -703,7 +663,7 @@ class Tools:
         return self._format({"ok": True, "job": self._project_job(body)})
 
     def summarize_job_result(self, job_id: str) -> str:
-        """Return a concise summary of a workflow job result."""
+        """Return a concise summary of a platform job result."""
         encoded_id = urllib.parse.quote(job_id, safe="")
         status, body = self._request("GET", f"/jobs/{encoded_id}")
         if status != 200:

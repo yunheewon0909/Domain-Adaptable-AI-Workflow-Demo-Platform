@@ -77,8 +77,10 @@ def get_openwebui_manifest() -> dict[str, object]:
                 "install_hint": (
                     "Open WebUI -> Workspace -> Tools -> + (New), paste the "
                     "served file's contents, save, then enable the tool on "
-                    "a chat. Adjust the api_base_url Valve if Open WebUI is "
-                    "not on the same Docker network as the platform API."
+                    "a chat. Set the api_base_url Valve to the platform API "
+                    "host reachable from Open WebUI (e.g. "
+                    "http://host.docker.internal:8000 from a Docker Open "
+                    "WebUI, or the LAN / Tailscale address of the Mac)."
                 ),
             }
         ],

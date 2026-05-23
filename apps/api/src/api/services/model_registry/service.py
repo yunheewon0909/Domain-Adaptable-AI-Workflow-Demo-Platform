@@ -498,7 +498,7 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
             "base_model_name": configured_default_name,
             "serving_model_name": configured_default_name,
             "status": "active",
-            "description": "Default LM Studio serving model configured for workflow and inference requests.",
+            "description": "Default LM Studio serving model used for grounded chat and inference.",
             "tags_json": ["base", "default"],
         }
     ]

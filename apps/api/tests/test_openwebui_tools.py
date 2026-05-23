@@ -55,7 +55,7 @@ def test_platform_tools_exposes_expected_methods() -> None:
     valves_cls = getattr(tools_cls, "Valves", None)
     assert valves_cls is not None, "Open WebUI expects a nested `Valves` Pydantic model"
     valves = valves_cls()
-    assert valves.api_base_url == "http://api:8000"
+    assert valves.api_base_url == "http://host.docker.internal:8000"
     assert valves.request_timeout_seconds >= 1
     assert 1 <= valves.default_top_k <= 10
 

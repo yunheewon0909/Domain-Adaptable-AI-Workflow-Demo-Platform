@@ -2,6 +2,7 @@
 .omx/
 .codex/
 .agents/
+.claude/
 
 # Python
 __pycache__/

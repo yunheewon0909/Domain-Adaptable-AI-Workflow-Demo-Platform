@@ -17,8 +17,8 @@ uv sync --dev
 # Run API (host)
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
 export LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-export LMSTUDIO_CHAT_MODEL=lmstudio-community/Qwen2.5-7B-Instruct-MLX-4bit
-export LMSTUDIO_EMBED_MODEL=mxbai-embed-large-mlx
+export LMSTUDIO_CHAT_MODEL=qwen3.5-4b-mlx
+export LMSTUDIO_EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 
