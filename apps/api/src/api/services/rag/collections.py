@@ -273,6 +273,47 @@ def get_document(session: Session, document_id: str) -> dict[str, Any] | None:
     return _serialize_document(document)
 
 
+def delete_collection(session: Session, collection_id: str) -> dict[str, Any]:
+    """Delete a RAG collection, all its documents, and the on-disk storage.
+
+    Cascade is explicit here (no FK ON DELETE) because the documents table
+    keeps `collection_id` as a plain string column and reviewers will hit a
+    constraint error otherwise. The collection storage directory under
+    `data/rag_collections/<id>/` is removed wholesale after the row commits.
+    """
+    import shutil as _shutil
+
+    collection = session.get(RAGCollectionRecord, collection_id)
+    if collection is None:
+        raise KeyError(collection_id)
+
+    documents = session.scalars(
+        select(RAGDocumentRecord).where(
+            RAGDocumentRecord.collection_id == collection_id
+        )
+    ).all()
+    document_count = len(documents)
+    for document in documents:
+        session.delete(document)
+    # Flush the child deletes before deleting the parent so Postgres sees
+    # them in the right order (the FK has no ON DELETE CASCADE).
+    session.flush()
+    session.delete(collection)
+    session.commit()
+
+    storage_dir = _collections_root() / collection_id
+    storage_deleted = False
+    if storage_dir.exists():
+        _shutil.rmtree(storage_dir, ignore_errors=True)
+        storage_deleted = not storage_dir.exists()
+    return {
+        "collection_id": collection_id,
+        "deleted": True,
+        "document_count": document_count,
+        "storage_deleted": storage_deleted,
+    }
+
+
 def delete_document(session: Session, document_id: str) -> dict[str, Any]:
     document = session.get(RAGDocumentRecord, document_id)
     if document is None:

@@ -10,6 +10,7 @@ from api.db import get_engine
 from api.services.rag.collections import (
     add_collection_document,
     create_collection,
+    delete_collection,
     delete_document,
     get_collection,
     get_document,
@@ -63,6 +64,17 @@ def get_rag_collection(collection_id: str) -> dict[str, Any]:
     if collection is None:
         raise HTTPException(status_code=404, detail="RAG collection not found")
     return collection
+
+
+@router.delete("/rag-collections/{collection_id}")
+def delete_rag_collection(collection_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return delete_collection(session, collection_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
 
 
 @router.post("/rag-collections/{collection_id}/documents", status_code=201)

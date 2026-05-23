@@ -114,6 +114,41 @@ def test_seed_documents_are_deletable_and_not_restored_until_collection_removed(
         assert session.get(RAGDocumentRecord, target_doc.document_id) is None
 
 
+def test_delete_collection_cascades_documents_and_returns_404_after(
+    client: TestClient,
+) -> None:
+    create = client.post(
+        "/rag-collections",
+        json={"name": "delete-cascade-test"},
+    )
+    assert create.status_code == 201
+    collection_id = create.json()["id"]
+
+    upload = client.post(
+        f"/rag-collections/{collection_id}/documents",
+        files={"file": ("hello.txt", b"hello world", "text/plain")},
+    )
+    assert upload.status_code == 201
+    document_id = upload.json()["id"]
+
+    delete = client.delete(f"/rag-collections/{collection_id}")
+    assert delete.status_code == 200
+    payload = delete.json()
+    assert payload["deleted"] is True
+    assert payload["document_count"] == 1
+    assert payload["collection_id"] == collection_id
+
+    after = client.get(f"/rag-collections/{collection_id}")
+    assert after.status_code == 404
+    after_doc = client.get(f"/rag-documents/{document_id}")
+    assert after_doc.status_code == 404
+
+
+def test_delete_collection_returns_404_when_missing(client: TestClient) -> None:
+    response = client.delete("/rag-collections/does-not-exist")
+    assert response.status_code == 404
+
+
 def test_seed_collection_visible_to_open_webui_tool(client: TestClient) -> None:
     """End-to-end: the Open WebUI Tool's list_rag_collections sees the seed."""
     module = _load_platform_tools_module()

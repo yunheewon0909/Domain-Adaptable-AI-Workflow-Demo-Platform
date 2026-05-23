@@ -15,6 +15,7 @@ const dom = {
   kbSelect: $('kb-select'),
   kbNewName: $('kb-new-name'),
   kbNewButton: $('kb-new-button'),
+  kbDeleteCollection: $('kb-delete-collection'),
   kbFile: $('kb-file'),
   kbUploadButton: $('kb-upload-button'),
   kbDocs: $('kb-docs'),
@@ -199,6 +200,28 @@ dom.kbSelect.addEventListener('change', async (event) => {
   state.selectedCollectionId = event.target.value || null;
   await renderKbDocs();
   renderChatSuggestions();
+});
+
+dom.kbDeleteCollection.addEventListener('click', async () => {
+  const collection = selectedCollection();
+  if (!collection) {
+    setKbHint('Select a collection to delete.');
+    return;
+  }
+  if (!window.confirm(`Delete collection "${collection.name}" and all its documents? This cannot be undone.`)) {
+    return;
+  }
+  dom.kbDeleteCollection.disabled = true;
+  try {
+    await fetchJson(`/rag-collections/${encodeURIComponent(collection.id)}`, { method: 'DELETE' });
+    state.selectedCollectionId = null;
+    setKbHint(`Deleted collection ${collection.name}.`);
+    await refreshCollections();
+  } catch (error) {
+    setKbHint(error.message);
+  } finally {
+    dom.kbDeleteCollection.disabled = false;
+  }
 });
 
 dom.kbNewButton.addEventListener('click', async () => {
