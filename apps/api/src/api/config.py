@@ -29,7 +29,20 @@ def _to_bool(value: str | None, *, default: bool) -> bool:
 def _to_int(value: str | None, *, default: int, minimum: int) -> int:
     if value is None:
         return default
-    parsed = int(value)
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return max(minimum, parsed)
+
+
+def _to_float(value: str | None, *, default: float, minimum: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
     return max(minimum, parsed)
 
 
@@ -129,7 +142,9 @@ def get_settings() -> Settings:
         lmstudio_base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
         lmstudio_chat_model=os.getenv("LMSTUDIO_CHAT_MODEL", ""),
         lmstudio_embed_model=os.getenv("LMSTUDIO_EMBED_MODEL", ""),
-        lmstudio_timeout_seconds=float(os.getenv("LMSTUDIO_TIMEOUT_SECONDS", "600")),
+        lmstudio_timeout_seconds=_to_float(
+            os.getenv("LMSTUDIO_TIMEOUT_SECONDS"), default=600.0, minimum=1.0
+        ),
         lmstudio_models_dir=os.getenv(
             "LMSTUDIO_MODELS_DIR",
             str(Path.home() / ".lmstudio" / "models"),
