@@ -51,6 +51,34 @@ def post_rag_collection(request: CreateRAGCollectionRequest) -> dict[str, Any]:
         )
 
 
+@router.post("/rag-collections/{collection_id}/reveal")
+def post_rag_reveal(collection_id: str) -> dict[str, Any]:
+    """Open the collection's on-disk storage dir in Finder (macOS only).
+
+    Demo convenience: lets the reviewer inspect the raw uploaded files
+    + the per-document storage layout without `cd`-ing in a terminal.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from api.services.rag.collections import _collections_root
+
+    with Session(get_engine()) as session:
+        collection = get_collection(session, collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="RAG collection not found")
+    storage = Path(_collections_root()) / collection_id
+    storage.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(["open", str(storage)], check=True, timeout=5)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"`open` failed ({exc}); macOS Finder is required for this convenience endpoint.",
+        ) from exc
+    return {"collection_id": collection_id, "opened": str(storage)}
+
+
 @router.get("/rag-collections")
 def get_rag_collections() -> list[dict[str, Any]]:
     with Session(get_engine()) as session:

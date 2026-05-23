@@ -15,6 +15,7 @@ const dom = {
   kbSelect: $('kb-select'),
   kbNewName: $('kb-new-name'),
   kbNewButton: $('kb-new-button'),
+  kbReveal: $('kb-reveal'),
   kbDeleteCollection: $('kb-delete-collection'),
   kbFile: $('kb-file'),
   kbUploadButton: $('kb-upload-button'),
@@ -233,6 +234,22 @@ dom.kbSelect.addEventListener('change', async (event) => {
   state.selectedCollectionId = event.target.value || null;
   await renderKbDocs();
   renderChatSuggestions();
+});
+
+dom.kbReveal.addEventListener('click', async () => {
+  const collection = selectedCollection();
+  if (!collection) {
+    setKbHint('Pick a collection first.');
+    return;
+  }
+  try {
+    const r = await fetchJson(`/rag-collections/${encodeURIComponent(collection.id)}/reveal`, {
+      method: 'POST',
+    });
+    setKbHint(`Opened ${r.opened} in Finder.`);
+  } catch (error) {
+    setKbHint(error.message);
+  }
 });
 
 dom.kbDeleteCollection.addEventListener('click', async () => {
@@ -481,8 +498,8 @@ async function refreshModels() {
   const optionsHtml = llms
     .map((m) => {
       const id = m.modelKey || m.indexedModelIdentifier || m.path;
-      const badge = m.loaded ? '✓ loaded' : 'idle';
-      const label = `${id} — ${badge}`;
+      const badge = m.loaded ? '[loaded]' : '[idle]';
+      const label = `${id} ${badge}`;
       return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
     })
     .join('');
