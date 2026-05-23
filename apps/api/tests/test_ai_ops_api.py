@@ -855,6 +855,101 @@ def test_training_failure_is_classified_for_ui(
     )
 
 
+def _seed_logs_test_job(client: TestClient) -> str:
+    """Create a queued FT training job for /logs tests via the public API."""
+    dataset = client.post(
+        "/ft-datasets",
+        json={
+            "name": "log-tail-test",
+            "task_type": "instruction_sft",
+            "schema_type": "json",
+            "description": None,
+        },
+    ).json()
+    version = client.post(
+        f"/ft-datasets/{dataset['id']}/versions",
+        json={
+            "version_label": "v1",
+            "train_split_ratio": 1.0,
+            "val_split_ratio": 0.0,
+            "test_split_ratio": 0.0,
+        },
+    ).json()
+    client.post(
+        f"/ft-dataset-versions/{version['id']}/rows",
+        json={
+            "rows": [
+                {
+                    "split": "train",
+                    "input_json": {"instruction": "x", "input": ""},
+                    "target_json": {"output": "y"},
+                    "metadata_json": {},
+                }
+            ]
+        },
+    )
+    client.post(
+        f"/ft-dataset-versions/{version['id']}/status",
+        json={"status": "validated"},
+    )
+    client.post(
+        f"/ft-dataset-versions/{version['id']}/status",
+        json={"status": "locked"},
+    )
+    job = client.post(
+        "/ft-training-jobs",
+        json={
+            "dataset_version_id": version["id"],
+            "base_model_name": "qwen3.5-4b-mlx",
+            "training_method": "sft_qlora",
+            "hyperparams_json": {"trainer_model_name": "smoke"},
+        },
+    ).json()
+    assert "id" in job, f"create training job failed: {job}"
+    return job["id"]
+
+
+def test_training_logs_endpoint_surfaces_disk_log_tail(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    """`/ft-training-jobs/{id}/logs` reads the on-disk training.log so the
+    demo poller can show live subprocess output while mlx_lm.lora is still
+    running, instead of just the static DB `log_text` column.
+    """
+    artifact_root = tmp_path / "model_artifacts"
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(artifact_root))
+    get_settings.cache_clear()
+
+    job_id = _seed_logs_test_job(client)
+    log_file = artifact_root / job_id / "trainer_output" / "training.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("iter 1 loss=4.2\niter 2 loss=3.8\niter 3 loss=3.1\n")
+
+    response = client.get(f"/ft-training-jobs/{job_id}/logs")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["training_job_id"] == job_id
+    assert payload["log_tail"] is not None
+    assert "iter 3 loss=3.1" in payload["log_tail"]
+    assert payload["log_path"] is not None
+    assert payload["log_path"].endswith(f"{job_id}/trainer_output/training.log")
+
+
+def test_training_logs_endpoint_omits_tail_when_log_missing(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    """Before the trainer subprocess writes anything, `log_tail` is None."""
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(tmp_path / "model_artifacts"))
+    get_settings.cache_clear()
+
+    job_id = _seed_logs_test_job(client)
+    response = client.get(f"/ft-training-jobs/{job_id}/logs")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["log_tail"] is None
+    assert payload["log_path"] is None
+
+
 def test_model_registry_default_entries_are_seeded(client: TestClient) -> None:
     response = client.get("/models")
     assert response.status_code == 200
