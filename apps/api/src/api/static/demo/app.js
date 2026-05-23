@@ -144,7 +144,11 @@ function renderKbSelect() {
     return;
   }
   dom.kbSelect.innerHTML = state.collections
-    .map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`)
+    .map((c) => {
+      const count = typeof c.document_count === 'number' ? c.document_count : 0;
+      const label = `${c.name} (${count} doc${count === 1 ? '' : 's'})`;
+      return `<option value="${escapeHtml(c.id)}">${escapeHtml(label)}</option>`;
+    })
     .join('');
   if (state.selectedCollectionId) {
     dom.kbSelect.value = state.selectedCollectionId;
@@ -352,6 +356,10 @@ dom.trainStart.addEventListener('click', async () => {
   const collection = selectedCollection();
   if (!collection) {
     setTrainStatus('Pick a collection in step 1 first.');
+    return;
+  }
+  if (!collection.document_count) {
+    setTrainStatus(`Collection "${collection.name}" has no documents. Upload at least one before training.`);
     return;
   }
   const pairs = Math.max(1, Math.min(10, Number(dom.trainPairs.value) || 3));
