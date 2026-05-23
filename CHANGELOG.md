@@ -2,6 +2,21 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.9.1] - 2026-05-23
+
+### Changed (UI)
+
+- `/demo` redesigned as a single-screen 3-step wizard (Knowledge base → Train → Chat) with inline plain-language explainers. Replaces the 3-tab admin console (~50 buttons → ~10).
+- Tailwind via Play CDN + shadcn-inspired CSS vars; auto dark/light via `prefers-color-scheme`. No build step.
+- Embedded chat panel with model picker + RAG grounding toggle + source surfacing.
+- `static/demo/{index.html,app.js,styles.css}`: 4688 → 674 lines total (-86%).
+- README + CLAUDE.md + architecture.md updated to describe the wizard shape.
+
+### Added
+
+- `LMStudioChatClient` falls back to `reasoning_content` when `content` is empty (Qwen3 / DeepSeek-R1 thinking-mode models).
+- External chat client hints in the Advanced section: lobe-chat + Open WebUI.
+
 ## [0.9.0] - 2026-05-23 (in progress)
 
 ### Improved (B1 polish)

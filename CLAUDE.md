@@ -48,7 +48,7 @@ Slim FastAPI app composed of small routers under `apps/api/src/api/routers/`:
 - `jobs` — generic queue read endpoints
 - `openai_compat` — `/v1/models` + `/v1/chat/completions` shim, readiness-gated to selectable registry rows, with real LM Studio SSE passthrough
 - `openwebui` — serves importable Open WebUI tool artifact + manifest
-- `demo` — static reviewer UI at `/demo` (Fine-tuning is the default landing mode)
+- `demo` — static reviewer UI at `/demo` (single-screen 3-step wizard)
 - `health`
 
 ### Queue
@@ -85,7 +85,7 @@ Fine-tuned rows transition `artifact_ready → published`/`selectable` automatic
 
 ### Demo UI
 
-Vanilla JS + single HTML at `apps/api/src/api/static/demo/`. Three reviewer modes: **Fine-tuning** (default), Models, RAG. No build step. PLC + Workflow modes were removed in v0.9.0; the JS file still contains orphan helper functions for them — harmless since the UI buttons + DOM ids are gone (`renderMode` has defensive `if (dom.workflowMode)` / `if (dom.plcMode)` guards).
+Vanilla JS + single HTML + Tailwind via Play CDN at `apps/api/src/api/static/demo/`. **3-step wizard**: Knowledge base (upload docs to a collection) → Train (optional QLoRA from collection) → Chat (model picker + RAG grounding toggle + embedded chat log). Shadcn-inspired CSS vars in `styles.css` (`--bg`, `--card`, `--border`, `--accent`, `--muted`, `--muted-fg`) with `prefers-color-scheme` auto dark/light. No build step. ~675 lines total across HTML/JS/CSS.
 
 ### Open WebUI integration
 

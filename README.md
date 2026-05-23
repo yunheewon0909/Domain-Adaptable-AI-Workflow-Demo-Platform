@@ -8,7 +8,7 @@ Mac-native FastAPI monolith for **MLX QLoRA fine-tuning with reviewer-curated RA
 4. The trainer shells out to brew-installed `mlx_lm.lora` + `mlx_lm.fuse` and writes a fused MLX model under `data/model_artifacts/<job_id>/trainer_output/fused_model/`.
 5. The publish flow symlinks the fused model into `~/.lmstudio/models/<namespace>/<name>/` and probes LM Studio. Once you load it in LM Studio, the platform flips the registry row from `artifact_ready` to selectable, and the new model becomes available through the OpenAI-compatible shim at `/v1/chat/completions`.
 
-A static `/demo` console exposes three reviewer modes (Fine-tuning, Models, RAG). External chat clients (OpenAI SDKs, Open WebUI, the importable platform tool) can call the same registry-gated models through `/v1/*`.
+A static `/demo` console walks reviewers through a **3-step wizard**: Knowledge base → Train (optional) → Chat. Same screen, plain-language explainers, embedded chat. Power users can point [lobe-chat](https://github.com/lobehub/lobe-chat) or [Open WebUI](https://github.com/open-webui/open-webui) at `/v1/*` for a richer chat surface.
 
 ## Runtime shape (Mac-native)
 

@@ -16,7 +16,7 @@ Postgres is still the system of record for the queue and operational metadata. R
 - `jobs` — generic queue read endpoints (no PLC filter)
 - `openai_compat` — `/v1/models` + `/v1/chat/completions` with real LM Studio SSE passthrough; readiness-gated to selectable registry rows
 - `openwebui` — serves the importable Open WebUI tool artifact + manifest
-- `demo` — static reviewer UI (vanilla JS, Fine-tuning is the landing mode)
+- `demo` — static reviewer UI (vanilla JS + Tailwind via CDN, 3-step wizard: Knowledge base → Train → Chat)
 - `health`
 
 ## Queue
