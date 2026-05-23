@@ -98,6 +98,67 @@ def test_seed_is_idempotent_when_invoked_repeatedly(client: TestClient) -> None:
                 assert document.metadata_json["owner_tag"] == SEED_COLLECTION_OWNER_TAG
 
 
+def test_seed_resync_updates_stale_description_and_embedding_model(
+    client: TestClient, monkeypatch,
+) -> None:
+    """ensure_default_rag_collections re-syncs description + embedding_model
+    on seed-owned rows when the spec drifts (e.g. legacy `nomic-embed-text`
+    rows from before the LM Studio cut-over). Reviewer-modified rows
+    (owner_tag stripped) are left alone.
+    """
+    from api.config import get_settings
+
+    monkeypatch.setenv("LMSTUDIO_EMBED_MODEL", "text-embedding-nomic-embed-text-v1.5")
+    get_settings.cache_clear()
+
+    target = _DEMO_SEED_COLLECTIONS[0]
+    with Session(get_engine()) as session:
+        collection = session.get(RAGCollectionRecord, target.collection_id)
+        assert collection is not None
+        collection.description = "STALE legacy description"
+        collection.embedding_model = "nomic-embed-text"
+        session.commit()
+
+    with Session(get_engine()) as session:
+        ensure_default_rag_collections(session)
+        refreshed = session.get(RAGCollectionRecord, target.collection_id)
+        assert refreshed is not None
+        # description and embedding_model both re-synced from the spec
+        assert refreshed.description == target.description
+        assert refreshed.embedding_model == "text-embedding-nomic-embed-text-v1.5"
+
+
+def test_seed_resync_leaves_reviewer_modified_rows_alone(
+    client: TestClient, monkeypatch,
+) -> None:
+    """If the reviewer stripped the seed owner_tag, ensure_default_rag_
+    collections must not overwrite their custom description/embedding.
+    """
+    from api.config import get_settings
+
+    monkeypatch.setenv("LMSTUDIO_EMBED_MODEL", "text-embedding-nomic-embed-text-v1.5")
+    get_settings.cache_clear()
+
+    target = _DEMO_SEED_COLLECTIONS[0]
+    with Session(get_engine()) as session:
+        collection = session.get(RAGCollectionRecord, target.collection_id)
+        assert collection is not None
+        collection.description = "Reviewer's custom note"
+        collection.embedding_model = "custom-embed-model"
+        # Strip the seed marker — simulates a reviewer claiming the row.
+        policy = dict(collection.chunking_policy_json or {})
+        policy.pop("owner_tag", None)
+        collection.chunking_policy_json = policy
+        session.commit()
+
+    with Session(get_engine()) as session:
+        ensure_default_rag_collections(session)
+        refreshed = session.get(RAGCollectionRecord, target.collection_id)
+        assert refreshed is not None
+        assert refreshed.description == "Reviewer's custom note"
+        assert refreshed.embedding_model == "custom-embed-model"
+
+
 def test_seed_documents_are_deletable_and_not_restored_until_collection_removed(
     client: TestClient,
 ) -> None:
