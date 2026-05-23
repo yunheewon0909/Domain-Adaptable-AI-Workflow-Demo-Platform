@@ -364,7 +364,12 @@ dom.trainStart.addEventListener('click', async () => {
   }
   const pairs = Math.max(1, Math.min(10, Number(dom.trainPairs.value) || 3));
   const maxChunks = Math.max(1, Math.min(200, Number(dom.trainMaxChunks.value) || 20));
-  const base = dom.trainBase.value.trim() || 'qwen3.5-4b-mlx';
+  // train-base select carries the same exposed_id the chat picker uses.
+  // Resolve back to the serving_model_name so the trainer can find the
+  // local LM Studio model dir (or HF id).
+  const selectedExposedId = dom.trainBase.value.trim() || state.selectedModelId;
+  const selectedModel = state.models.find((m) => m.id === selectedExposedId);
+  const base = (selectedModel && selectedModel.serving_model_name) || 'qwen3.5-4b-mlx';
   dom.trainStart.disabled = true;
   setTrainStep('generating');
   setTrainStatus('Generating Q/A pairs from collection…');
@@ -423,18 +428,26 @@ async function refreshModels() {
   } catch {
     state.models = [];
   }
+  // The chat picker shows exposed_id (display-friendly), but training
+  // needs the serving_model_name so the trainer can resolve the local
+  // LM Studio model dir. Render both selects from the same source.
   if (!state.models.length) {
     dom.chatModel.innerHTML = '<option value="">— no selectable models —</option>';
+    if (dom.trainBase)
+      dom.trainBase.innerHTML = '<option value="">— no selectable models —</option>';
     state.selectedModelId = null;
     return;
   }
-  dom.chatModel.innerHTML = state.models
+  const optionsHtml = state.models
     .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`)
     .join('');
+  dom.chatModel.innerHTML = optionsHtml;
+  if (dom.trainBase) dom.trainBase.innerHTML = optionsHtml;
   if (!state.selectedModelId || !state.models.some((m) => m.id === state.selectedModelId)) {
     state.selectedModelId = state.models[0].id;
   }
   dom.chatModel.value = state.selectedModelId;
+  if (dom.trainBase) dom.trainBase.value = state.selectedModelId;
   renderChatSuggestions();
 }
 

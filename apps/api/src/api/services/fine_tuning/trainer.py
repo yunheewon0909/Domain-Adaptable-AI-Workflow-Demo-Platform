@@ -81,6 +81,71 @@ def _parse_model_map(raw_value: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in parsed.items() if str(value).strip()}
 
 
+def _resolve_lmstudio_model_path(model_key: str) -> str | None:
+    """Resolve an LM Studio modelKey (e.g. `qwen3.5-4b-mlx`) to the
+    absolute on-disk path of its MLX repo directory.
+
+    Lets the trainer use the same model the chat picker selected, so
+    "I picked the 4B base in the dropdown" actually trains the 4B
+    instead of silently swapping to whatever `FT_TRAINER_MODEL_MAP_JSON`
+    maps to.
+
+    Returns None when:
+    - `lms` CLI is not on PATH
+    - the model is not indexed by LM Studio
+    - the resolved path doesn't look like an MLX repo
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    lms_exe = _shutil.which("lms") or str(
+        Path.home() / ".lmstudio" / "bin" / "lms"
+    )
+    if not Path(lms_exe).is_file():
+        return None
+    try:
+        completed = _subprocess.run(
+            [lms_exe, "ls", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (_subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        listing = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(listing, list):
+        return None
+    # LM Studio surfaces three identifiers per model; any can match the
+    # `serving_model_name` we received: `modelKey` (short id, e.g.
+    # `qwen3.5-4b-mlx`), `indexedModelIdentifier` (namespaced, e.g.
+    # `mlx-community/Qwen3.5-4B-MLX-4bit`), or the relative `path`
+    # (same as indexed id for most models). Accept any of the three.
+    for entry in listing:
+        if not isinstance(entry, dict):
+            continue
+        candidates = {
+            str(entry.get(field) or "").strip()
+            for field in ("modelKey", "indexedModelIdentifier", "path")
+        }
+        if model_key not in candidates:
+            continue
+        rel_path = str(entry.get("path") or "").strip()
+        if not rel_path:
+            continue
+        absolute = Path.home() / ".lmstudio" / "models" / rel_path
+        if (absolute / "config.json").is_file() and (
+            absolute / "model.safetensors"
+        ).is_file():
+            return str(absolute)
+        return None
+    return None
+
+
 def resolve_trainer_model_name(
     base_model_name: str,
     hyperparams_json: dict[str, Any],
@@ -89,13 +154,20 @@ def resolve_trainer_model_name(
     explicit = str(hyperparams_json.get("trainer_model_name") or "").strip()
     if explicit:
         return explicit
+    # If the user picked a base model that LM Studio already has on disk,
+    # train on that exact local copy. Avoids silently swapping a 4B
+    # picker selection for a 0.5B HF checkpoint via the env map.
+    local_path = _resolve_lmstudio_model_path(base_model_name)
+    if local_path:
+        return local_path
     model_map = _parse_model_map(settings.ft_trainer_model_map_json)
     if base_model_name in model_map:
         return model_map[base_model_name]
     if "/" in base_model_name:
         return base_model_name
     raise RuntimeError(
-        "trainer_model_name is required unless FT_TRAINER_MODEL_MAP_JSON maps the selected base model"
+        "trainer_model_name is required: no LM Studio model matches the base, "
+        "no FT_TRAINER_MODEL_MAP_JSON entry, and the base is not a HF model id."
     )
 
 
