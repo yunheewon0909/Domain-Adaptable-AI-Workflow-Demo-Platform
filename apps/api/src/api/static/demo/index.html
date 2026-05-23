@@ -120,6 +120,11 @@
           <li data-phase="succeeded" class="step px-2 py-1 rounded border border-border">Done</li>
         </ol>
         <div id="train-status" class="text-sm text-muted-fg">Idle.</div>
+
+        <details id="train-logs-wrap" class="text-xs text-muted-fg hidden">
+          <summary class="cursor-pointer">Show training log</summary>
+          <pre id="train-logs" class="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap"></pre>
+        </details>
       </section>
 
       <!-- Step 3: Chat -->
