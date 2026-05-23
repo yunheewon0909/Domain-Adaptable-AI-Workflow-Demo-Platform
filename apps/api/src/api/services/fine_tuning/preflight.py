@@ -195,13 +195,40 @@ def inspect_dependencies() -> list[PackageStatus]:
     return tools
 
 
+def _mlx_python_interpreter() -> str | None:
+    """Return the Python that brew's mlx_lm.lora was installed against.
+
+    The trainer shells out to brew `mlx_lm.lora`, which has its own
+    libexec venv with mlx installed. The uv workspace deliberately does
+    not ship mlx as a pip dep (see CLAUDE.md), so probing with the host
+    python3 always fails. Read the shebang of the mlx_lm.lora console
+    script to find the right interpreter.
+    """
+    lora_path = shutil.which("mlx_lm.lora")
+    if not lora_path:
+        return None
+    try:
+        with open(lora_path, "r", encoding="utf-8") as handle:
+            first_line = handle.readline().strip()
+    except OSError:
+        return None
+    if not first_line.startswith("#!"):
+        return None
+    candidate = first_line[2:].strip()
+    return candidate or None
+
+
 def inspect_mlx_runtime() -> DeviceStatus:
-    python_exe = shutil.which("python3.14") or shutil.which("python3")
+    python_exe = (
+        _mlx_python_interpreter()
+        or shutil.which("python3.14")
+        or shutil.which("python3")
+    )
     if python_exe is None:
         return DeviceStatus(
             mlx_available=False,
             metal_available=False,
-            detail="python3.14/python3 not found on PATH",
+            detail="No python interpreter with mlx found (checked brew mlx_lm.lora shebang and python3.14/python3 on PATH).",
         )
     returncode, stdout, stderr = _run_subprocess(
         [

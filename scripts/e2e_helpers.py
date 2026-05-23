@@ -366,17 +366,6 @@ def find_artifact_only_model() -> dict[str, object] | None:
     return None
 
 
-def choose_workflow_key(preferred: str = "briefing") -> str:
-    payload = json_list(request_json("GET", "/workflows", expected_status=200), "/workflows response")
-    keys = [str(item.get("key")) for item in payload if isinstance(item, dict)]
-    if preferred in keys:
-        return preferred
-    if not keys:
-        fail("No workflows are available from /workflows")
-        raise AssertionError("unreachable")
-    return keys[0]
-
-
 def create_rag_collection(name: str, description: str | None = None) -> dict[str, object]:
     payload = json_dict(
         request_json(

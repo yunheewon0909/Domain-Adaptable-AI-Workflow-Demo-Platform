@@ -82,6 +82,9 @@ def main() -> None:
     print_ok(f"uploaded document {document_id}")
 
     print_step("Generating Q/A dataset from RAG collection")
+    # Q/A generation makes one LM Studio chat call per chunk. With thinking
+    # models (Qwen3) each call can take 10-30s, so a 4-chunk smoke easily
+    # exceeds the 60s default; keep the call within ~5 minutes.
     dataset_resp = request_json(
         "POST",
         "/ft-datasets/from-rag-collection",
@@ -89,11 +92,12 @@ def main() -> None:
             "rag_collection_id": collection_id,
             "dataset_name": f"QLoRA RAG smoke dataset {suffix}",
             "version_label": "v1",
-            "max_chunks": 4,
+            "max_chunks": 2,
             "pairs_per_chunk": 2,
             "chunk_chars": 800,
         },
         expected_status=201,
+        timeout_seconds=300,
     )
     payload = json_dict(dataset_resp, "dataset-from-RAG response")
     dataset_id = assert_non_empty_string(payload.get("dataset_id"), "dataset_id")

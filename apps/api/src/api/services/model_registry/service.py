@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.config import get_project_root, get_settings
@@ -636,35 +637,57 @@ def create_training_job(
     )
     if resolved_training_method == "sft_qlora" and dataset_version.status != "locked":
         raise ValueError("real sft_qlora training requires a locked dataset version")
-    training_job = FTTrainingJobRecord(
-        id=_next_prefixed_id(session, FTTrainingJobRecord, "ft-job"),
-        dataset_version_id=dataset_version_id,
-        base_model_name=base_model_name.strip(),
-        training_method=resolved_training_method,
-        hyperparams_json=hyperparams_json or {},
-        trainer_backend=get_settings().ft_trainer_backend,
-    )
-    session.add(training_job)
-    session.flush()
-    queue_job = create_job(
-        session,
-        job_type="ft_train_model",
-        payload_json={
-            "training_job_id": training_job.id,
-            "dataset_version_id": dataset_version_id,
-            "base_model_name": training_job.base_model_name,
-            "training_method": training_job.training_method,
-        },
-        max_attempts=2,
-        commit=False,
-    )
-    training_job.backing_job_id = queue_job.id
-    training_job.log_text = (
-        "Queued fine-tuning job. "
-        "Real trainer execution requires a locked dataset version and compatible local training dependencies."
-    )
-    session.commit()
-    return get_training_job(session, training_job.id) or {"id": training_job.id}
+
+    # `_next_prefixed_id` does SELECT-then-INSERT, which races under
+    # concurrent POSTs and collides on the PK. Retry on IntegrityError with
+    # a fresh id allocation. The validation above is repeated implicitly
+    # because dataset_version_id is immutable; we only need to re-fetch the
+    # ORM instance after rollback to keep the session usable.
+    base_model_clean = base_model_name.strip()
+    trainer_backend = get_settings().ft_trainer_backend
+    hyperparams = hyperparams_json or {}
+    last_error: IntegrityError | None = None
+    for _ in range(5):
+        training_job = FTTrainingJobRecord(
+            id=_next_prefixed_id(session, FTTrainingJobRecord, "ft-job"),
+            dataset_version_id=dataset_version_id,
+            base_model_name=base_model_clean,
+            training_method=resolved_training_method,
+            hyperparams_json=hyperparams,
+            trainer_backend=trainer_backend,
+        )
+        session.add(training_job)
+        try:
+            session.flush()
+            queue_job = create_job(
+                session,
+                job_type="ft_train_model",
+                payload_json={
+                    "training_job_id": training_job.id,
+                    "dataset_version_id": dataset_version_id,
+                    "base_model_name": training_job.base_model_name,
+                    "training_method": training_job.training_method,
+                },
+                max_attempts=2,
+                commit=False,
+            )
+            training_job.backing_job_id = queue_job.id
+            training_job.log_text = (
+                "Queued fine-tuning job. "
+                "Real trainer execution requires a locked dataset version and compatible local training dependencies."
+            )
+            session.commit()
+            return get_training_job(session, training_job.id) or {"id": training_job.id}
+        except IntegrityError as exc:
+            last_error = exc
+            session.rollback()
+            # ORM identity map is cleared; ensure we don't reuse stale state
+            # on the next attempt.
+            dataset_version = session.get(FTDatasetVersionRecord, dataset_version_id)
+            if dataset_version is None:
+                raise KeyError(dataset_version_id) from exc
+    assert last_error is not None
+    raise last_error
 
 
 def list_training_jobs(session: Session) -> list[dict[str, Any]]:
