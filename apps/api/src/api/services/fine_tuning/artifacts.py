@@ -172,10 +172,16 @@ def build_publish_manifest(
 ) -> tuple[Path, dict[str, Any]]:
     manifest_dir.mkdir(parents=True, exist_ok=True)
     modelfile_path = manifest_dir / "Modelfile.template"
+    # LM Studio scans `~/.lmstudio/models/<creator>/<repo>/` but exposes
+    # the model in `/v1/models` under just `<repo>` (the basename) — its
+    # default identifier matches the leaf dir name, not the full
+    # namespaced path. Use the basename here so the publish probe's
+    # `candidate_model_name` matches what LM Studio actually reports.
+    # The namespace is still used to lay out the on-disk hierarchy in
+    # `register_fused_model`.
     model_name = None
     if settings.mlx_model_namespace:
-        artifact_root_name = manifest_dir.parent.name
-        model_name = f"{settings.mlx_model_namespace}/{artifact_root_name}"
+        model_name = manifest_dir.parent.name
 
     modelfile_contents = "\n".join(
         [

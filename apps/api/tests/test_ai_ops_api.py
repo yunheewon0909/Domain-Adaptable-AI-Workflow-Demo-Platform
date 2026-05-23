@@ -458,7 +458,7 @@ def test_training_job_model_registry_and_inference_flow(
         assert publish_response.json()["readiness"]["selectable"] is False
         assert (
             publish_response.json()["candidate_published_model_name"]
-            == f"demo/{training_job_id}"
+            == training_job_id
         )
         assert publish_response.json()["readiness"]["runtime_ready"] is False
         assert any(
@@ -477,7 +477,7 @@ def test_training_job_model_registry_and_inference_flow(
         )
         assert (
             lineage_response.json()["candidate_published_model_name"]
-            == f"demo/{training_job_id}"
+            == training_job_id
         )
 
         artifact_id = training_detail.json()["artifacts"][0]["id"]
@@ -572,7 +572,7 @@ def test_publish_disabled_returns_truthful_artifact_ready_status(
     assert publish_response.json()["readiness"]["selectable"] is False
     assert (
         publish_response.json()["candidate_published_model_name"]
-        == f"demo/{training_job_id}"
+        == training_job_id
     )
 
 

@@ -44,7 +44,12 @@ ALLOWED_TRAINING_STATUSES = {
     "failed",
 }
 ARTIFACT_ONLY_MODEL_STATUSES = {"artifact_ready"}
-READY_MODEL_STATUSES = {"published"}
+# Both `published` (legacy fine-tuned ready) and `active` (what
+# publish_training_job_artifacts actually sets on a successful publish)
+# count as selectable-ready for the fine_tuned readiness branch.
+# Without `active` here, freshly published fine-tuned rows were stuck
+# reporting "artifact-ready only" even after LM Studio loaded them.
+READY_MODEL_STATUSES = {"published", "active"}
 ALLOWED_PUBLISH_STATUSES = {"not_requested", "publish_ready", "published", "failed"}
 
 

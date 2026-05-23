@@ -128,7 +128,22 @@ def _resolve_selectable_model(session: Session, requested_model: str) -> dict[st
 
     models = list_models(session)
     by_id = {str(model["id"]): model for model in models if model.get("id")}
-    by_exposed_id = {_exposed_model_id(model): model for model in models}
+    # `list_models` returns newest-first. Multiple fine-tuned rows can
+    # share a `display_name` (and thus exposed_id), e.g. two training
+    # runs of the same dataset version. Build the dict in two passes so
+    # the *selectable* one wins when present; otherwise fall back to
+    # the newest non-selectable. Without this, a stale failed-publish
+    # row from an earlier session can win and the chat call dies with
+    # "fine-tuned model publish preparation failed" even though a
+    # working sibling is loaded in LM Studio.
+    by_exposed_id: dict[str, dict[str, Any]] = {}
+    for model in models:  # newest first
+        key = _exposed_model_id(model)
+        if key not in by_exposed_id:
+            by_exposed_id[key] = model
+    for model in models:  # override with a selectable sibling if any
+        if _is_selectable(model):
+            by_exposed_id[_exposed_model_id(model)] = model
     if requested in by_exposed_id:
         model = by_exposed_id[requested]
         if not _is_selectable(model):
