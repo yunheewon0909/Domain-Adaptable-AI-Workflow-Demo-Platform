@@ -3,6 +3,8 @@
 .codex/
 .agents/
 .claude/
+.panda/
+.aider*
 
 # Python
 __pycache__/
