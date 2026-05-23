@@ -111,3 +111,70 @@ def test_generate_answer_uses_split_timeout_budget(
     assert timeout.read == 600
     assert timeout.write == 600
     assert timeout.pool == 5.0
+
+
+def test_generate_answer_sends_chat_template_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The LMStudio body must include `chat_template_kwargs.enable_thinking
+    = false` so reasoning-mode models that honor the kwarg (Qwen3, R1) skip
+    the thinking pass. Other models silently ignore the unknown kwarg.
+    """
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="qwen3.5-4b-mlx",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, timeout):
+        captured["payload"] = json
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"choices": [{"message": {"content": "ok"}}]},
+        )
+
+    monkeypatch.setattr("api.llm.httpx.post", fake_post)
+    client.generate_answer(question="x", context="y")
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_generate_answer_raises_actionable_error_on_reasoning_only_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a thinking-mode model exhausts max_tokens during the reasoning
+    pass, LM Studio returns empty `content` + populated `reasoning_content`.
+    The previous behavior returned the raw reasoning chain as the answer
+    (rendering "Thinking Process: 1. Analyze..." to the user). The new
+    behavior raises a clear LLMClientError suggesting more tokens.
+    """
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="qwen3.5-4b-mlx",
+    )
+
+    def fake_post(url, *, json, timeout):
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "Thinking Process: 1. Analyze...",
+                        }
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("api.llm.httpx.post", fake_post)
+
+    with pytest.raises(LLMClientError, match="Increase max_tokens"):
+        client.generate_answer(question="hi", context="ctx", max_tokens=64)
