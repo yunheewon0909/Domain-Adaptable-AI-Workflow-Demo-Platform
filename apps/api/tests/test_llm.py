@@ -143,6 +143,43 @@ def test_generate_answer_sends_chat_template_kwargs(
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_generate_answer_system_prompt_allows_own_knowledge_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The system prompt was tightened in iteration 6 to let the model
+    answer from its own knowledge when no useful context is provided.
+    Before the fix, chat-only mode (no rag_collection_id) always
+    returned "Context is insufficient." because the prompt told the
+    model to "answer using only the provided context".
+    """
+    client = LMStudioChatClient(
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="qwen3.5-4b-mlx",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, timeout):
+        captured["payload"] = json
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"choices": [{"message": {"content": "Paris"}}]},
+        )
+
+    monkeypatch.setattr("api.llm.httpx.post", fake_post)
+    client.generate_answer(question="capital of France?", context="No prior context provided.")
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    messages = payload["messages"]
+    assert isinstance(messages, list)
+    system_msg = next(m for m in messages if m["role"] == "system")
+    assert "own knowledge" in system_msg["content"]
+    # The old "Answer using only the provided context" prompt is gone.
+    assert "using only the provided context" not in system_msg["content"]
+
+
 def test_generate_answer_raises_actionable_error_on_reasoning_only_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
