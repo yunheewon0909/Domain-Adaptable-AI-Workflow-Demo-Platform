@@ -439,14 +439,26 @@ def create_locked_ft_dataset(*, dataset_name: str, rows: list[dict[str, object]]
     return {"dataset_id": dataset_id, "version_id": version_id}
 
 
-def enqueue_ft_smoke_training(version_id: str, *, trainer_model_name: str = "hf-internal/testing-tiny-random-gpt2") -> dict[str, object]:
+def enqueue_ft_smoke_training(
+    version_id: str,
+    *,
+    trainer_model_name: str = "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    base_model_name: str = "qwen3.5-4b-mlx",
+) -> dict[str, object]:
+    """Enqueue a smoke training job.
+
+    The default trainer_model_name resolves to a tiny MLX checkpoint that
+    the brew `mlx_lm.lora` CLI can download from Hugging Face the first
+    time it runs. The default base_model_name matches the current
+    Mac-native demo model so the lineage warning makes sense.
+    """
     payload = json_dict(
         request_json(
         "POST",
         "/ft-training-jobs",
         json_body={
             "dataset_version_id": version_id,
-            "base_model_name": "qwen2.5:7b-instruct-q4_K_M",
+            "base_model_name": base_model_name,
             "training_method": "sft_qlora",
             "hyperparams_json": {
                 "smoke_test": True,
