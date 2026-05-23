@@ -367,6 +367,32 @@ def _stream_via_lmstudio(
             chunk["id"] = completion_id
             chunk["model"] = exposed_model_id
             chunk["created"] = created
+            # system_fingerprint leaks the upstream serving name; strip it
+            # so all client-facing identifiers stay platform-owned.
+            chunk.pop("system_fingerprint", None)
+            # Thinking-mode models (Qwen3, DeepSeek-R1) stream tokens in
+            # `reasoning_content` and leave `content` empty until the
+            # reasoning pass ends. Most OpenAI-compatible clients only
+            # render `content`, so mirror reasoning tokens into a
+            # `content` field while the model is still thinking. The
+            # final assistant message (after the reasoning pass) lands in
+            # `content` natively and overwrites this on its own chunk.
+            choices = chunk.get("choices")
+            if isinstance(choices, list):
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        continue
+                    delta = choice.get("delta")
+                    if not isinstance(delta, dict):
+                        continue
+                    content = delta.get("content")
+                    reasoning = delta.get("reasoning_content")
+                    if (
+                        (not isinstance(content, str) or not content)
+                        and isinstance(reasoning, str)
+                        and reasoning
+                    ):
+                        delta["content"] = reasoning
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
     except LLMClientError as exc:
         error_chunk = {

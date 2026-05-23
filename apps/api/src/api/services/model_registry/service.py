@@ -516,15 +516,22 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
     ).all()
     for model in stale_seeds:
         tags = list(model.tags_json or [])
-        if "default" in tags or "fallback" in tags:
+        # Anything whose display_name starts with "Default " was originally
+        # auto-seeded by this function. Earlier versions of the demote
+        # branch stripped the "default" tag, turning those rows into
+        # immortal zombies; treat the display_name as the authoritative
+        # marker so they get cleaned up regardless of tag drift.
+        is_auto_seed = (
+            "default" in tags
+            or "fallback" in tags
+            or (model.display_name or "").startswith("Default ")
+        )
+        if is_auto_seed:
             session.delete(model)
         elif model.status == "active":
-            # User-promoted base row pointing at a different serving name —
-            # demote instead of delete so we don't lose history.
+            # User-promoted non-auto-seed pointing the wrong way — demote
+            # so we don't lose user-curated history.
             model.status = "registered"
-            model.tags_json = [t for t in tags if t != "default"]
-            if "base" not in model.tags_json:
-                model.tags_json.append("base")
             model.updated_at = now
 
     for item in defaults:
