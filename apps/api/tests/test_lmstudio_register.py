@@ -158,3 +158,81 @@ def test_probe_lmstudio_returns_false_when_unreachable() -> None:
         assert probe_lmstudio_for_model(
             base_url="http://127.0.0.1:1234/v1", model_id="demo/x"
         ) is False
+
+
+def test_loaded_lmstudio_models_caches_within_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The /models probe is cached per base_url for 30s to keep list_models
+    cheap on the polling path. Two back-to-back calls hit urllib once.
+    """
+    from api.services.model_registry import lmstudio_register as _module
+
+    monkeypatch.setattr(
+        _module, "loaded_lmstudio_models", _real_loaded_lmstudio_models
+    )
+    _module.invalidate_loaded_cache()
+
+    call_count = {"n": 0}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            call_count["n"] += 1
+            return json.dumps({"data": [{"id": "demo/x"}]}).encode("utf-8")
+
+    with patch(
+        "api.services.model_registry.lmstudio_register.urllib.request.urlopen",
+        return_value=_Resp(),
+    ):
+        first = _real_loaded_lmstudio_models(base_url="http://127.0.0.1:1234/v1")
+        second = _real_loaded_lmstudio_models(base_url="http://127.0.0.1:1234/v1")
+
+    assert first == second == frozenset({"demo/x"})
+    assert call_count["n"] == 1, "second call should hit the cache, not urllib"
+
+
+def test_invalidate_loaded_cache_forces_fresh_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`invalidate_loaded_cache` makes the next probe re-hit the network.
+
+    The publish flow calls this so a reviewer who manually loads the
+    fused model in LM Studio sees the registry row flip from
+    `publish_ready` to `published` on the next click, instead of waiting
+    up to 30s for the cache to expire.
+    """
+    from api.services.model_registry import lmstudio_register as _module
+
+    monkeypatch.setattr(
+        _module, "loaded_lmstudio_models", _real_loaded_lmstudio_models
+    )
+    _module.invalidate_loaded_cache()
+
+    call_count = {"n": 0}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            call_count["n"] += 1
+            return json.dumps({"data": [{"id": "demo/x"}]}).encode("utf-8")
+
+    with patch(
+        "api.services.model_registry.lmstudio_register.urllib.request.urlopen",
+        return_value=_Resp(),
+    ):
+        _real_loaded_lmstudio_models(base_url="http://127.0.0.1:1234/v1")
+        _module.invalidate_loaded_cache()
+        _real_loaded_lmstudio_models(base_url="http://127.0.0.1:1234/v1")
+
+    assert call_count["n"] == 2, "invalidate must drop the cached entry"
