@@ -8,6 +8,7 @@ from api.services.fine_tuning.preflight import (
     LMStudioStatus,
     PackageStatus,
     PreflightConfig,
+    _mlx_python_interpreter,
     exit_code_for_results,
     format_results,
     run_preflight,
@@ -253,3 +254,46 @@ def test_preflight_fails_for_unsupported_training_method(tmp_path: Path) -> None
     method_result = _result(results, "Training method")
     assert method_result.level == "fail"
     assert "sft_qlora" in method_result.detail
+
+
+def test_mlx_python_interpreter_returns_none_when_cli_absent(
+    monkeypatch,
+) -> None:
+    """When `mlx_lm.lora` is not on PATH, we fall back to host python."""
+    monkeypatch.setattr(
+        "api.services.fine_tuning.preflight.shutil.which",
+        lambda name: None,
+    )
+    assert _mlx_python_interpreter() is None
+
+
+def test_mlx_python_interpreter_reads_shebang(tmp_path: Path, monkeypatch) -> None:
+    """Read the brew console script's shebang to find the interpreter that
+    actually has mlx installed (the uv workspace deliberately doesn't ship
+    mlx as a pip dep; the trainer uses brew's libexec venv via subprocess).
+    """
+    fake_cli = tmp_path / "mlx_lm.lora"
+    fake_cli.write_text(
+        "#!/opt/homebrew/Cellar/mlx-lm/0.31.3_1/libexec/bin/python\n"
+        "import sys\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "api.services.fine_tuning.preflight.shutil.which",
+        lambda name: str(fake_cli) if name == "mlx_lm.lora" else None,
+    )
+    result = _mlx_python_interpreter()
+    assert result == "/opt/homebrew/Cellar/mlx-lm/0.31.3_1/libexec/bin/python"
+
+
+def test_mlx_python_interpreter_returns_none_when_no_shebang(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Defensive: if the CLI has no shebang line, fall back to host python."""
+    fake_cli = tmp_path / "mlx_lm.lora"
+    fake_cli.write_text("not a shebang\nimport sys\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "api.services.fine_tuning.preflight.shutil.which",
+        lambda name: str(fake_cli) if name == "mlx_lm.lora" else None,
+    )
+    assert _mlx_python_interpreter() is None
