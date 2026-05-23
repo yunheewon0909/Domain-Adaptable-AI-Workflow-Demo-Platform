@@ -90,8 +90,10 @@ class LMStudioChatClient:
                     {
                         "role": "system",
                         "content": (
-                            "Answer using only the provided context when possible. "
-                            "If context is insufficient, say so briefly."
+                            "Answer the user's question concisely. If the "
+                            "Context block contains relevant evidence, ground "
+                            "your answer in it; otherwise rely on your own "
+                            "knowledge."
                         ),
                     },
                     {
