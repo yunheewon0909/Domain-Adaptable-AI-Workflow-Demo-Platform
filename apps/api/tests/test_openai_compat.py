@@ -394,6 +394,102 @@ def test_v1_chat_completions_streams_real_lmstudio_chunks(
     assert roles == ["system", "user"]
 
 
+def test_v1_chat_completions_stream_mirrors_reasoning_content_to_content(
+    client: TestClient,
+) -> None:
+    """Thinking-mode models (Qwen3 etc.) stream tokens in `reasoning_content`
+    and leave `content` empty until the post-think summary. Generic OpenAI
+    SSE clients only render `delta.content`, so the shim mirrors reasoning
+    tokens into `content` while the reasoning pass is still running.
+    """
+    from api.llm import LMStudioChatClient
+    from api.main import app
+
+    listing = client.get("/v1/models").json()["data"]
+    selected = listing[0]
+
+    streamed_chunks = [
+        {
+            "id": "lmstudio-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": selected["serving_model_name"],
+            "system_fingerprint": selected["serving_model_name"],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "reasoning_content": "Thinking"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "lmstudio-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": selected["serving_model_name"],
+            "system_fingerprint": selected["serving_model_name"],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"reasoning_content": " harder"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "lmstudio-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": selected["serving_model_name"],
+            "system_fingerprint": selected["serving_model_name"],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Final answer."},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+    ]
+
+    class _FakeLMStudio(LMStudioChatClient):
+        def __init__(self) -> None:
+            super().__init__(
+                base_url="http://127.0.0.1:1234/v1",
+                default_model=selected["serving_model_name"],
+            )
+
+        def stream_chat_messages(self, *, messages, model=None, temperature=0, max_tokens=None):
+            for chunk in streamed_chunks:
+                yield chunk
+
+    from api.dependencies import get_llm_client
+
+    app.dependency_overrides[get_llm_client] = lambda: _FakeLMStudio()
+    try:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": selected["id"],
+                "messages": [{"role": "user", "content": "think hard then answer"}],
+                "stream": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_llm_client, None)
+
+    assert response.status_code == 200
+    text = response.text
+    # system_fingerprint must NOT leak the upstream serving name past the shim
+    assert "system_fingerprint" not in text
+    # reasoning_content tokens are mirrored into content for generic clients
+    assert "Thinking" in text
+    assert "harder" in text
+    # Real assistant content (post-think summary) also lands in content
+    assert "Final answer." in text
+
+
 def test_v1_chat_completions_requires_user_message(
     client_with_llm: TestClient,
 ) -> None:
