@@ -159,6 +159,45 @@ def test_seed_resync_leaves_reviewer_modified_rows_alone(
         assert refreshed.embedding_model == "custom-embed-model"
 
 
+def test_create_collection_retries_on_id_collision(
+    client: TestClient, monkeypatch,
+) -> None:
+    """`_next_prefixed_id` does SELECT-then-INSERT, which races under
+    concurrent POSTs. The fix in commit d94e78f wraps the allocation in
+    a 5-attempt retry on IntegrityError. Simulate one collision by
+    making the first allocator call return an id that already exists,
+    then verify the second attempt succeeds with a fresh id.
+    """
+    from api.services.rag import collections as _coll
+
+    # Create one collection to establish a colliding id.
+    first = client.post(
+        "/rag-collections", json={"name": "first-collection"}
+    ).json()
+    colliding_id = first["id"]
+
+    # Make the next _next_prefixed_id call return that same id once,
+    # then defer to the real implementation.
+    real_next_id = _coll._next_prefixed_id
+    calls = {"n": 0}
+
+    def fake_next_id(session, model, prefix):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return colliding_id
+        return real_next_id(session, model, prefix)
+
+    monkeypatch.setattr(_coll, "_next_prefixed_id", fake_next_id)
+
+    response = client.post(
+        "/rag-collections", json={"name": "second-collection"}
+    )
+    assert response.status_code == 201, response.text
+    second = response.json()
+    assert second["id"] != colliding_id
+    assert calls["n"] >= 2, "retry must have re-allocated after the collision"
+
+
 def test_seed_documents_are_deletable_and_not_restored_until_collection_removed(
     client: TestClient,
 ) -> None:
