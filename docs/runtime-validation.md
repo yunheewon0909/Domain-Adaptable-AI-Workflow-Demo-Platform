@@ -45,11 +45,16 @@ This policy is intentionally strict because `artifact_ready` / `publish_ready` r
 
 ## Script inventory
 
-### `python scripts/e2e_rag_collection_workflow_smoke.py`
+### `scripts/e2e_qlora_rag_dataset_smoke.py`
 
-Verifies collection creation, document upload, retrieval preview, and a `/v1/chat/completions` call grounded with `rag_collection_id`.
+Headline QLoRA-on-RAG-collection feature:
+- create a RAG collection + upload a small document
+- `POST /ft-datasets/from-rag-collection` generates Q/A pairs via LM Studio
+- confirms rows are written and dataset / version IDs come back
 
-### `python scripts/e2e_ft_smoke_fallback.py`
+Requires LM Studio with the configured chat model loaded.
+
+### `scripts/e2e_ft_smoke_fallback.py`
 
 End-to-end FT smoke:
 - dataset/version/row creation through the live API
@@ -60,26 +65,15 @@ End-to-end FT smoke:
 
 If the runtime hits the smoke fallback path, the script confirms `artifact_validation.smoke_fallback_used == true`. If the runtime completes the real `mlx_qlora` path directly, the script reports that honestly.
 
-### `python scripts/e2e_model_gating_smoke.py`
-
-- artifact-only fine-tuned model exists or can be created via the FT smoke
-- `/inference/run` rejects that `model_id`
-- artifact-only IDs never appear among `readiness.selectable == true` rows in `/v1/models`
-
-### `python scripts/e2e_rag_document_management.py`
+### `scripts/e2e_rag_document_management.py`
 
 - collection creation, document upload/list/detail
 - retrieval preview includes the uploaded document
 - delete removes the document; detail returns 404 after
 
-### `python scripts/e2e_job_queue_processing.py`
-
-- two FT smoke jobs enqueued together both reach terminal state
-- no polled job remains stuck in `queued`/`running`
-
 ### `./scripts/e2e_run_all.sh`
 
-Runs the scripts above in order. Workflow-source / PLC scripts were removed with the v0.9.0 slice cull.
+Runs the three scripts above in order via `uv run --project apps/api python`. The Workflow / model-gating / job-queue scripts were removed with the v0.9.0 slice cull because they depended on the deleted `/workflows` surface.
 
 ## Recommended execution order
 

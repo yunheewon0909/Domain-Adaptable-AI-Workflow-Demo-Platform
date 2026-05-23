@@ -100,6 +100,34 @@ _RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {
 }
 
 
+def reap_unsupported_queue_rows(session: Session) -> int:
+    """Mark queued/running rows whose `type` has no registered runner as failed.
+
+    Legacy job types (e.g. `workflow_run` from the removed reviewer workflow
+    surface) accumulate as zombies because the dispatcher's WHERE clause
+    filters them out — they sit in `queued` forever. Run this once at
+    startup to mark them terminal so the queue table stays honest.
+    """
+    supported = tuple(_RUNNERS.keys())
+    stmt = select(JobRecord).where(
+        JobRecord.status.in_(("queued", "running")),
+        JobRecord.type.notin_(supported),
+    )
+    now = datetime.now(timezone.utc)
+    rows = session.scalars(stmt).all()
+    for row in rows:
+        row.status = "failed"
+        row.finished_at = now
+        row.updated_at = now
+        row.error = (
+            f"job type '{row.type}' is no longer supported by the dispatcher "
+            f"(known runners: {sorted(supported)})"
+        )
+    if rows:
+        session.commit()
+    return len(rows)
+
+
 async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> None:
     """Run a single claimed job in a worker thread, recording outcome."""
     runner = _RUNNERS.get(job_type)
