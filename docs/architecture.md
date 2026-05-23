@@ -34,11 +34,11 @@ Tables:
 
 End-to-end loop:
 
-1. Create a RAG collection and upload documents (`POST /rag-collections`, `POST /rag-collections/{id}/documents`).
+1. Create a RAG collection and upload documents (`POST /rag-collections`, `POST /rag-collections/{id}/documents`). Remove either with `DELETE /rag-documents/{id}` (single doc) or `DELETE /rag-collections/{id}` (cascading to documents + on-disk storage).
 2. Generate a fine-tuning dataset from the collection (`POST /ft-datasets/from-rag-collection`). The Q/A generator chunks the document `text_preview`, asks LM Studio for strict-JSON `{"question":..., "answer":...}` pairs per chunk, and writes them as `ft_dataset_rows` with `input_json={"instruction":..., "input":""}`, `target_json={"output":...}`.
 3. Lock the dataset version (`POST /ft-dataset-versions/{id}/status`).
 4. Enqueue training (`POST /ft-training-jobs`). The trainer exports JSONL under `data/model_artifacts/<job_id>/dataset_export/`, runs `mlx_lm.lora` → adapter weights, then `mlx_lm.fuse` → a fused MLX model dir.
-5. Publish (`POST /ft-training-jobs/{id}/publish`). The platform symlinks the fused model dir into `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` and probes LM Studio's `/v1/models`. If LM Studio reports the model loaded, the registry row flips from `artifact_ready` to `published`/`selectable` and shows up in `/v1/models`.
+5. Publish (`POST /ft-training-jobs/{id}/publish`). The platform symlinks the fused model dir into `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` (`MLX_MODEL_NAMESPACE` defaults to `demo`) and probes LM Studio's `/v1/models`. The probe invalidates its 30s cache first so a reviewer who just loaded the model in LM Studio sees the registry flip on the same click. If LM Studio reports the model loaded, the registry row flips from `artifact_ready` to `published`/`selectable` and shows up in `/v1/models`.
 
 ## Readiness gating
 
@@ -58,7 +58,7 @@ End-to-end loop:
 
 `POST /v1/chat/completions`:
 - non-streaming: buffered single response
-- streaming (`stream: true`): real LM Studio SSE chunks proxied through; `id` and `model` are rewritten to the platform's exposed identifiers; a trailing platform-metadata chunk + `data: [DONE]` are appended
+- streaming (`stream: true`): real LM Studio SSE chunks proxied through; `id` and `model` are rewritten to the platform's exposed identifiers, `system_fingerprint` is stripped, and thinking-mode `reasoning_content` deltas are mirrored into `content` for generic OpenAI clients; a trailing platform-metadata chunk + `data: [DONE]` are appended
 
 Optional `rag_collection_id` + `top_k` body fields ground a completion with platform-managed RAG evidence. Plain OpenAI clients that don't send these fields get ordinary registry-gated chat.
 
