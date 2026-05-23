@@ -433,6 +433,43 @@ def test_delete_rag_document_returns_error_for_missing() -> None:
     assert decoded["http_status"] == 404
 
 
+def test_delete_rag_collection_returns_success_envelope() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned = {
+        "collection_id": "rag-c1",
+        "deleted": True,
+        "document_count": 3,
+        "storage_deleted": True,
+    }
+    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
+
+    decoded = json.loads(tools.delete_rag_collection("rag-c1"))
+    assert decoded["ok"] is True
+    assert decoded["action"] == "delete_rag_collection"
+    assert decoded["collection_id"] == "rag-c1"
+    assert decoded["deleted"] is True
+    assert decoded["document_count"] == 3
+    assert decoded["storage_deleted"] is True
+
+
+def test_delete_rag_collection_returns_error_for_missing() -> None:
+    module = _load_platform_tools_module()
+    tools = module.Tools()
+
+    canned_error = {"detail": "RAG collection not found"}
+    tools._request = lambda method, path, *, json_body=None: (  # type: ignore[attr-defined]
+        404,
+        canned_error,
+    )
+
+    decoded = json.loads(tools.delete_rag_collection("does-not-exist"))
+    assert decoded["ok"] is False
+    assert decoded["action"] == "delete_rag_collection"
+    assert decoded["http_status"] == 404
+
+
 def test_get_rag_collection_detail_via_e2e_returns_404_for_missing(
     platform_tools_against_client,
 ) -> None:
