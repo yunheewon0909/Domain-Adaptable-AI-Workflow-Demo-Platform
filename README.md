@@ -154,7 +154,7 @@ The `jobs` table is the queue and lifecycle source of truth (`queued → running
 
 ### Readiness gating
 
-`artifact_ready` (reviewable, not selectable) → `publish_ready` (manifest exists) → `selectable` (LM Studio reports the fused model loaded). The platform places the fused model under `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` but does not auto-load — you click "Load" in LM Studio's UI, then the platform's probe flips the registry row to `published`/`selectable`.
+`artifact_ready` (reviewable, not selectable) → `publish_ready` (manifest exists) → `selectable` (LM Studio reports the fused model loaded). The platform places the fused model under `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` (defaults to `demo/<job_id>` when `MLX_MODEL_NAMESPACE` is unset) but does not auto-load — you click "Load" in LM Studio's UI, then the platform's probe (which drops its 30s cache before each publish call) flips the registry row to `published`/`selectable`.
 
 `base_model_name` (user-facing serving lineage), `trainer_model_name` (the actual MLX/HF checkpoint used by `mlx_lm.lora`), and `display_name` are intentionally distinct.
 
