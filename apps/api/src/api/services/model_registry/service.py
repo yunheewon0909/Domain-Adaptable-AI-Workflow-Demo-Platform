@@ -1315,6 +1315,15 @@ def _register_with_lmstudio(
 
 
 def _probe_lmstudio(*, base_url: str, model_id: str) -> bool:
-    from api.services.model_registry.lmstudio_register import probe_lmstudio_for_model
+    from api.services.model_registry.lmstudio_register import (
+        invalidate_loaded_cache,
+        probe_lmstudio_for_model,
+    )
 
+    # Publish is an explicit "load this now" gesture by the reviewer, so
+    # bypass the 30s `loaded_lmstudio_models` cache once and read LM Studio
+    # fresh. Without this, a reviewer who loads the model in LM Studio
+    # immediately after the first publish call sees stale "not loaded"
+    # for up to 30s.
+    invalidate_loaded_cache()
     return probe_lmstudio_for_model(base_url=base_url, model_id=model_id)
