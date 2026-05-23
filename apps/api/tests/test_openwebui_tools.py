@@ -67,6 +67,7 @@ def test_platform_tools_exposes_expected_methods() -> None:
         "list_rag_documents",
         "get_rag_document",
         "delete_rag_document",
+        "delete_rag_collection",
         "list_selectable_models",
         "list_platform_models",
         "get_model_detail",
@@ -121,6 +122,7 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "def list_rag_documents" in body
     assert "def get_rag_document" in body
     assert "def delete_rag_document" in body
+    assert "def delete_rag_collection" in body
     assert "def list_selectable_models" in body
     assert "def list_platform_models" in body
     assert "def get_model_detail" in body
@@ -152,6 +154,7 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
         "list_rag_documents",
         "get_rag_document",
         "delete_rag_document",
+        "delete_rag_collection",
         "list_selectable_models",
         "list_platform_models",
         "get_model_detail",

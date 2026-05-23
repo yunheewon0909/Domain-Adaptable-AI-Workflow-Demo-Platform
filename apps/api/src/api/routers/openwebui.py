@@ -60,6 +60,7 @@ def get_openwebui_manifest() -> dict[str, object]:
                     "list_rag_documents",
                     "get_rag_document",
                     "delete_rag_document",
+                    "delete_rag_collection",
                     "list_selectable_models",
                     "list_platform_models",
                     "get_model_detail",

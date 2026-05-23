@@ -505,6 +505,36 @@ class Tools:
             }
         )
 
+    def delete_rag_collection(self, collection_id: str) -> str:
+        """Delete a RAG collection and all of its documents. DESTRUCTIVE.
+
+        Cascades: removes every document in the collection plus the
+        on-disk storage directory. Always confirm the user's intent
+        before calling — the cascade cannot be undone, and a deleted
+        seed collection is not silently restored on the next API
+        restart.
+
+        :param collection_id: Collection id from list_rag_collections.
+        :return: JSON string with a confirmation envelope
+            (deleted=true, document_count, storage_deleted), or an
+            error envelope when the collection does not exist.
+        """
+        encoded_id = urllib.parse.quote(collection_id, safe="")
+        status, body = self._request("DELETE", f"/rag-collections/{encoded_id}")
+        if status != 200:
+            return self._error(status, body, action="delete_rag_collection")
+        result = body if isinstance(body, dict) else {"raw": body}
+        return self._format(
+            {
+                "ok": True,
+                "action": "delete_rag_collection",
+                "collection_id": result.get("collection_id") or collection_id,
+                "deleted": bool(result.get("deleted", True)),
+                "document_count": result.get("document_count"),
+                "storage_deleted": result.get("storage_deleted"),
+            }
+        )
+
     # ---- Selectable models --------------------------------------------
 
     def list_selectable_models(self) -> str:
