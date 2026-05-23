@@ -417,4 +417,4 @@ def test_legacy_demo_route_still_works(client: TestClient) -> None:
     response = client.get("/demo")
 
     assert response.status_code == 200
-    assert "Fine-tuning" in response.text
+    assert "Knowledge base" in response.text

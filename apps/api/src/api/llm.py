@@ -117,8 +117,18 @@ class LMStudioChatClient:
             raise ValueError("Invalid chat completion payload: missing choices")
 
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(message, dict):
+            raise ValueError(
+                "Invalid chat completion payload: missing assistant message"
+            )
+        content = message.get("content")
         if not isinstance(content, str) or not content.strip():
+            # Qwen3 / DeepSeek-R1 style reasoning models put output in
+            # `reasoning_content` and leave `content` empty when only the
+            # thinking pass ran (e.g. truncated by max_tokens).
+            reasoning = message.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                return reasoning.strip()
             raise ValueError(
                 "Invalid chat completion payload: missing assistant content"
             )
