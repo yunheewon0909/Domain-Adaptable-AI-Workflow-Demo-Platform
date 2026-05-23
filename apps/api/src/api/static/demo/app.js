@@ -485,7 +485,7 @@ dom.chatForm.addEventListener('submit', async (event) => {
   const body = {
     model: state.selectedModelId,
     messages: state.chat.messages.map(({ role, content }) => ({ role, content })),
-    max_tokens: 1024,
+    max_tokens: 4096,
   };
   const groundedCollection = selectedCollection();
   if (dom.chatGround.checked && groundedCollection) {

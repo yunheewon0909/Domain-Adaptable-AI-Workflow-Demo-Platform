@@ -100,6 +100,10 @@ class LMStudioChatClient:
                     },
                 ],
                 "temperature": temperature,
+                # Suppress Qwen3 / DeepSeek-R1 thinking pass so demo answers
+                # stay concise instead of dumping reasoning_content into the
+                # chat panel. Non-thinking models silently ignore this kwarg.
+                "chat_template_kwargs": {"enable_thinking": False},
                 **({"max_tokens": max_tokens} if max_tokens is not None else {}),
             },
             timeout=httpx.Timeout(
@@ -155,6 +159,7 @@ class LMStudioChatClient:
             "messages": messages,
             "temperature": temperature,
             "stream": True,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         if max_tokens is not None:
             body["max_tokens"] = max_tokens

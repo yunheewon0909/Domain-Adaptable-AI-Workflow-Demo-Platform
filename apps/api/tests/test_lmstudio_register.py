@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from api.services.model_registry.lmstudio_register import (
     loaded_lmstudio_models as _real_loaded_lmstudio_models,
     probe_lmstudio_for_model,

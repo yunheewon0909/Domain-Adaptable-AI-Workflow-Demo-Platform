@@ -297,7 +297,7 @@ _DEMO_SEED_COLLECTIONS: tuple[_SeedCollectionSpec, ...] = (
         name="Demo Operations Handbook",
         description=(
             "Pre-seeded industrial operations knowledge base. Use it to demo "
-            "the Open WebUI Tool list/query path and workflow grounding."
+            "RAG-grounded chat and to derive a QA dataset for fine-tuning."
         ),
         documents=(
             _SeedDocumentSpec(
@@ -318,8 +318,8 @@ _DEMO_SEED_COLLECTIONS: tuple[_SeedCollectionSpec, ...] = (
         collection_id="rag-collection-demo-enterprise",
         name="Demo Enterprise Knowledge",
         description=(
-            "Pre-seeded enterprise enablement and pilot notes. Useful as the "
-            "second collection for Open WebUI Tool list/query verification."
+            "Pre-seeded enterprise enablement and pilot notes. Second "
+            "collection for grounded-chat or QA-dataset experimentation."
         ),
         documents=(
             _SeedDocumentSpec(
@@ -420,6 +420,23 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
             session.add(collection)
             session.flush()
             changed = True
+        else:
+            # Re-sync description + embedding_model on seed-owned rows when the
+            # spec drifts (e.g. legacy `nomic-embed-text` rows after the LM
+            # Studio cut-over). Rows whose owner_tag no longer matches are
+            # treated as reviewer-modified and left alone.
+            assert collection is not None  # narrowed: not new => exists
+            policy = collection.chunking_policy_json or {}
+            if policy.get("owner_tag") == SEED_COLLECTION_OWNER_TAG:
+                desired_embed = settings.lmstudio_embed_model
+                if (
+                    collection.description != spec.description
+                    or collection.embedding_model != desired_embed
+                ):
+                    collection.description = spec.description
+                    collection.embedding_model = desired_embed
+                    collection.updated_at = now
+                    changed = True
 
         # Only populate documents on first creation. A reviewer deleting a seed
         # document should not see it silently restored on the next restart;

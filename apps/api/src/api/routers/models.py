@@ -31,9 +31,10 @@ class CreateTrainingJobRequest(BaseModel):
 
     dataset_version_id: str = Field(min_length=1)
     base_model_name: str = Field(min_length=1)
-    training_method: Literal["sft_qlora", "deterministic_smoke"] = Field(
-        default="sft_qlora"
-    )
+    # Only `sft_qlora` is a real training method. The `deterministic_smoke`
+    # path is a trainer backend, not a method — switch backends via the
+    # FT_TRAINER_BACKEND env (see services/fine_tuning/trainer.py).
+    training_method: Literal["sft_qlora"] = Field(default="sft_qlora")
     hyperparams_json: dict[str, Any] = Field(default_factory=dict)
 
 
