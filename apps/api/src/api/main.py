@@ -20,6 +20,7 @@ from api.routers.openai_compat import router as openai_compat_router
 from api.routers.openwebui import router as openwebui_router
 from api.routers.rag import router as rag_router
 from api.services.background_runner import (
+    reap_stale_running_jobs,
     reap_unsupported_queue_rows,
     start_dispatcher_task,
     stop_dispatcher_task,
@@ -90,6 +91,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info(
                 "marked %d queued/running jobs with deprecated types as failed",
                 reaped,
+            )
+        stale_running = reap_stale_running_jobs(session)
+        if stale_running:
+            logger.info(
+                "marked %d stale running jobs (left over from a previous process) as failed",
+                stale_running,
             )
     probe_lmstudio_health()
     dispatcher_task, dispatcher_stop = start_dispatcher_task()

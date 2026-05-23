@@ -128,6 +128,41 @@ def reap_unsupported_queue_rows(session: Session) -> int:
     return len(rows)
 
 
+def reap_stale_running_jobs(session: Session) -> int:
+    """Fail any `running` job left over from a previous API process.
+
+    The dispatcher claims a job (status=running) then awaits the runner. If
+    the API is killed mid-run, the row stays `running` forever — the next
+    dispatcher cycle only looks at `queued`. Mark such rows as `failed`
+    with a clear diagnostic so reviewers can re-enqueue if needed instead
+    of waiting on a zombie.
+
+    Limited to `_RUNNERS` types so `reap_unsupported_queue_rows` retains
+    sole ownership of the legacy-type path.
+    """
+    supported = tuple(_RUNNERS.keys())
+    if not supported:
+        return 0
+    stmt = select(JobRecord).where(
+        JobRecord.status == "running",
+        JobRecord.type.in_(supported),
+    )
+    now = datetime.now(timezone.utc)
+    rows = session.scalars(stmt).all()
+    for row in rows:
+        row.status = "failed"
+        row.finished_at = now
+        row.updated_at = now
+        row.error = (
+            "Job left in `running` state by a previous API process. "
+            "The dispatcher does not resume in-flight jobs; re-enqueue "
+            "to retry."
+        )
+    if rows:
+        session.commit()
+    return len(rows)
+
+
 async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> None:
     """Run a single claimed job in a worker thread, recording outcome."""
     runner = _RUNNERS.get(job_type)

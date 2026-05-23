@@ -12,6 +12,8 @@ from api.services.background_runner import (
     _claim_next_queued_job,
     _dispatch_one,
     _RUNNERS,
+    reap_stale_running_jobs,
+    reap_unsupported_queue_rows,
     start_dispatcher_task,
 )
 from api.services.jobs import create_job
@@ -97,6 +99,68 @@ def test_dispatch_one_marks_failed_on_runner_exception() -> None:
             assert row.finished_at is not None
     finally:
         _RUNNERS["ft_train_model"] = original
+
+
+def test_reap_stale_running_jobs_fails_supported_running_rows() -> None:
+    # Simulate a job that the previous API process claimed but never
+    # finished: status=running, type matches a registered runner.
+    with Session(get_engine()) as session:
+        job = create_job(
+            session, job_type="ft_train_model", payload_json={"training_job_id": "x"}
+        )
+        job.status = "running"
+        session.commit()
+        claim_id = job.id
+
+    with Session(get_engine()) as session:
+        assert reap_stale_running_jobs(session) == 1
+
+    with Session(get_engine()) as session:
+        row = session.get(JobRecord, claim_id)
+        assert row is not None
+        assert row.status == "failed"
+        assert row.finished_at is not None
+        assert row.error is not None
+        assert "previous API process" in row.error
+
+
+def test_reap_stale_running_jobs_leaves_queued_and_succeeded_alone() -> None:
+    with Session(get_engine()) as session:
+        queued = create_job(session, job_type="ft_train_model", payload_json={})
+        succeeded = create_job(session, job_type="ft_train_model", payload_json={})
+        succeeded.status = "succeeded"
+        session.commit()
+        queued_id, succeeded_id = queued.id, succeeded.id
+
+    with Session(get_engine()) as session:
+        assert reap_stale_running_jobs(session) == 0
+
+    with Session(get_engine()) as session:
+        assert session.get(JobRecord, queued_id).status == "queued"  # type: ignore[union-attr]
+        assert session.get(JobRecord, succeeded_id).status == "succeeded"  # type: ignore[union-attr]
+
+
+def test_reap_unsupported_queue_rows_fails_legacy_types() -> None:
+    with Session(get_engine()) as session:
+        legacy = create_job(
+            session, job_type="workflow_run", payload_json={"key": "v1"}
+        )
+        modern = create_job(
+            session, job_type="ft_train_model", payload_json={"training_job_id": "y"}
+        )
+        legacy_id, modern_id = legacy.id, modern.id
+
+    with Session(get_engine()) as session:
+        assert reap_unsupported_queue_rows(session) == 1
+
+    with Session(get_engine()) as session:
+        legacy_row = session.get(JobRecord, legacy_id)
+        assert legacy_row is not None
+        assert legacy_row.status == "failed"
+        assert "no longer supported" in (legacy_row.error or "")
+        modern_row = session.get(JobRecord, modern_id)
+        assert modern_row is not None
+        assert modern_row.status == "queued"
 
 
 def test_start_dispatcher_returns_none_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
