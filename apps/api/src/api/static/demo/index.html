@@ -106,6 +106,19 @@
           </button>
         </div>
 
+        <ol id="train-stepper" class="flex flex-wrap items-center gap-1 text-xs text-muted-fg hidden">
+          <li data-phase="generating" class="step px-2 py-1 rounded border border-border">Q/A pairs</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="preparing_data" class="step px-2 py-1 rounded border border-border">Prepare data</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="training" class="step px-2 py-1 rounded border border-border">Train</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="packaging" class="step px-2 py-1 rounded border border-border">Package</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="registering" class="step px-2 py-1 rounded border border-border">Register</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="succeeded" class="step px-2 py-1 rounded border border-border">Done</li>
+        </ol>
         <div id="train-status" class="text-sm text-muted-fg">Idle.</div>
       </section>
 

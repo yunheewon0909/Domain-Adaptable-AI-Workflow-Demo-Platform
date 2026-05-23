@@ -24,6 +24,7 @@ const dom = {
   trainBase: $('train-base'),
   trainStart: $('train-start'),
   trainStatus: $('train-status'),
+  trainStepper: $('train-stepper'),
   chatModel: $('chat-model'),
   chatGround: $('chat-ground'),
   chatLog: $('chat-log'),
@@ -60,8 +61,40 @@ function setKbHint(msg) {
   dom.kbHint.textContent = msg || '';
 }
 
+const TRAIN_PHASE_ORDER = [
+  'generating',
+  'preparing_data',
+  'training',
+  'packaging',
+  'registering',
+  'succeeded',
+];
+
 function setTrainStatus(msg) {
   dom.trainStatus.textContent = msg || 'Idle.';
+}
+
+function setTrainStep(phase, { failed = false } = {}) {
+  if (!dom.trainStepper) return;
+  dom.trainStepper.classList.toggle('hidden', !phase);
+  const steps = dom.trainStepper.querySelectorAll('.step');
+  if (!phase) {
+    steps.forEach((s) => s.classList.remove('active', 'done', 'failed'));
+    return;
+  }
+  const targetIdx = TRAIN_PHASE_ORDER.indexOf(phase);
+  steps.forEach((step) => {
+    const stepPhase = step.getAttribute('data-phase');
+    const stepIdx = TRAIN_PHASE_ORDER.indexOf(stepPhase);
+    step.classList.remove('active', 'done', 'failed');
+    if (failed && stepIdx === targetIdx) {
+      step.classList.add('failed');
+    } else if (stepIdx < targetIdx) {
+      step.classList.add('done');
+    } else if (stepIdx === targetIdx) {
+      step.classList.add('active');
+    }
+  });
 }
 
 function selectedCollection() {
@@ -212,8 +245,12 @@ async function pollTrainingJob() {
       const status = job.status || 'unknown';
       const phase = job.phase || status;
       setTrainStatus(`Training job ${job.id}: ${status}${phase && phase !== status ? ` (${phase})` : ''}`);
+      if (TRAIN_PHASE_ORDER.includes(phase)) {
+        setTrainStep(phase);
+      }
       if (status === 'succeeded' || status === 'failed') {
         if (status === 'succeeded') {
+          setTrainStep('succeeded');
           try {
             await fetchJson(`/ft-training-jobs/${encodeURIComponent(state.training.jobId)}/publish`, { method: 'POST' });
             setTrainStatus(`Job ${job.id} ${status}. Model registered. Load it in LM Studio to make it selectable in chat.`);
@@ -221,6 +258,7 @@ async function pollTrainingJob() {
             setTrainStatus(`Job ${job.id} ${status}. Publish step warned: ${err.message}`);
           }
         } else {
+          setTrainStep(phase, { failed: true });
           setTrainStatus(`Job ${job.id} ${status}. ${(job.error_json && job.error_json.user_message) || job.error || ''}`);
         }
         await refreshModels();
@@ -245,6 +283,7 @@ dom.trainStart.addEventListener('click', async () => {
   const maxChunks = Math.max(1, Math.min(200, Number(dom.trainMaxChunks.value) || 20));
   const base = dom.trainBase.value.trim() || 'qwen3.5-4b-mlx';
   dom.trainStart.disabled = true;
+  setTrainStep('generating');
   setTrainStatus('Generating Q/A pairs from collection…');
   try {
     const built = await fetchJson('/ft-datasets/from-rag-collection', {
