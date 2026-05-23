@@ -323,6 +323,60 @@ def _run_deterministic_smoke_training(
 # ---- MLX QLoRA backend ------------------------------------------------
 
 
+_TOKENIZER_AUX_FILES = (
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "vocab.json",
+    "merges.txt",
+    "tokenizer.model",
+    "generation_config.json",
+)
+
+
+def _backfill_tokenizer_aux_files(
+    *, fused_dir: Path, base_model_repo_id: str, logs_path: Path
+) -> None:
+    """Copy missing tokenizer aux files from the base model's HF snapshot.
+
+    `mlx_lm.fuse` only emits the core model + tokenizer.json /
+    tokenizer_config.json. LM Studio's MLX loader rejects the fused dir
+    when `special_tokens_map.json` (or sometimes vocab.json/merges.txt)
+    is absent — the symptom reviewers see is "Load failed" in LM Studio's
+    UI. Best-effort: if any aux file is missing in the fused dir but
+    present in the base model's HF snapshot, copy it across.
+    """
+    import shutil as _shutil
+
+    if "/" not in base_model_repo_id:
+        return
+    cache_dir_name = "models--" + base_model_repo_id.replace("/", "--")
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / cache_dir_name / "snapshots"
+    if not hf_cache.is_dir():
+        return
+    snapshots = sorted(hf_cache.iterdir())
+    if not snapshots:
+        return
+    snapshot = snapshots[-1]
+    copied: list[str] = []
+    for filename in _TOKENIZER_AUX_FILES:
+        source = snapshot / filename
+        if not source.exists():
+            continue
+        target = fused_dir / filename
+        if target.exists():
+            continue
+        try:
+            _shutil.copy2(source, target)
+            copied.append(filename)
+        except OSError:
+            continue
+    if copied:
+        with logs_path.open("a", encoding="utf-8") as log_fh:
+            log_fh.write(
+                f"\nbackfilled tokenizer aux from base model snapshot: {', '.join(copied)}\n"
+            )
+
+
 def _tail_text(path: Path, *, max_bytes: int = 2000) -> str:
     try:
         data = path.read_bytes()
@@ -460,6 +514,19 @@ def _run_mlx_qlora_training(
             f"MLX model fusion failed (exit={fuse_result.returncode}): "
             f"{_tail_text(logs_path, max_bytes=500)}"
         )
+
+    # mlx_lm.fuse writes only the core model + tokenizer.json /
+    # tokenizer_config.json. LM Studio's MLX loader (and stricter HF
+    # transformers builds) also want the auxiliary tokenizer files
+    # (`special_tokens_map.json`, `vocab.json`, `merges.txt`,
+    # `added_tokens.json`, `tokenizer.model`, `generation_config.json`).
+    # Copy them from the base model's HF snapshot if present so the
+    # fused dir is a fully-loadable MLX repo.
+    _backfill_tokenizer_aux_files(
+        fused_dir=fused_dir,
+        base_model_repo_id=config.trainer_model_name,
+        logs_path=logs_path,
+    )
 
     with logs_path.open("a", encoding="utf-8") as log_fh:
         log_fh.write("\nfusion succeeded\n")
