@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from api.config import get_settings
 from api.db import get_engine
-from api.dependencies import get_embedding_client, get_llm_client
 from api.routers.demo import router as demo_router
 from api.routers.fine_tuning import router as fine_tuning_router
 from api.routers.health import router as health_router

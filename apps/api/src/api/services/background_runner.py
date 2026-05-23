@@ -24,7 +24,7 @@ job types can register handlers in `_RUNNERS`.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
 import logging

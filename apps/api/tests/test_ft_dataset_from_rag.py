@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
+from api.dependencies import get_llm_client
 from api.llm import ChatResult, LLMClientError
-from api.main import app, get_llm_client
+from api.main import app
 from api.models import RAGCollectionRecord, RAGDocumentRecord
 
 

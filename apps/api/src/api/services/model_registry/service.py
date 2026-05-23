@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from api.config import get_project_root, get_settings
+from api.config import get_settings
 from api.models import (
     FTDatasetRecord,
     FTDatasetRowRecord,
