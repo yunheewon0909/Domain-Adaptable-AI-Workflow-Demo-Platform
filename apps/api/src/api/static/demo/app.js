@@ -502,15 +502,17 @@ dom.chatForm.addEventListener('submit', async (event) => {
   const text = dom.chatInput.value.trim();
   if (!text) return;
   // Push the user turn AND a placeholder assistant turn so reviewers see
-  // immediate feedback while Qwen3-style thinking takes 10-30s. Replace
-  // the placeholder when the real reply lands. Disable the form during
-  // the request to prevent duplicate submissions.
+  // immediate feedback while Qwen3-style thinking takes 10-30s. Tag the
+  // placeholder with a unique token so we can find (and skip) it later
+  // if the user pressed Clear or sent another message before the reply
+  // landed.
+  const requestToken = Symbol('chat-request');
   state.chat.messages.push({ role: 'user', content: text });
-  const placeholderIndex = state.chat.messages.push({
+  state.chat.messages.push({
     role: 'assistant',
     content: '…thinking',
-    pending: true,
-  }) - 1;
+    pending: requestToken,
+  });
   renderChat();
   dom.chatInput.value = '';
   const submitButton = dom.chatForm.querySelector('button[type="submit"]');
@@ -530,6 +532,11 @@ dom.chatForm.addEventListener('submit', async (event) => {
     body.top_k = 4;
   }
 
+  const replaceByToken = (replacement) => {
+    const idx = state.chat.messages.findIndex((m) => m.pending === requestToken);
+    if (idx >= 0) state.chat.messages[idx] = replacement;
+  };
+
   try {
     const reply = await fetchJson('/v1/chat/completions', {
       method: 'POST',
@@ -546,16 +553,16 @@ dom.chatForm.addEventListener('submit', async (event) => {
     )
       .map((r) => r.filename)
       .filter(Boolean);
-    state.chat.messages[placeholderIndex] = {
+    replaceByToken({
       role: 'assistant',
       content: answer || '(no content returned)',
       sources,
-    };
+    });
   } catch (error) {
-    state.chat.messages[placeholderIndex] = {
+    replaceByToken({
       role: 'assistant',
       content: `Error: ${error.message}`,
-    };
+    });
   } finally {
     if (submitButton) submitButton.disabled = false;
     dom.chatInput.disabled = false;
