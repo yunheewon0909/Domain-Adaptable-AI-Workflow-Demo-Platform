@@ -77,13 +77,14 @@ def _build_fake_training_artifacts(tmp_path: Path) -> TrainingArtifacts:
     )
 
 
-def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
+def test_ensure_default_models_replaces_stale_auto_seeds_and_keeps_user_rows(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LMSTUDIO_CHAT_MODEL", "qwen3.5:4b")
     get_settings.cache_clear()
 
     with Session(get_engine()) as session:
+        # An auto-seeded stale row tagged "default" — should be DELETED.
         session.add(
             ModelRegistryRecord(
                 id="model-old-default",
@@ -98,12 +99,31 @@ def test_ensure_default_models_promotes_configured_model_and_demotes_old_base(
                 description="Old configured default model.",
             )
         )
+        # A user-promoted base row pointing at a different model — should be
+        # demoted (status registered) but not deleted, so history survives.
+        session.add(
+            ModelRegistryRecord(
+                id="model-user-base",
+                display_name="User pick",
+                source_type="base",
+                base_model_name="other-model",
+                serving_model_name="other-model",
+                published_model_name="other-model",
+                status="active",
+                publish_status="published",
+                tags_json=["base"],
+                description="Operator-added base row.",
+            )
+        )
         ensure_default_models(session)
 
-        old = session.get(ModelRegistryRecord, "model-old-default")
-        assert old is not None
-        assert old.status == "registered"
-        assert old.tags_json == ["base"]
+        assert session.get(ModelRegistryRecord, "model-old-default") is None
+
+        user_row = session.get(ModelRegistryRecord, "model-user-base")
+        assert user_row is not None
+        assert user_row.status == "registered"
+        assert "base" in user_row.tags_json
+        assert "default" not in user_row.tags_json
 
         current = session.scalar(
             select(ModelRegistryRecord).where(

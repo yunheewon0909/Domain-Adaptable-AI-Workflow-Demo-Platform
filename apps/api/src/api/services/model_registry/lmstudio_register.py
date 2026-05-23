@@ -107,25 +107,46 @@ def register_fused_model(
     )
 
 
-def probe_lmstudio_for_model(*, base_url: str, model_id: str, timeout: float = 5.0) -> bool:
-    """Return True if LM Studio's /v1/models endpoint lists `model_id`."""
-    if not model_id:
-        return False
+_LOADED_CACHE: dict[str, tuple[float, frozenset[str]]] = {}
+_LOADED_CACHE_TTL_SECONDS = 30.0
+
+
+def loaded_lmstudio_models(*, base_url: str, timeout: float = 5.0) -> frozenset[str]:
+    """Return the set of model ids LM Studio currently has loaded.
+
+    Cached per base_url for 30s to avoid hammering LM Studio on every
+    /v1/models or /models call. Network failures cache an empty set for
+    the same TTL so we don't retry per-request during an outage.
+    """
+    import time as _time
+
+    cached = _LOADED_CACHE.get(base_url)
+    now = _time.monotonic()
+    if cached and now - cached[0] < _LOADED_CACHE_TTL_SECONDS:
+        return cached[1]
     url = f"{base_url.rstrip('/')}/models"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             payload = response.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as exc:
-        logger.warning("LM Studio probe failed at %s: %s", url, exc)
-        return False
-    try:
         parsed = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        logger.warning("LM Studio /models returned non-JSON: %s", exc)
+        loaded = frozenset(
+            str(item.get("id"))
+            for item in parsed.get("data", [])
+            if isinstance(item, dict) and item.get("id")
+        )
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        logger.warning("LM Studio probe failed at %s: %s", url, exc)
+        loaded = frozenset()
+    _LOADED_CACHE[base_url] = (now, loaded)
+    return loaded
+
+
+def invalidate_loaded_cache() -> None:
+    _LOADED_CACHE.clear()
+
+
+def probe_lmstudio_for_model(*, base_url: str, model_id: str, timeout: float = 5.0) -> bool:
+    """Return True if LM Studio's /v1/models endpoint lists `model_id`."""
+    if not model_id:
         return False
-    loaded = {
-        str(item.get("id"))
-        for item in parsed.get("data", [])
-        if isinstance(item, dict) and item.get("id")
-    }
-    return model_id in loaded
+    return model_id in loaded_lmstudio_models(base_url=base_url, timeout=timeout)

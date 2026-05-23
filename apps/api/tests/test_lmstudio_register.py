@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api.services.model_registry.lmstudio_register import (
+    loaded_lmstudio_models as _real_loaded_lmstudio_models,
     probe_lmstudio_for_model,
     register_fused_model,
 )
@@ -94,7 +95,16 @@ def test_register_fused_model_overwrites_existing_symlink(tmp_path: Path) -> Non
     assert (target_dir / "config.json").read_text(encoding="utf-8") == "{}"
 
 
-def test_probe_lmstudio_returns_true_when_model_present() -> None:
+def test_probe_lmstudio_returns_true_when_model_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The autouse conftest fixture stubs loaded_lmstudio_models. Restore the
+    # real implementation so this test can exercise the urllib path directly.
+    from api.services.model_registry import lmstudio_register as _module
+
+    monkeypatch.setattr(_module, "loaded_lmstudio_models", _module.__dict__["loaded_lmstudio_models"].__wrapped__ if hasattr(_module.loaded_lmstudio_models, "__wrapped__") else _real_loaded_lmstudio_models)
+    _module.invalidate_loaded_cache()
+
     class _Resp:
         def __enter__(self):
             return self

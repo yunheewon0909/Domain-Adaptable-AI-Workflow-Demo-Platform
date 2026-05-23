@@ -31,7 +31,7 @@ from api.services.fine_tuning.trainer import (
     run_training_backend,
 )
 
-BASE_MODEL_READY_STATUSES = {"active", "registered"}
+BASE_MODEL_READY_STATUSES = {"active"}
 ALLOWED_TRAINING_STATUSES = {
     "queued",
     "preparing_data",
@@ -61,29 +61,63 @@ def _artifacts_root() -> Path:
     return Path(settings.training_artifact_dir)
 
 
-def _serialize_readiness(model: ModelRegistryRecord) -> dict[str, Any]:
+def _serialize_readiness(
+    model: ModelRegistryRecord,
+    *,
+    loaded_serving_names: frozenset[str] | None = None,
+) -> dict[str, Any]:
     selectable = False
     selectable_reason = "model is not selectable"
     runtime_ready = False
     runtime_ready_reason = "runtime readiness is not available"
     if model.source_type == "base":
-        selectable = model.status in BASE_MODEL_READY_STATUSES
-        selectable_reason = (
-            "base model is registered for direct inference"
-            if selectable
-            else "base model is not in a ready status"
-        )
+        status_ok = model.status in BASE_MODEL_READY_STATUSES
+        serving_name = model.serving_model_name or ""
+        if loaded_serving_names is None:
+            # No probe available — fall back to status-only check (used in
+            # unit tests and offline serialization paths).
+            selectable = status_ok
+            selectable_reason = (
+                "base model is registered for direct inference"
+                if selectable
+                else "base model is not in a ready status"
+            )
+        else:
+            serving_loaded = bool(serving_name) and serving_name in loaded_serving_names
+            selectable = status_ok and serving_loaded
+            if selectable:
+                selectable_reason = (
+                    f"base model {serving_name!r} is loaded in LM Studio"
+                )
+            elif not status_ok:
+                selectable_reason = "base model is not in a ready status"
+            else:
+                selectable_reason = (
+                    f"base model {serving_name!r} is not loaded in LM Studio "
+                    "(load it in the Local Server tab)"
+                )
         runtime_ready = selectable
         runtime_ready_reason = selectable_reason
     elif model.source_type == "fine_tuned":
-        selectable = (
+        published_ok = (
             model.status in READY_MODEL_STATUSES
             and model.publish_status == "published"
             and bool(model.published_model_name)
         )
+        if loaded_serving_names is None:
+            selectable = published_ok
+        else:
+            serving_name = model.published_model_name or ""
+            selectable = published_ok and bool(serving_name) and serving_name in loaded_serving_names
         runtime_ready = selectable
         if selectable:
-            selectable_reason = "fine-tuned model has a published serving target"
+            selectable_reason = "fine-tuned model has a published serving target loaded in LM Studio"
+            runtime_ready_reason = selectable_reason
+        elif published_ok and loaded_serving_names is not None:
+            selectable_reason = (
+                "Fine-tuned model is staged in LM Studio's models dir but not yet loaded. "
+                "Click Load in LM Studio."
+            )
             runtime_ready_reason = selectable_reason
         elif model.publish_status == "publish_ready":
             selectable_reason = "Adapter artifacts and a publish manifest are ready, but no LM Studio serving model has been loaded yet."
@@ -317,12 +351,15 @@ def _serialize_artifact(
 
 
 def _serialize_model(
-    model: ModelRegistryRecord, artifact: FTModelArtifactRecord | None
+    model: ModelRegistryRecord,
+    artifact: FTModelArtifactRecord | None,
+    *,
+    loaded_serving_names: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     effective_serving_name = model.serving_model_name
     if model.source_type == "fine_tuned":
         effective_serving_name = model.published_model_name
-    readiness = _serialize_readiness(model)
+    readiness = _serialize_readiness(model, loaded_serving_names=loaded_serving_names)
     artifact_metadata = (
         dict(artifact.metadata_json or {}) if artifact is not None else {}
     )
@@ -467,21 +504,27 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
     ]
 
     now = datetime.now(timezone.utc)
-    previous_active_base_models = session.scalars(
+    # Retire any auto-seeded base row that does not match the configured
+    # chat model. "Auto-seeded" = base + tagged 'default' or 'fallback'.
+    # User-created or fine-tuned rows are left untouched.
+    stale_seeds = session.scalars(
         select(ModelRegistryRecord).where(
             ModelRegistryRecord.source_type == "base",
-            ModelRegistryRecord.status == "active",
             ModelRegistryRecord.serving_model_name != configured_default_name,
         )
     ).all()
-    for model in previous_active_base_models:
-        model.status = "registered"
-        model.tags_json = [
-            tag for tag in list(model.tags_json or []) if tag != "default"
-        ]
-        if "base" not in model.tags_json:
-            model.tags_json.append("base")
-        model.updated_at = now
+    for model in stale_seeds:
+        tags = list(model.tags_json or [])
+        if "default" in tags or "fallback" in tags:
+            session.delete(model)
+        elif model.status == "active":
+            # User-promoted base row pointing at a different serving name —
+            # demote instead of delete so we don't lose history.
+            model.status = "registered"
+            model.tags_json = [t for t in tags if t != "default"]
+            if "base" not in model.tags_json:
+                model.tags_json.append("base")
+            model.updated_at = now
 
     for item in defaults:
         existing = session.scalar(
@@ -526,6 +569,11 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
 
 
 def list_models(session: Session) -> list[dict[str, Any]]:
+    from api.services.model_registry.lmstudio_register import loaded_lmstudio_models
+
+    settings = get_settings()
+    loaded = loaded_lmstudio_models(base_url=settings.lmstudio_base_url)
+
     models = session.scalars(
         select(ModelRegistryRecord).order_by(
             ModelRegistryRecord.created_at.desc(), ModelRegistryRecord.id.desc()
@@ -550,6 +598,7 @@ def list_models(session: Session) -> list[dict[str, Any]]:
         _serialize_model(
             model,
             artifacts.get(model.artifact_id) if model.artifact_id is not None else None,
+            loaded_serving_names=loaded,
         )
         for model in models
     ]
