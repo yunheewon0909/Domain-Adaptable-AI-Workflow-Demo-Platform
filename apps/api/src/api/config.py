@@ -119,7 +119,12 @@ def get_settings() -> Settings:
         adapter_publish_enabled=_to_bool(
             os.getenv("ADAPTER_PUBLISH_ENABLED"), default=False
         ),
-        mlx_model_namespace=os.getenv("MLX_MODEL_NAMESPACE"),
+        # Default the namespace so publish builds a usable
+        # `candidate_model_name` (`<namespace>/<artifact_root>`) out of the
+        # box. Without this, publish always 409s with "publish manifest
+        # does not include a candidate serving model name" until the
+        # reviewer sets `MLX_MODEL_NAMESPACE` by hand.
+        mlx_model_namespace=os.getenv("MLX_MODEL_NAMESPACE", "demo"),
         # LM Studio settings
         lmstudio_base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
         lmstudio_chat_model=os.getenv("LMSTUDIO_CHAT_MODEL", ""),
