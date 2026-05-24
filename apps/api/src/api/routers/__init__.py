@@ -1,3 +1,12 @@
-from api.routers import datasets, demo, health, jobs, rag, workflows
+from api.routers import demo, fine_tuning, health, jobs, models, openai_compat, openwebui, rag
 
-__all__ = ["datasets", "demo", "health", "jobs", "rag", "workflows"]
+__all__ = [
+    "demo",
+    "fine_tuning",
+    "health",
+    "jobs",
+    "models",
+    "openai_compat",
+    "openwebui",
+    "rag",
+]

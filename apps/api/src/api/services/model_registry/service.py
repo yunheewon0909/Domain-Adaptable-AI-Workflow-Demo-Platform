@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.config import get_project_root, get_settings
+from api.config import get_settings
 from api.models import (
     FTDatasetRecord,
     FTDatasetRowRecord,
@@ -31,7 +32,7 @@ from api.services.fine_tuning.trainer import (
     run_training_backend,
 )
 
-BASE_MODEL_READY_STATUSES = {"active", "registered"}
+BASE_MODEL_READY_STATUSES = {"active"}
 ALLOWED_TRAINING_STATUSES = {
     "queued",
     "preparing_data",
@@ -43,17 +44,17 @@ ALLOWED_TRAINING_STATUSES = {
     "failed",
 }
 ARTIFACT_ONLY_MODEL_STATUSES = {"artifact_ready"}
-READY_MODEL_STATUSES = {"published"}
+# Both `published` (legacy fine-tuned ready) and `active` (what
+# publish_training_job_artifacts actually sets on a successful publish)
+# count as selectable-ready for the fine_tuned readiness branch.
+# Without `active` here, freshly published fine-tuned rows were stuck
+# reporting "artifact-ready only" even after LM Studio loaded them.
+READY_MODEL_STATUSES = {"published", "active"}
 ALLOWED_PUBLISH_STATUSES = {"not_requested", "publish_ready", "published", "failed"}
 
 
-def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
-    next_value = 1
-    for existing_id in session.scalars(select(model.id)).all():
-        suffix = str(existing_id).replace(f"{prefix}-", "", 1)
-        if suffix.isdigit():
-            next_value = max(next_value, int(suffix) + 1)
-    return f"{prefix}-{next_value}"
+def _next_prefixed_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _artifacts_root() -> Path:
@@ -61,33 +62,67 @@ def _artifacts_root() -> Path:
     return Path(settings.training_artifact_dir)
 
 
-def _serialize_readiness(model: ModelRegistryRecord) -> dict[str, Any]:
+def _serialize_readiness(
+    model: ModelRegistryRecord,
+    *,
+    loaded_serving_names: frozenset[str] | None = None,
+) -> dict[str, Any]:
     selectable = False
     selectable_reason = "model is not selectable"
     runtime_ready = False
     runtime_ready_reason = "runtime readiness is not available"
     if model.source_type == "base":
-        selectable = model.status in BASE_MODEL_READY_STATUSES
-        selectable_reason = (
-            "base model is registered for direct inference"
-            if selectable
-            else "base model is not in a ready status"
-        )
+        status_ok = model.status in BASE_MODEL_READY_STATUSES
+        serving_name = model.serving_model_name or ""
+        if loaded_serving_names is None:
+            # No probe available — fall back to status-only check (used in
+            # unit tests and offline serialization paths).
+            selectable = status_ok
+            selectable_reason = (
+                "base model is registered for direct inference"
+                if selectable
+                else "base model is not in a ready status"
+            )
+        else:
+            serving_loaded = bool(serving_name) and serving_name in loaded_serving_names
+            selectable = status_ok and serving_loaded
+            if selectable:
+                selectable_reason = (
+                    f"base model {serving_name!r} is loaded in LM Studio"
+                )
+            elif not status_ok:
+                selectable_reason = "base model is not in a ready status"
+            else:
+                selectable_reason = (
+                    f"base model {serving_name!r} is not loaded in LM Studio "
+                    "(load it in the Local Server tab)"
+                )
         runtime_ready = selectable
         runtime_ready_reason = selectable_reason
     elif model.source_type == "fine_tuned":
-        selectable = (
+        published_ok = (
             model.status in READY_MODEL_STATUSES
             and model.publish_status == "published"
             and bool(model.published_model_name)
         )
+        if loaded_serving_names is None:
+            selectable = published_ok
+        else:
+            serving_name = model.published_model_name or ""
+            selectable = published_ok and bool(serving_name) and serving_name in loaded_serving_names
         runtime_ready = selectable
         if selectable:
-            selectable_reason = "fine-tuned model has a published serving target"
+            selectable_reason = "fine-tuned model has a published serving target loaded in LM Studio"
+            runtime_ready_reason = selectable_reason
+        elif published_ok and loaded_serving_names is not None:
+            selectable_reason = (
+                "Fine-tuned model is staged in LM Studio's models dir but not yet loaded. "
+                "Click Load in LM Studio."
+            )
             runtime_ready_reason = selectable_reason
         elif model.publish_status == "publish_ready":
-            selectable_reason = "PEFT adapter exists and the publish manifest is ready, but no Ollama serving model has been created yet."
-            runtime_ready_reason = "Automatic Ollama import is not implemented, so this fine-tuned model remains artifact-only until a real serving model exists."
+            selectable_reason = "Adapter artifacts and a publish manifest are ready, but no LM Studio serving model has been loaded yet."
+            runtime_ready_reason = "Automatic LM Studio import is not implemented, so this fine-tuned model remains artifact-only until a real serving model exists."
         elif model.publish_status == "failed":
             selectable_reason = "fine-tuned model publish preparation failed"
             runtime_ready_reason = (
@@ -133,11 +168,11 @@ def _model_warnings(
     warnings: list[str] = []
     if model.source_type == "fine_tuned":
         warnings.append(
-            "This registry entry tracks a PEFT adapter artifact. It is not itself an Ollama serving model."
+            "This registry entry tracks local adapter/merged-model artifacts. It is not itself an LM Studio serving model."
         )
         if model.publish_status == "publish_ready":
             warnings.append(
-                "Publish-ready means a manifest/template exists. Automatic Ollama import is not implemented by this repository."
+                "Publish-ready means a manifest/template exists. Automatic LM Studio import is not implemented by this repository."
             )
     validation = _artifact_metadata_value(artifact, "validation")
     if isinstance(validation, dict):
@@ -240,8 +275,8 @@ def _classify_training_failure(*, failure_phase: str, raw_error: str) -> dict[st
     normalized_error = raw_error.strip() or "Unknown training failure"
     lowered = normalized_error.lower()
     category = "unknown"
-    user_message = f"Training failed during {failure_phase}. Review the technical details below for the captured worker error."
-    remediation = "Review the raw error, confirm the selected runtime, and retry the smoke job after fixing the reported issue."
+    user_message = f"Training failed during {failure_phase}. Review the technical details below for the captured training error."
+    remediation = "Review the raw error, confirm the Mac-native runtime, and retry the smoke job after fixing the reported issue."
 
     if "rag index" in lowered or "rag.db" in lowered:
         category = "rag_unrelated_failure"
@@ -258,25 +293,26 @@ def _classify_training_failure(*, failure_phase: str, raw_error: str) -> dict[st
         category = "artifact_validation_failed"
         user_message = "Training failed during artifact validation. The trainer ran, but the expected adapter/report package was incomplete."
         remediation = "Inspect the artifact directory, confirm adapter/report files were written, and retry after fixing the packaging or validation issue."
-    elif "torch is required" in lowered or "dependencies are missing" in lowered:
-        category = "dependency_missing"
-        user_message = "Training failed because required fine-tuning dependencies are missing in the worker runtime."
-        remediation = "Install the training dependencies in the runtime that actually executes the worker subprocess, then rerun preflight."
-    elif "training_device=mps" in lowered and "mps is not available" in lowered:
-        category = "docker_mps_invalid"
-        user_message = "Training failed because this worker cannot use Apple Silicon MPS. Docker Linux workers should use the tiny CPU smoke profile, while host workers can validate MPS directly."
-        remediation = "Use the Docker CPU smoke defaults for container runs, or switch to a host worker if you specifically need Apple Silicon MPS validation."
-    elif "cpu training is disabled" in lowered or "training_allow_cpu" in lowered:
-        category = "cpu_fallback_disabled"
-        user_message = "Training failed because this worker has no accelerator and CPU fallback is disabled."
-        remediation = "Enable the tiny CPU smoke fallback for Docker demo runs or move the job to a host worker with a validated accelerator runtime."
     elif (
-        "cuda is not available" in lowered
-        or "no gpu accelerator is available" in lowered
+        "mlx_lm.lora cli is required" in lowered
+        or "mlx_lm.fuse cli is required" in lowered
+        or "missing mlx training tools" in lowered
     ):
-        category = "device_unavailable"
-        user_message = "Training failed because the requested accelerator is unavailable in the current worker runtime."
-        remediation = "Check the selected device, rerun preflight for the target runtime, and use the Docker CPU smoke profile when no accelerator is available."
+        category = "dependency_missing"
+        user_message = "Training failed because required MLX training tooling is missing."
+        remediation = "Install or update the Mac-native MLX toolchain (`brew install mlx mlx-lm`), then rerun preflight."
+    elif (
+        "mlx qlora training failed" in lowered
+        or "mlx model fusion failed" in lowered
+        or "adapter not found" in lowered
+    ):
+        category = "mlx_subprocess_failed"
+        user_message = "Training failed inside the MLX subprocess. Inspect the training log for the captured mlx_lm.lora/mlx_lm.fuse error."
+        remediation = "Open the training.log file under data/model_artifacts/<job_id>/, fix the reported MLX issue, and retry."
+    elif "metal" in lowered and ("unavailable" in lowered or "not available" in lowered):
+        category = "metal_runtime_unavailable"
+        user_message = "Training failed because Apple Silicon Metal is unavailable in the current runtime."
+        remediation = "Rerun preflight from the macOS host shell and verify the brew-provided MLX runtime can access Metal."
     elif "smoke fallback failed" in lowered:
         category = "smoke_fallback_failed"
         user_message = "Training failed after the smoke fallback trainer was attempted. The demo fallback path could not finish artifact generation."
@@ -316,12 +352,15 @@ def _serialize_artifact(
 
 
 def _serialize_model(
-    model: ModelRegistryRecord, artifact: FTModelArtifactRecord | None
+    model: ModelRegistryRecord,
+    artifact: FTModelArtifactRecord | None,
+    *,
+    loaded_serving_names: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    serving_model_name = model.ollama_model_name
+    effective_serving_name = model.serving_model_name
     if model.source_type == "fine_tuned":
-        serving_model_name = model.published_model_name
-    readiness = _serialize_readiness(model)
+        effective_serving_name = model.published_model_name
+    readiness = _serialize_readiness(model, loaded_serving_names=loaded_serving_names)
     artifact_metadata = (
         dict(artifact.metadata_json or {}) if artifact is not None else {}
     )
@@ -333,12 +372,11 @@ def _serialize_model(
         "trainer_model_name": _lineage_value(model, "trainer_model_name"),
         "trainer_backend": artifact_metadata.get("trainer_backend")
         or _lineage_value(model, "trainer_backend"),
-        "ollama_model_name": model.ollama_model_name,
         "published_model_name": model.published_model_name,
         "candidate_published_model_name": _lineage_value(
             model, "candidate_published_model_name"
         ),
-        "serving_model_name": serving_model_name,
+        "serving_model_name": effective_serving_name,
         "artifact_id": model.artifact_id,
         "artifact_type": artifact.artifact_type if artifact is not None else None,
         "artifact_format": artifact_metadata.get("artifact_format"),
@@ -450,36 +488,55 @@ def _serialize_training_job(
 
 def ensure_default_models(session: Session) -> list[dict[str, Any]]:
     settings = get_settings()
+    configured_default_name = (settings.lmstudio_chat_model or "").strip()
+    if not configured_default_name:
+        # No LM Studio chat model configured yet; nothing to seed.
+        return []
+
     defaults = [
         {
-            "display_name": "Default Ollama model",
-            "base_model_name": settings.ollama_model,
-            "ollama_model_name": settings.ollama_model,
+            "display_name": "Default LM Studio model",
+            "base_model_name": configured_default_name,
+            "serving_model_name": configured_default_name,
             "status": "active",
-            "description": "Default serving model configured for workflow and inference requests.",
+            "description": "Default LM Studio serving model used for grounded chat and inference.",
             "tags_json": ["base", "default"],
         }
     ]
-    if (
-        settings.ollama_fallback_model
-        and settings.ollama_fallback_model != settings.ollama_model
-    ):
-        defaults.append(
-            {
-                "display_name": "Fallback Ollama model",
-                "base_model_name": settings.ollama_fallback_model,
-                "ollama_model_name": settings.ollama_fallback_model,
-                "status": "registered",
-                "description": "Fallback serving model used when the default Ollama model is unavailable.",
-                "tags_json": ["base", "fallback"],
-            }
-        )
 
     now = datetime.now(timezone.utc)
+    # Retire any auto-seeded base row that does not match the configured
+    # chat model. "Auto-seeded" = base + tagged 'default' or 'fallback'.
+    # User-created or fine-tuned rows are left untouched.
+    stale_seeds = session.scalars(
+        select(ModelRegistryRecord).where(
+            ModelRegistryRecord.source_type == "base",
+            ModelRegistryRecord.serving_model_name != configured_default_name,
+        )
+    ).all()
+    for model in stale_seeds:
+        tags = list(model.tags_json or [])
+        # Anything whose display_name starts with "Default " was originally
+        # auto-seeded by this function. Earlier versions of the demote
+        # branch stripped the "default" tag, turning those rows into
+        # immortal zombies; treat the display_name as the authoritative
+        # marker so they get cleaned up regardless of tag drift.
+        is_auto_seed = (
+            "default" in tags
+            or "fallback" in tags
+            or (model.display_name or "").startswith("Default ")
+        )
+        if is_auto_seed:
+            session.delete(model)
+        elif model.status == "active":
+            # User-promoted non-auto-seed pointing the wrong way — demote
+            # so we don't lose user-curated history.
+            model.status = "registered"
+
     for item in defaults:
         existing = session.scalar(
             select(ModelRegistryRecord).where(
-                ModelRegistryRecord.ollama_model_name == item["ollama_model_name"]
+                ModelRegistryRecord.serving_model_name == item["serving_model_name"]
             )
         )
         if existing is not None:
@@ -488,19 +545,18 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
             existing.source_type = "base"
             existing.status = item["status"]
             existing.publish_status = "published"
-            existing.published_model_name = item["ollama_model_name"]
+            existing.published_model_name = item["serving_model_name"]
             existing.tags_json = item["tags_json"]
             existing.description = item["description"]
-            existing.updated_at = now
             continue
         session.add(
             ModelRegistryRecord(
-                id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
+                id=_next_prefixed_id("model"),
                 display_name=item["display_name"],
                 source_type="base",
                 base_model_name=item["base_model_name"],
-                ollama_model_name=item["ollama_model_name"],
-                published_model_name=item["ollama_model_name"],
+                serving_model_name=item["serving_model_name"],
+                published_model_name=item["serving_model_name"],
                 status=item["status"],
                 publish_status="published",
                 tags_json=item["tags_json"],
@@ -519,6 +575,11 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
 
 
 def list_models(session: Session) -> list[dict[str, Any]]:
+    from api.services.model_registry.lmstudio_register import loaded_lmstudio_models
+
+    settings = get_settings()
+    loaded = loaded_lmstudio_models(base_url=settings.lmstudio_base_url)
+
     models = session.scalars(
         select(ModelRegistryRecord).order_by(
             ModelRegistryRecord.created_at.desc(), ModelRegistryRecord.id.desc()
@@ -543,6 +604,7 @@ def list_models(session: Session) -> list[dict[str, Any]]:
         _serialize_model(
             model,
             artifacts.get(model.artifact_id) if model.artifact_id is not None else None,
+            loaded_serving_names=loaded,
         )
         for model in models
     ]
@@ -578,15 +640,19 @@ def create_training_job(
     resolved_training_method = (
         training_method.strip() or get_settings().ft_default_training_method
     )
-    if resolved_training_method == "sft_lora" and dataset_version.status != "locked":
-        raise ValueError("real sft_lora training requires a locked dataset version")
+    if resolved_training_method == "sft_qlora" and dataset_version.status != "locked":
+        raise ValueError("real sft_qlora training requires a locked dataset version")
+
+    base_model_clean = base_model_name.strip()
+    trainer_backend = get_settings().ft_trainer_backend
+    hyperparams = hyperparams_json or {}
     training_job = FTTrainingJobRecord(
-        id=_next_prefixed_id(session, FTTrainingJobRecord, "ft-job"),
+        id=_next_prefixed_id("ft-job"),
         dataset_version_id=dataset_version_id,
-        base_model_name=base_model_name.strip(),
+        base_model_name=base_model_clean,
         training_method=resolved_training_method,
-        hyperparams_json=hyperparams_json or {},
-        trainer_backend=get_settings().ft_trainer_backend,
+        hyperparams_json=hyperparams,
+        trainer_backend=trainer_backend,
     )
     session.add(training_job)
     session.flush()
@@ -705,11 +771,11 @@ def resolve_model_selection(
     session: Session,
     *,
     model_id: str | None = None,
-    ollama_model_name: str | None = None,
+    serving_model_name: str | None = None,
 ) -> dict[str, Any]:
     ensure_default_models(session)
-    if model_id and ollama_model_name:
-        raise ValueError("provide either model_id or ollama_model_name, not both")
+    if model_id and serving_model_name:
+        raise ValueError("provide either model_id or serving_model_name, not both")
     if model_id:
         model = session.get(ModelRegistryRecord, model_id)
         if model is None:
@@ -723,10 +789,10 @@ def resolve_model_selection(
             else None
         )
         return _serialize_model(model, artifact)
-    if ollama_model_name:
+    if serving_model_name:
         model = session.scalar(
             select(ModelRegistryRecord).where(
-                ModelRegistryRecord.ollama_model_name == ollama_model_name
+                ModelRegistryRecord.serving_model_name == serving_model_name
             )
         )
         if model is not None:
@@ -741,14 +807,14 @@ def resolve_model_selection(
             return _serialize_model(model, artifact)
         return {
             "id": None,
-            "display_name": ollama_model_name,
+            "display_name": serving_model_name,
             "source_type": "direct",
-            "base_model_name": ollama_model_name,
-            "ollama_model_name": ollama_model_name,
+            "base_model_name": serving_model_name,
+            "serving_model_name": serving_model_name,
             "artifact_id": None,
             "status": "direct",
             "tags_json": ["direct"],
-            "description": "Direct Ollama model selection outside the registry.",
+            "description": "Direct LM Studio model selection outside the registry.",
             "created_at": None,
             "updated_at": None,
             "artifact": None,
@@ -819,7 +885,7 @@ def complete_training_job(
             dataset_version,
             list(rows),
             export_root=export_dir,
-            require_locked=training_job.training_method == "sft_lora",
+            require_locked=training_job.training_method == "sft_qlora",
         )
         training_job.train_rows = export_result.row_counts.get("train")
         training_job.val_rows = export_result.row_counts.get("val")
@@ -828,7 +894,12 @@ def complete_training_job(
         training_job.output_dir = str(artifact_dir)
         training_job.status = "training"
         failure_phase = "training"
-        session.flush()
+        # Commit the phase transition so the demo poller sees `training`
+        # while the long-running MLX subprocess is still busy. Without this,
+        # the row stays in `preparing_data` (or `queued` from a viewer's
+        # perspective due to transaction isolation) until the whole job
+        # finishes, which can be minutes-to-hours.
+        session.commit()
 
         settings = get_settings()
         training_output = run_training_backend(
@@ -857,11 +928,11 @@ def complete_training_job(
             )
         training_job.log_text = (
             f"Exported dataset to {export_result.export_dir}. "
-            f"Validated PEFT adapter artifact at {training_output.adapter_dir}."
+            f"Validated adapter artifact at {training_output.adapter_dir}."
         )
 
         dataset_export_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type="dataset_export",
             local_path=export_result.export_dir,
@@ -878,7 +949,7 @@ def complete_training_job(
         session.flush()
 
         adapter_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type=artifact_type,
             local_path=training_output.adapter_dir,
@@ -888,7 +959,7 @@ def complete_training_job(
                 "base_model_name": training_job.base_model_name,
                 "trainer_model_name": training_output.trainer_model_name,
                 "trainer_backend": training_output.trainer_backend,
-                "artifact_format": "peft_adapter",
+                "artifact_format": artifact_validation.get("artifact_format", "adapter"),
                 "artifact_valid": artifact_validation["artifact_valid"],
                 "status": "ready",
                 "device": training_output.device,
@@ -902,7 +973,7 @@ def complete_training_job(
         session.flush()
 
         report_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type="training_report",
             local_path=training_output.report_path,
@@ -919,13 +990,13 @@ def complete_training_job(
 
         if training_output.merged_model_dir is not None:
             merged_artifact = FTModelArtifactRecord(
-                id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+                id=_next_prefixed_id("artifact"),
                 training_job_id=training_job.id,
                 artifact_type="merged_model",
                 local_path=training_output.merged_model_dir,
                 metadata_json={
                     "status": "ready",
-                    "artifact_format": "transformers_pretrained",
+                    "artifact_format": "mlx_fused_model",
                     "base_model_name": training_job.base_model_name,
                 },
             )
@@ -954,7 +1025,7 @@ def complete_training_job(
                 + ", ".join(publish_validation["missing"])
             )
         publish_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type="publish_manifest",
             local_path=str(publish_manifest_path),
@@ -970,11 +1041,11 @@ def complete_training_job(
         training_job.status = "registering"
         failure_phase = "registering"
         registry_entry = ModelRegistryRecord(
-            id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
+            id=_next_prefixed_id("model"),
             display_name=f"{dataset.name} {dataset_version.version_label}",
             source_type="fine_tuned",
             base_model_name=training_job.base_model_name,
-            ollama_model_name=f"artifact::{training_job.id}",
+            serving_model_name=f"artifact::{training_job.id}",
             published_model_name=None,
             artifact_id=adapter_artifact.id,
             status="artifact_ready",
@@ -987,7 +1058,7 @@ def complete_training_job(
                 "trainer_model_name": training_output.trainer_model_name,
                 "trainer_backend": training_output.trainer_backend,
                 "artifact_type": artifact_type,
-                "artifact_format": "peft_adapter",
+                "artifact_format": artifact_validation.get("artifact_format", "adapter"),
                 "training_job_id": training_job.id,
                 "candidate_published_model_name": publish_manifest.get(
                     "candidate_model_name"
@@ -999,10 +1070,10 @@ def complete_training_job(
             },
             description=(
                 f"Deterministic smoke fallback artifact for {dataset.name} {dataset_version.version_label}. "
-                "This validates the dataset/export/artifact/registry pipeline for demo smoke runs, but it does not validate model quality or create an Ollama serving model."
+                "This validates the dataset/export/artifact/registry pipeline for demo smoke runs, but it does not validate model quality or create an LM Studio serving model."
                 if artifact_validation.get("smoke_fallback_used")
                 else f"Real fine-tuning artifact for {dataset.name} {dataset_version.version_label}. "
-                "The local output is a validated PEFT adapter artifact with a publish-ready manifest, but no Ollama serving model has been created yet."
+                "The local output is a validated MLX adapter/merged-model artifact with a publish-ready manifest, but no LM Studio serving model has been loaded yet."
             ),
             updated_at=now,
         )
@@ -1046,10 +1117,28 @@ def get_training_job_logs(
             FTModelArtifactRecord.artifact_type == "training_report",
         )
     )
+    # Tail the on-disk training.log so the demo poller can show live
+    # subprocess output while `mlx_lm.lora` is still running. The file
+    # lives at a deterministic path under the artifact dir; it may not
+    # exist yet during the very first seconds of the run, or for a
+    # deterministic_smoke job that wrote a tiny synthetic log.
+    log_tail: str | None = None
+    log_path = _artifacts_root() / training_job_id / "trainer_output" / "training.log"
+    if log_path.is_file():
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        # Cap to the last ~16 KB so a long run doesn't bloat the response.
+        if len(text) > 16384:
+            text = text[-16384:]
+        log_tail = text or None
     return {
         "training_job_id": training_job_id,
         "status": training_job.status,
         "log_text": training_job.log_text,
+        "log_tail": log_tail,
+        "log_path": str(log_path) if log_path.is_file() else None,
         "report_artifact": _serialize_artifact(report_artifact),
     }
 
@@ -1078,7 +1167,7 @@ def get_model_lineage(session: Session, model_id: str) -> dict[str, Any] | None:
         "candidate_published_model_name": _lineage_value(
             model, "candidate_published_model_name"
         ),
-        "ollama_model_name": model.ollama_model_name,
+        "serving_model_name": model.serving_model_name,
         "status": model.status,
         "publish_status": model.publish_status,
         "readiness": readiness,
@@ -1127,22 +1216,111 @@ def publish_training_job_artifacts(
             "publish manifest does not include a candidate serving model name"
         )
 
-    model.publish_status = "publish_ready"
-    model.status = "artifact_ready"
-    model.published_model_name = None
-    model.updated_at = datetime.now(timezone.utc)
+    namespace, _, model_basename = candidate_model_name.partition("/")
+    if not model_basename:
+        namespace = settings.mlx_model_namespace or "platform"
+        model_basename = candidate_model_name
+
     publish_metadata = dict(publish_artifact.metadata_json or {})
-    publish_metadata["ollama_publish_enabled"] = settings.ollama_publish_enabled
-    publish_metadata["status"] = "publish_ready"
-    publish_metadata.setdefault("notes", [])
-    publish_metadata["notes"] = [
-        *publish_metadata["notes"],
-        (
-            "Automatic Ollama create/import is not implemented in this repository, so publish keeps the model artifact-ready until a real serving model exists."
-        ),
-    ]
+    publish_metadata["adapter_publish_enabled"] = settings.adapter_publish_enabled
+
+    register_summary = _register_with_lmstudio(
+        session,
+        training_job_id=training_job_id,
+        namespace=namespace,
+        model_basename=model_basename,
+        settings=settings,
+    )
+    publish_metadata["lmstudio_register"] = register_summary
+
+    lmstudio_loaded = _probe_lmstudio(
+        base_url=settings.lmstudio_base_url, model_id=candidate_model_name
+    )
+    publish_metadata["lmstudio_model_loaded"] = lmstudio_loaded
+
+    now = datetime.now(timezone.utc)
+    if lmstudio_loaded:
+        model.publish_status = "published"
+        model.status = "active"
+        model.published_model_name = candidate_model_name
+        model.serving_model_name = candidate_model_name
+        publish_metadata["status"] = "published"
+        publish_metadata["notes"] = [
+            *publish_metadata.get("notes", []),
+            (
+                f"Fused MLX model is loaded in LM Studio as {candidate_model_name}; "
+                "registry row is now selectable for inference."
+            ),
+        ]
+    else:
+        model.publish_status = "publish_ready"
+        model.status = "artifact_ready"
+        model.published_model_name = None
+        publish_metadata["status"] = "publish_ready"
+        publish_metadata["notes"] = [
+            *publish_metadata.get("notes", []),
+            (
+                f"Fused MLX model staged for LM Studio as '{candidate_model_name}'. "
+                "Open LM Studio, load the model, then re-publish (or wait for the next "
+                "probe) to mark the registry row selectable."
+            ),
+        ]
     publish_artifact.metadata_json = publish_metadata
     session.commit()
     return _serialize_model(
         model, session.get(FTModelArtifactRecord, model.artifact_id)
     )
+
+
+def _register_with_lmstudio(
+    session: Session,
+    *,
+    training_job_id: str,
+    namespace: str,
+    model_basename: str,
+    settings: Any,
+) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    from api.services.model_registry.lmstudio_register import register_fused_model
+
+    merged_artifact = session.scalar(
+        select(FTModelArtifactRecord).where(
+            FTModelArtifactRecord.training_job_id == training_job_id,
+            FTModelArtifactRecord.artifact_type == "merged_model",
+        )
+    )
+    if merged_artifact is None or not merged_artifact.local_path:
+        return {
+            "registered": False,
+            "reason": "no merged_model artifact was produced (smoke fallback?); skipping LM Studio register",
+            "target_dir": None,
+        }
+    result = register_fused_model(
+        fused_model_dir=_Path(merged_artifact.local_path),
+        lmstudio_models_dir=_Path(settings.lmstudio_models_dir),
+        namespace=namespace,
+        model_name=model_basename,
+    )
+    return {
+        "registered": result.target_dir is not None,
+        "target_dir": str(result.target_dir) if result.target_dir else None,
+        "used_symlinks": result.used_symlinks,
+        "copied_file_count": result.copied_file_count,
+        "detail": result.detail,
+    }
+
+
+def _probe_lmstudio(*, base_url: str, model_id: str) -> bool:
+    from api.services.model_registry.lmstudio_register import (
+        invalidate_loaded_cache,
+        probe_lmstudio_for_model,
+    )
+
+    # Publish is an explicit "load this now" gesture by the reviewer, so
+    # bypass the 30s `loaded_lmstudio_models` cache once and read LM Studio
+    # fresh. Without this, a reviewer who loads the model in LM Studio
+    # immediately after the first publish call sees stale "not loaded"
+    # for up to 30s.
+    invalidate_loaded_cache()
+    return probe_lmstudio_for_model(base_url=base_url, model_id=model_id)

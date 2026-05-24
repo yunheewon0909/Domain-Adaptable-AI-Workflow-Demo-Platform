@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
+from api.dependencies import get_llm_client
+from api.llm import LLMClient
 from api.services.fine_tuning import (
     add_dataset_rows,
     create_dataset,
@@ -16,6 +18,10 @@ from api.services.fine_tuning import (
     list_dataset_rows,
     list_datasets,
     set_dataset_version_status,
+)
+from api.services.fine_tuning.qa_generator import (
+    build_dataset_rows,
+    generate_pairs_from_collection,
 )
 
 router = APIRouter(tags=["fine-tuning"])
@@ -58,6 +64,19 @@ class UpdateFTDatasetVersionStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = Field(pattern="^(draft|validated|locked)$")
+
+
+class CreateFTDatasetFromRAGRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rag_collection_id: str = Field(min_length=1)
+    dataset_name: str = Field(min_length=1)
+    version_label: str = Field(default="v1", min_length=1)
+    description: str | None = None
+    max_chunks: int = Field(default=50, ge=1, le=500)
+    pairs_per_chunk: int = Field(default=3, ge=1, le=20)
+    chunk_chars: int = Field(default=1500, ge=200, le=8000)
+    chat_model: str | None = None
 
 
 @router.post("/ft-datasets", status_code=201)
@@ -177,3 +196,95 @@ def post_ft_dataset_version_status(
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ft-datasets/from-rag-collection", status_code=201)
+def post_ft_dataset_from_rag(
+    request: CreateFTDatasetFromRAGRequest,
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> dict[str, Any]:
+    """Build an instruction_sft dataset by asking the LLM to generate Q/A pairs
+    grounded in a RAG collection's documents.
+
+    The endpoint creates the dataset + a draft version + train-split rows in
+    one shot. The reviewer then validates and locks the version through the
+    existing `/ft-dataset-versions/{id}/status` flow before enqueueing
+    training.
+    """
+    with Session(get_engine()) as session:
+        try:
+            generation = generate_pairs_from_collection(
+                session,
+                collection_id=request.rag_collection_id,
+                llm_client=llm_client,
+                max_chunks=request.max_chunks,
+                pairs_per_chunk=request.pairs_per_chunk,
+                chunk_chars=request.chunk_chars,
+                chat_model=request.chat_model,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
+
+        if not generation.pairs:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "No Q/A pairs were generated from the collection.",
+                    "chunk_count": generation.chunk_count,
+                    "errors": [
+                        {
+                            "document_id": err.document_id,
+                            "chunk_index": err.chunk_index,
+                            "reason": err.reason,
+                        }
+                        for err in generation.errors
+                    ],
+                },
+            )
+
+        try:
+            dataset = create_dataset(
+                session,
+                name=request.dataset_name,
+                task_type="instruction_sft",
+                schema_type="json",
+                description=request.description
+                or f"Generated from RAG collection {request.rag_collection_id}.",
+            )
+            version = create_dataset_version(
+                session,
+                dataset_id=dataset["id"],
+                version_label=request.version_label,
+                train_split_ratio=1.0,
+                val_split_ratio=0.0,
+                test_split_ratio=0.0,
+            )
+            rows = build_dataset_rows(
+                generation.pairs, collection_id=request.rag_collection_id
+            )
+            add_result = add_dataset_rows(
+                session, version_id=version["id"], rows=rows
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "dataset_id": dataset["id"],
+            "dataset_version_id": version["id"],
+            "row_count": len(rows),
+            "chunk_count": generation.chunk_count,
+            "rejected_chunk_count": len(generation.errors),
+            "errors": [
+                {
+                    "document_id": err.document_id,
+                    "chunk_index": err.chunk_index,
+                    "reason": err.reason,
+                }
+                for err in generation.errors
+            ],
+            "version_status": add_result.get("status", version.get("status")),
+        }

@@ -1,54 +1,86 @@
 from api.config import get_settings
 
 
-def test_rag_db_path_uses_explicit_env(monkeypatch) -> None:
-    monkeypatch.setenv("RAG_INDEX_DIR", "data/custom-index")
-    monkeypatch.setenv("RAG_DB_PATH", "data/override/r4.db")
-
-    settings = get_settings()
-
-    assert settings.rag_index_dir == "data/custom-index"
-    assert settings.rag_db_path == "data/override/r4.db"
-
-
-def test_rag_db_path_defaults_to_index_dir(monkeypatch) -> None:
-    monkeypatch.setenv("RAG_INDEX_DIR", "data/custom-index")
-    monkeypatch.delenv("RAG_DB_PATH", raising=False)
-
-    settings = get_settings()
-
-    assert settings.rag_db_path.endswith("data/custom-index/rag.db")
-
-
-def test_rag_expected_embed_dim_defaults_and_can_disable(monkeypatch) -> None:
-    monkeypatch.delenv("RAG_EXPECTED_EMBED_DIM", raising=False)
-    settings = get_settings()
-    assert settings.rag_expected_embed_dim == 768
-
+def test_rag_chunk_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("RAG_CHUNK_SIZE", raising=False)
+    monkeypatch.delenv("RAG_CHUNK_OVERLAP", raising=False)
     get_settings.cache_clear()
-    monkeypatch.setenv("RAG_EXPECTED_EMBED_DIM", "0")
     settings = get_settings()
-    assert settings.rag_expected_embed_dim == 0
+    assert settings.rag_chunk_size == 500
+    assert settings.rag_chunk_overlap == 50
 
 
-def test_rag_verify_sample_query_default_and_override(monkeypatch) -> None:
-    monkeypatch.delenv("RAG_VERIFY_SAMPLE_QUERY", raising=False)
-    settings = get_settings()
-    assert settings.rag_verify_sample_query == "maintenance automation"
-
+def test_rag_chunk_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_CHUNK_SIZE", "1024")
+    monkeypatch.setenv("RAG_CHUNK_OVERLAP", "128")
     get_settings.cache_clear()
-    monkeypatch.setenv("RAG_VERIFY_SAMPLE_QUERY", "quality inspection")
     settings = get_settings()
-    assert settings.rag_verify_sample_query == "quality inspection"
+    assert settings.rag_chunk_size == 1024
+    assert settings.rag_chunk_overlap == 128
 
 
-def test_rag_defaults_follow_primary_starter_dataset(monkeypatch) -> None:
-    monkeypatch.delenv("RAG_SOURCE_DIR", raising=False)
-    monkeypatch.delenv("RAG_INDEX_DIR", raising=False)
-    monkeypatch.delenv("RAG_DB_PATH", raising=False)
-
+def test_lmstudio_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("LMSTUDIO_BASE_URL", raising=False)
+    monkeypatch.delenv("LMSTUDIO_CHAT_MODEL", raising=False)
+    monkeypatch.delenv("LMSTUDIO_EMBED_MODEL", raising=False)
+    get_settings.cache_clear()
     settings = get_settings()
+    assert settings.lmstudio_base_url == "http://localhost:1234/v1"
+    assert settings.lmstudio_chat_model == ""
+    assert settings.lmstudio_embed_model == ""
 
-    assert settings.rag_source_dir == "data/sample_docs"
-    assert settings.rag_index_dir == "data/rag_index"
-    assert settings.rag_db_path.endswith("data/rag_index/rag.db")
+
+def test_numeric_env_falls_back_on_garbage(monkeypatch) -> None:
+    """`_to_int` / `_to_float` must not crash on garbage env values.
+
+    Reviewers who typo a numeric env (e.g. `LMSTUDIO_TIMEOUT_SECONDS=auto`)
+    used to take down the API process at boot. The hardened helpers
+    silently fall back to the documented default instead.
+    """
+    monkeypatch.setenv("RAG_CHUNK_SIZE", "not-a-number")
+    monkeypatch.setenv("RAG_CHUNK_OVERLAP", "")
+    monkeypatch.setenv("LMSTUDIO_TIMEOUT_SECONDS", "garbage")
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.rag_chunk_size == 500  # documented default
+    assert settings.rag_chunk_overlap == 50  # documented default
+    assert settings.lmstudio_timeout_seconds == 600.0  # documented default
+
+
+def test_lmstudio_timeout_seconds_honors_override(monkeypatch) -> None:
+    monkeypatch.setenv("LMSTUDIO_TIMEOUT_SECONDS", "42.5")
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.lmstudio_timeout_seconds == 42.5
+
+
+def test_lmstudio_timeout_seconds_enforces_minimum(monkeypatch) -> None:
+    """Negative or sub-1.0 timeouts would break httpx; clamp to the minimum."""
+    monkeypatch.setenv("LMSTUDIO_TIMEOUT_SECONDS", "0")
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.lmstudio_timeout_seconds == 1.0
+
+
+def test_ft_trainer_model_map_default_includes_qwen_mlx(monkeypatch) -> None:
+    """The demo's Train button enqueues `qwen3.5-4b-mlx` jobs without
+    setting trainer_model_name; the default map must resolve that to a
+    tiny MLX checkpoint so the trainer subprocess can download it.
+    """
+    monkeypatch.delenv("FT_TRAINER_MODEL_MAP_JSON", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    import json as _json
+
+    parsed = _json.loads(settings.ft_trainer_model_map_json)
+    assert parsed.get("qwen3.5-4b-mlx") == "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+
+
+def test_mlx_model_namespace_defaults_to_demo(monkeypatch) -> None:
+    """Required so `build_publish_manifest` produces a candidate_model_name
+    out of the box; otherwise publish always 409s.
+    """
+    monkeypatch.delenv("MLX_MODEL_NAMESPACE", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.mlx_model_namespace == "demo"

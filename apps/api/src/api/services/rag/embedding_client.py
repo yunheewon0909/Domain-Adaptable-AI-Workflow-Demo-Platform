@@ -13,8 +13,10 @@ class EmbeddingClient(Protocol):
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 
 
-class OllamaEmbeddingClient:
-    def __init__(self, *, base_url: str, model: str, timeout_seconds: float = 30.0) -> None:
+class LMStudioEmbeddingClient:
+    """LM Studio embedding client (OpenAI-compatible /v1/embeddings)."""
+
+    def __init__(self, *, base_url: str, model: str, timeout_seconds: float = 60.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout_seconds = timeout_seconds
@@ -42,7 +44,9 @@ class OllamaEmbeddingClient:
         for item in data:
             embedding = item.get("embedding") if isinstance(item, dict) else None
             if not isinstance(embedding, list) or not embedding:
-                raise EmbeddingClientError("Invalid embeddings payload: missing embedding vector")
+                raise EmbeddingClientError(
+                    "Invalid embeddings payload: missing embedding vector"
+                )
             vectors.append([float(value) for value in embedding])
 
         if len(vectors) != len(texts):

@@ -1,896 +1,202 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="h-full">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{APP_TITLE}}</title>
     <link rel="stylesheet" href="/demo/assets/styles.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'media',
+        theme: {
+          extend: {
+            colors: {
+              border: 'hsl(var(--border))',
+              bg: 'hsl(var(--bg))',
+              card: 'hsl(var(--card))',
+              fg: 'hsl(var(--fg))',
+              muted: 'hsl(var(--muted))',
+              'muted-fg': 'hsl(var(--muted-fg))',
+              accent: 'hsl(var(--accent))',
+              'accent-fg': 'hsl(var(--accent-fg))',
+              destructive: 'hsl(var(--destructive))',
+            },
+            borderRadius: { lg: '0.75rem', xl: '1rem' },
+            fontFamily: {
+              sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+            },
+          },
+        },
+      };
+    </script>
   </head>
-  <body>
-    <div class="workbench">
-      <aside class="workbench-rail" aria-label="Reviewer workbench navigation">
-        <div class="rail-brand">
-          <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>{{DEMO_EYEBROW}}</p>
-          <h1 class="rail-title">{{APP_TITLE}}</h1>
-          <p class="rail-subtitle">{{DEMO_SUBTITLE}}</p>
-          <span class="hero-pill" aria-hidden="true">Local &middot; static UI &middot; vanilla JS</span>
+  <body class="min-h-full bg-bg text-fg antialiased">
+    <main class="mx-auto max-w-3xl px-4 py-10 space-y-8">
+      <header class="space-y-2">
+        <p class="text-xs uppercase tracking-widest text-muted-fg">{{DEMO_EYEBROW}}</p>
+        <h1 class="text-3xl font-semibold">{{APP_TITLE}}</h1>
+        <p class="text-muted-fg">{{DEMO_SUBTITLE}}</p>
+      </header>
+
+      <!-- Step 1: Knowledge base -->
+      <section class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <div class="space-y-1">
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 1</p>
+          <h2 class="text-xl font-semibold">Knowledge base</h2>
+          <p class="text-sm text-muted-fg">
+            Upload one or more documents (txt, md, pdf) into a collection. Anything you ask in
+            chat below can be grounded in the active collection's content.
+          </p>
         </div>
-        <nav class="mode-rail" role="tablist" aria-label="Reviewer demo modes">
-          <button id="mode-workflow" type="button" class="mode-button mode-card active" data-mode="workflow" aria-selected="true">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">01</span>
-              <span class="mode-card-kind">review</span>
-            </span>
-            <span class="mode-card-title">Workflow reviewer</span>
-            <span class="mode-card-copy">Inspect legacy datasets, RAG sources, and runtime models in one shell.</span>
+
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="flex-1 min-w-[200px] text-sm space-y-1">
+            <span class="text-muted-fg">Active collection</span>
+            <select id="kb-select" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
+          </label>
+          <input
+            id="kb-new-name"
+            type="text"
+            placeholder="New collection name"
+            class="rounded-md border border-border bg-card px-3 py-2 text-sm"
+          />
+          <button id="kb-new-button" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">
+            Create
           </button>
-          <button id="mode-plc" type="button" class="mode-button mode-card" data-mode="plc" aria-selected="false">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">02</span>
-              <span class="mode-card-kind">testing</span>
-            </span>
-            <span class="mode-card-title">PLC testing MVP</span>
-            <span class="mode-card-copy">Import suites, queue runs, and inspect testcase-level pass/fail detail.</span>
+          <button id="kb-reveal" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted" title="Open active collection's storage dir in Finder">
+            Reveal
           </button>
-          <button id="mode-ft" type="button" class="mode-button mode-card" data-mode="ft" aria-selected="false">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">03</span>
-              <span class="mode-card-kind">dataset</span>
-            </span>
-            <span class="mode-card-title">Fine-tuning</span>
-            <span class="mode-card-copy">Manage datasets, lock versions, and enqueue smoke or real training jobs.</span>
+          <button id="kb-delete-collection" type="button" class="rounded-md border border-border px-4 py-2 text-sm text-destructive hover:bg-destructive/10" title="Delete the active collection and all of its documents">
+            Delete
           </button>
-          <button id="mode-models" type="button" class="mode-button mode-card" data-mode="models" aria-selected="false">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">04</span>
-              <span class="mode-card-kind">registry</span>
-            </span>
-            <span class="mode-card-title">Models</span>
-            <span class="mode-card-copy">Review the registry, separate review from inference, and run inference.</span>
+        </div>
+
+        <div class="flex flex-wrap items-end gap-3">
+          <input id="kb-file" type="file" multiple class="flex-1 min-w-[200px] text-sm" />
+          <button id="kb-upload-button" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+            Upload to collection
           </button>
-          <button id="mode-rag" type="button" class="mode-button mode-card" data-mode="rag" aria-selected="false">
-            <span class="mode-card-meta">
-              <span class="mode-card-badge">05</span>
-              <span class="mode-card-kind">retrieval</span>
-            </span>
-            <span class="mode-card-title">RAG</span>
-            <span class="mode-card-copy">Manage collections, upload documents, and preview retrieval before inference.</span>
-          </button>
-        </nav>
-        <p class="rail-footnote">Switch the active surface here. Each mode keeps its own controls, run state, and review panels &mdash; all backed by the shared reviewer shell.</p>
-      </aside>
+        </div>
 
-      <main class="workbench-main">
-        <header class="workspace-header">
-          <div class="workspace-heading">
-            <p class="workspace-eyebrow">Reviewer workbench</p>
-            <h2 class="workspace-title">Domain-adaptable AI workflow demo</h2>
-          </div>
-          <div class="workspace-meta">
-            <span class="mode-count" aria-hidden="true">5 surfaces</span>
-            <span class="hero-pill" aria-hidden="true">vanilla JS &middot; static</span>
-          </div>
-        </header>
-
-        <section id="workflow-mode" class="demo-mode">
-          <section class="mode-start" aria-label="Workflow reviewer quick start">
-            <div class="mode-start-head">
-              <div>
-                <span class="mode-start-eyebrow">Workflow reviewer</span>
-                <h3 class="mode-start-title">Run a workflow review</h3>
-                <p class="mode-start-copy">Pick a workflow source, choose a runtime-ready inference model, then review the run output.</p>
-              </div>
-              <span class="tag">source &middot; model &middot; review</span>
-            </div>
-            <div class="mode-start-actions">
-              <a class="secondary-button" href="#workflow-source-select">Choose source</a>
-              <a class="secondary-button" href="#workflow-model-select">Choose model</a>
-              <a class="secondary-button" href="#workflow-list">Pick workflow</a>
-              <a class="secondary-button" href="#run-button">Run workflow</a>
-            </div>
-          </section>
-        <section class="panel controls">
-          <div class="form-grid">
-            <div class="field">
-              <label for="workflow-source-select">Workflow source</label>
-              <select id="workflow-source-select"></select>
-            </div>
-
-            <div class="field">
-              <label for="workflow-model-select">Workflow inference model</label>
-              <select id="workflow-model-select"></select>
-            </div>
-          </div>
-
-          <div class="button-row">
-            <button id="workflow-refresh-button" type="button" class="secondary-button">Refresh sources &amp; models</button>
-          </div>
-
-          <div id="workflow-source-summary" class="callout empty">Choose a legacy dataset or RAG collection source for workflow review.</div>
-          <div id="workflow-model-summary" class="callout empty">Workflow model status will appear here. Only runtime-ready/selectable models can be chosen here.</div>
-
-          <div class="field">
-            <span class="label">Workflow</span>
-            <div id="workflow-list" class="workflow-list"></div>
-          </div>
-
-          <div class="field">
-            <label for="prompt-input">Prompt</label>
-            <textarea id="prompt-input" rows="5" placeholder="Describe the question, decision, or report you want to run."></textarea>
-          </div>
-
-          <button id="run-button" class="run-button">Run workflow</button>
-          <p id="run-hint" class="hint"></p>
-        </section>
-
-        <section class="grid">
-          <article class="panel">
-            <h2>Job status</h2>
-            <pre id="job-status" class="mono empty">No workflow run yet.</pre>
-          </article>
-
-          <article class="panel">
-            <h2>Result</h2>
-            <div id="result-panel" class="result-panel empty">Run a workflow to see structured output plus source and model metadata.</div>
-          </article>
-        </section>
-
-        <section class="panel evidence-panel">
-          <h2>Evidence</h2>
-          <div id="evidence-panel" class="evidence-list empty">Evidence and source/model context will appear here after a successful run.</div>
-        </section>
+        <div id="kb-docs" class="text-sm text-muted-fg">No collection selected.</div>
+        <p id="kb-hint" class="text-xs text-muted-fg"></p>
       </section>
 
-      <section id="plc-mode" class="demo-mode" hidden>
-        <section class="mode-start" aria-label="PLC testing quick start">
-          <div class="mode-start-head">
-            <div>
-              <span class="mode-start-eyebrow">PLC testing MVP</span>
-              <h3 class="mode-start-title">Import a suite and inspect deterministic run evidence</h3>
-              <p class="mode-start-copy">Start from a CSV/XLSX suite, choose a target, and review testcase-level IO logs without calling an LLM.</p>
-            </div>
-            <span class="tag">import &middot; run &middot; IO logs</span>
-          </div>
-          <div class="mode-start-actions">
-            <a class="secondary-button" href="#plc-suite-file">Import suite</a>
-            <a class="secondary-button" href="#plc-target-select">Choose target</a>
-            <a class="secondary-button" href="#plc-run-button">Run selected cases</a>
-          </div>
-        </section>
-        <section class="grid plc-overview-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>PLC dashboard</h2>
-                <p class="section-copy">Imported suite count, queue depth, recent runs, and recurring failure hotspots.</p>
-              </div>
-              <button id="plc-summary-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="filter-toolbar plc-toolbar compact-toolbar">
-              <div class="field">
-                <label for="plc-dashboard-scope">Dashboard scope</label>
-                <select id="plc-dashboard-scope">
-                  <option value="selected">Selected suite only</option>
-                  <option value="all">All suites</option>
-                </select>
-              </div>
-            </div>
-            <p id="plc-summary-scope" class="muted-line">Dashboard refresh follows the selected suite scope.</p>
-            <div id="plc-summary-cards" class="stat-grid empty">PLC dashboard metrics will appear here.</div>
-            <div class="grid nested-grid plc-summary-grid">
-              <div class="detail-stack">
-                <h3 class="subsection-title">Recent runs</h3>
-                <div id="plc-recent-runs" class="stack-list empty">No PLC runs yet.</div>
-              </div>
-              <div class="detail-stack">
-                <h3 class="subsection-title">Failure hotspots</h3>
-                <div id="plc-failure-hotspots" class="stack-list empty">No failures captured yet.</div>
-              </div>
-              <div class="detail-stack">
-                <h3 class="subsection-title">Target status</h3>
-                <div id="plc-target-statuses" class="stack-list empty">Target status snapshots will appear here.</div>
-              </div>
-              <div class="detail-stack">
-                <h3 class="subsection-title">Instruction failure profile</h3>
-                <div id="plc-instruction-failure-stats" class="stack-list empty">Instruction failure trends will appear here.</div>
-              </div>
-            </div>
-          </article>
+      <!-- Step 2: Train (optional) -->
+      <section class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <div class="space-y-1">
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 2 · optional</p>
+          <h2 class="text-xl font-semibold">Train a model from this collection</h2>
+          <p class="text-sm text-muted-fg">
+            Skip this step to chat using the base model + retrieval. To fine-tune, the platform
+            asks LM Studio to generate Q/A pairs from your collection, then runs MLX QLoRA on
+            them. Result is auto-staged for LM Studio; you load it and it becomes selectable.
+          </p>
+        </div>
 
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Import PLC suite</h2>
-                <p class="section-copy">Upload a CSV or XLSX suite file without client-side spreadsheet parsing.</p>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="field">
-                <label for="plc-suite-title">Suite title</label>
-                <input id="plc-suite-title" type="text" placeholder="Optional override for the imported suite title." />
-              </div>
-              <div class="field">
-                <label for="plc-suite-file">Suite file</label>
-                <input id="plc-suite-file" type="file" accept=".csv,.xlsx" />
-              </div>
-              <button id="plc-import-button" type="button" class="run-button">Import suite</button>
-              <p id="plc-import-hint" class="hint">Choose a CSV or XLSX file to import PLC testcases.</p>
-            </div>
-          </article>
-        </section>
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="text-sm space-y-1">
+            <span class="text-muted-fg">Pairs per chunk</span>
+            <input id="train-pairs" type="number" min="1" max="10" value="3" class="w-20 rounded-md border border-border bg-card px-3 py-2" />
+          </label>
+          <label class="text-sm space-y-1">
+            <span class="text-muted-fg">Max chunks</span>
+            <input id="train-max-chunks" type="number" min="1" max="200" value="20" class="w-20 rounded-md border border-border bg-card px-3 py-2" />
+          </label>
+          <label class="text-sm space-y-1 flex-1 min-w-[200px]">
+            <span class="text-muted-fg">Base model (trains on the same model the chat uses)</span>
+            <select id="train-base" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
+          </label>
+          <button id="train-start" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+            Generate Q/A + train
+          </button>
+        </div>
 
-        <section class="grid plc-browser-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Imported suites</h2>
-                <p class="section-copy">Browse all available PLC suites before drilling into testcase summaries.</p>
-              </div>
-              <button id="plc-suites-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div id="plc-suite-list" class="stack-list empty">No PLC suites imported yet.</div>
-          </article>
+        <ol id="train-stepper" class="flex flex-wrap items-center gap-1 text-xs text-muted-fg hidden">
+          <li data-phase="generating" class="step px-2 py-1 rounded border border-border">Q/A pairs</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="preparing_data" class="step px-2 py-1 rounded border border-border">Prepare data</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="training" class="step px-2 py-1 rounded border border-border">Train</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="packaging" class="step px-2 py-1 rounded border border-border">Package</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="registering" class="step px-2 py-1 rounded border border-border">Register</li>
+          <li class="opacity-40">→</li>
+          <li data-phase="succeeded" class="step px-2 py-1 rounded border border-border">Done</li>
+        </ol>
+        <div id="train-status" class="text-sm text-muted-fg">Idle.</div>
 
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Testcase preview</h2>
-                <p class="section-copy">Inspect suite metadata, testcase-level inputs and expectations, and normalization previews.</p>
-              </div>
-              <button id="plc-normalization-refresh" type="button" class="secondary-button">Refresh preview</button>
-            </div>
-            <div class="filter-toolbar plc-toolbar">
-              <div class="field">
-                <label for="plc-testcase-filter">Filter testcases</label>
-                <input id="plc-testcase-filter" type="search" placeholder="Search case key, instruction, tag, or description." />
-              </div>
-              <div class="field">
-                <label for="plc-testcase-instruction-filter">Instruction</label>
-                <select id="plc-testcase-instruction-filter">
-                  <option value="">All instructions</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-testcase-input-type-filter">Input type</label>
-                <select id="plc-testcase-input-type-filter">
-                  <option value="">All input types</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-testcase-outcome-filter">Expected outcome</label>
-                <select id="plc-testcase-outcome-filter">
-                  <option value="">All expected outcomes</option>
-                  <option value="pass">Expected pass</option>
-                  <option value="fail">Expected fail</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-testcase-suggestion-filter">Suggestion status</label>
-                <select id="plc-testcase-suggestion-filter">
-                  <option value="">All suggestion states</option>
-                  <option value="pending">Pending review</option>
-                  <option value="accepted">Accepted</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="review-required">Review required</option>
-                  <option value="none">No saved suggestion</option>
-                </select>
-              </div>
-            </div>
-            <p id="plc-testcase-filter-summary" class="muted-line">Suite testcases will appear here.</p>
-            <div id="plc-suite-detail" class="detail-stack empty">Select a suite to inspect testcase summaries.</div>
-            <div id="plc-testcase-list" class="stack-list empty">Suite testcases will appear here.</div>
-            <div id="plc-testcase-detail" class="detail-stack empty">Select a testcase to inspect normalized inputs and expected outputs.</div>
-            <div class="section-heading minor-section-heading">
-              <div>
-                <h3 class="subsection-title">Suggestion review</h3>
-                <p class="section-copy">Persist normalization previews and review saved suggestions without leaving the shared demo shell.</p>
-              </div>
-              <div class="button-row">
-                <button id="plc-normalization-persist" type="button" class="secondary-button">Persist suggestion</button>
-                <button id="plc-suggestions-refresh" type="button" class="secondary-button">Refresh saved suggestions</button>
-              </div>
-            </div>
-            <div id="plc-normalization-panel" class="detail-stack empty">Normalization suggestions will appear here.</div>
-            <div id="plc-suggestion-list" class="stack-list empty">Persisted suggestions will appear here after you select a testcase.</div>
-            <div id="plc-suggestion-detail" class="detail-stack empty">Select a saved suggestion to inspect review state and payload detail.</div>
-          </article>
-        </section>
-
-        <section class="grid plc-run-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Run controls</h2>
-                <p class="section-copy">Queue a suite-level run or scope execution to the currently selected testcase. PLC stub execution does not call an LLM.</p>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="field">
-                <label for="plc-target-select">Target</label>
-                <select id="plc-target-select"></select>
-              </div>
-              <div id="plc-target-summary" class="callout empty">Available PLC targets will appear here.</div>
-              <label for="plc-run-selected-only" class="field-toggle">
-                <input id="plc-run-selected-only" type="checkbox" />
-                <span>Run only the selected testcase</span>
-              </label>
-              <button id="plc-run-button" type="button" class="run-button">Enqueue PLC run</button>
-              <p id="plc-run-hint" class="hint">Select a suite, optionally narrow the scope to one testcase, then enqueue the run.</p>
-              <p class="muted-line">The PLC stub path stays deterministic and rule-based. It does not call an LLM.</p>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>PLC runs</h2>
-                <p class="section-copy">Queued, running, and completed PLC jobs for the selected suite.</p>
-              </div>
-              <button id="plc-runs-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="filter-toolbar plc-toolbar">
-              <div class="field">
-                <label for="plc-run-filter">Filter runs</label>
-                <input id="plc-run-filter" type="search" placeholder="Search run id, suite, or target." />
-              </div>
-              <div class="field">
-                <label for="plc-run-target-filter">Target</label>
-                <select id="plc-run-target-filter">
-                  <option value="">All targets</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="plc-run-status-filter">Run status</label>
-                <select id="plc-run-status-filter">
-                  <option value="">All run statuses</option>
-                  <option value="queued">Queued</option>
-                  <option value="running">Running</option>
-                  <option value="succeeded">Succeeded</option>
-                  <option value="failed">Failed</option>
-                </select>
-              </div>
-              <label for="plc-run-problems-only" class="field-toggle">
-                <input id="plc-run-problems-only" type="checkbox" />
-                <span>Problem runs only</span>
-              </label>
-            </div>
-            <p id="plc-run-filter-summary" class="muted-line">Queued and completed PLC runs will appear here.</p>
-            <div id="plc-run-list" class="stack-list empty">Queued and completed PLC runs will appear here.</div>
-          </article>
-        </section>
-
-        <section class="panel">
-          <div class="section-heading">
-            <div>
-              <h2>Run detail</h2>
-              <p class="section-copy">Inspect run-level pass/fail counts plus testcase-level expected vs actual behavior.</p>
-            </div>
-            <button id="plc-run-detail-refresh" type="button" class="secondary-button">Refresh selected run</button>
-          </div>
-          <div id="plc-run-lifecycle" class="run-lifecycle empty">Select a PLC run to inspect queued, running, succeeded, and failed lifecycle state.</div>
-          <div id="plc-run-summary" class="detail-stack empty">Select a PLC run to inspect pass/fail counts and testcase-level detail.</div>
-          <div class="filter-toolbar plc-toolbar">
-            <div class="field">
-              <label for="plc-run-item-filter">Filter run items</label>
-              <input id="plc-run-item-filter" type="search" placeholder="Search testcase id, case key, instruction, or failure reason." />
-            </div>
-            <div class="field">
-              <label for="plc-run-item-status-filter">Item status</label>
-              <select id="plc-run-item-status-filter">
-                <option value="">All item statuses</option>
-                <option value="queued">Queued</option>
-                <option value="running">Running</option>
-                <option value="passed">Passed</option>
-                <option value="failed">Failed</option>
-                <option value="error">Error</option>
-              </select>
-            </div>
-            <label for="plc-run-item-problems-only" class="field-toggle">
-              <input id="plc-run-item-problems-only" type="checkbox" />
-              <span>Failed or error only</span>
-            </label>
-          </div>
-          <p id="plc-run-item-filter-summary" class="muted-line">Run items will appear here after a PLC run starts.</p>
-          <div class="grid plc-item-grid">
-            <div id="plc-run-item-list" class="stack-list empty">Run items will appear here after a PLC run starts.</div>
-            <div id="plc-run-item-detail" class="detail-stack empty">Select a testcase result to inspect expected vs actual output, failure reason, raw I/O snippets, and executor logs.</div>
-          </div>
-        </section>
+        <details id="train-logs-wrap" class="text-xs text-muted-fg hidden">
+          <summary class="cursor-pointer">Show training log</summary>
+          <pre id="train-logs" class="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap"></pre>
+        </details>
       </section>
 
-      <section id="ft-mode" class="demo-mode" hidden>
-        <section class="mode-start" aria-label="Fine-tuning quick start">
-          <div class="mode-start-head">
-            <div>
-              <span class="mode-start-eyebrow">Fine-tuning</span>
-              <h3 class="mode-start-title">Prepare data, lock a version, and follow the training lifecycle</h3>
-              <p class="mode-start-copy">Use the smoke path to validate dataset export, adapter artifacts, and registry handoff before attempting real serving.</p>
-            </div>
-            <span class="tag">dataset &middot; LoRA &middot; artifacts</span>
-          </div>
-          <div class="mode-start-actions">
-            <a class="secondary-button" href="#ft-prepare-smoke-dataset-button">Prepare smoke dataset</a>
-            <a class="secondary-button" href="#ft-fill-smoke-preset-button">Fill preset</a>
-            <a class="secondary-button" href="#ft-enqueue-smoke-training-button">Enqueue smoke training</a>
-          </div>
-        </section>
-        <section class="grid ft-overview-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Create fine-tuning dataset</h2>
-                <p class="section-copy">Manage training data here before you validate a version or enqueue a training job.</p>
-              </div>
-              <button id="ft-datasets-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="controls compact-controls">
-              <div class="form-grid">
-                <div class="field">
-                  <label for="ft-dataset-name">Dataset name</label>
-                  <input id="ft-dataset-name" type="text" placeholder="Instruction tuning demo" />
-                </div>
-                <div class="field">
-                  <label for="ft-dataset-task-type">Task type</label>
-                  <select id="ft-dataset-task-type">
-                    <option value="instruction_sft">instruction_sft</option>
-                    <option value="chat_sft">chat_sft</option>
-                    <option value="prompt_completion">prompt_completion</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="ft-dataset-schema-type">Schema type</label>
-                  <input id="ft-dataset-schema-type" type="text" value="json" />
-                </div>
-              </div>
-              <div class="field">
-                <label for="ft-dataset-description">Description</label>
-                <textarea id="ft-dataset-description" rows="3" placeholder="Short reviewer-facing note about what this dataset trains."></textarea>
-              </div>
-              <button id="ft-create-dataset-button" type="button" class="run-button">Create dataset</button>
-              <p id="ft-dataset-hint" class="hint">Create a dataset or refresh the fine-tuning catalog to review existing assets.</p>
-            </div>
-          </article>
+      <!-- Step 3: Chat -->
+      <section class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <div class="space-y-1">
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 3</p>
+          <h2 class="text-xl font-semibold">Chat</h2>
+          <p class="text-sm text-muted-fg">
+            Pick a model and (optionally) ground the answer in the active knowledge base.
+            Fine-tuned models appear here once you load them in LM Studio.
+          </p>
+        </div>
 
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Fine-tuning datasets</h2>
-                <p class="section-copy">Select a dataset to inspect versions, row quality, and the current reviewer-ready training candidate.</p>
-              </div>
-            </div>
-            <div id="ft-dataset-list" class="stack-list empty">Fine-tuning datasets will appear here.</div>
-          </article>
-        </section>
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="flex-1 min-w-[200px] text-sm space-y-1">
+            <span class="text-muted-fg">Model</span>
+            <select id="chat-model" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input id="chat-ground" type="checkbox" checked />
+            <span>Use knowledge base as context</span>
+          </label>
+        </div>
 
-        <section class="grid ft-browser-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Dataset detail</h2>
-                <p class="section-copy">The selected dataset keeps all versions together so the reviewer can see which one is current.</p>
-              </div>
-            </div>
-            <div id="ft-dataset-detail" class="detail-stack empty">Select a dataset to inspect versions and reviewer notes.</div>
-            <div class="section-heading minor-section-heading">
-              <div>
-                <h3 class="subsection-title">Dataset versions</h3>
-                <p class="section-copy">Create a version, review its row counts, and transition status from draft to validated to locked.</p>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="form-grid">
-                <div class="field">
-                  <label for="ft-version-label">Version label</label>
-                  <input id="ft-version-label" type="text" placeholder="v1" />
-                </div>
-                <div class="field">
-                  <label for="ft-train-ratio">Train split</label>
-                  <input id="ft-train-ratio" type="number" step="0.1" value="0.8" />
-                </div>
-                <div class="field">
-                  <label for="ft-val-ratio">Validation split</label>
-                  <input id="ft-val-ratio" type="number" step="0.1" value="0.1" />
-                </div>
-                <div class="field">
-                  <label for="ft-test-ratio">Test split</label>
-                  <input id="ft-test-ratio" type="number" step="0.1" value="0.1" />
-                </div>
-              </div>
-              <button id="ft-create-version-button" type="button" class="secondary-button">Create version</button>
-            </div>
-            <div id="ft-version-list" class="stack-list empty">Dataset versions will appear here after you select a dataset.</div>
-          </article>
+        <div id="chat-log" class="space-y-3 min-h-[160px] rounded-md border border-border bg-bg p-4 text-sm"></div>
 
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Version detail and rows</h2>
-                <p class="section-copy">Manage row payloads here, apply status transitions, and keep row-level validity visible before training.</p>
-              </div>
-            </div>
-            <div id="ft-version-detail" class="detail-stack empty">Select a dataset version to inspect row summary and training readiness.</div>
-            <div class="filter-toolbar ft-toolbar compact-toolbar">
-              <div class="field">
-                <label for="ft-version-status-select">Apply version status</label>
-                <select id="ft-version-status-select">
-                  <option value="draft">draft</option>
-                  <option value="validated">validated</option>
-                  <option value="locked">locked</option>
-                </select>
-              </div>
-              <div class="button-row">
-                <button id="ft-apply-version-status-button" type="button" class="secondary-button">Apply status</button>
-                <button id="ft-version-refresh" type="button" class="secondary-button">Refresh version</button>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="form-grid">
-                <div class="field">
-                  <label for="ft-row-split">Row split</label>
-                  <select id="ft-row-split">
-                    <option value="train">train</option>
-                    <option value="val">val</option>
-                    <option value="test">test</option>
-                    <option value="unlabeled">unlabeled</option>
-                  </select>
-                </div>
-              </div>
-              <div class="field">
-                <label for="ft-row-input-json">Input JSON or text</label>
-                <textarea id="ft-row-input-json" class="textarea-compact" rows="4" placeholder='{"instruction":"summarize","input":"plant outage note"}'></textarea>
-              </div>
-              <div class="field">
-                <label for="ft-row-target-json">Target JSON or text</label>
-                <textarea id="ft-row-target-json" class="textarea-compact" rows="4" placeholder='{"output":"summary"}'></textarea>
-              </div>
-              <div class="field">
-                <label for="ft-row-metadata-json">Metadata JSON</label>
-                <textarea id="ft-row-metadata-json" class="textarea-compact" rows="3" placeholder='{"source":"reviewer-ui"}'>{}</textarea>
-              </div>
-              <button id="ft-add-row-button" type="button" class="secondary-button">Add row</button>
-              <p id="ft-version-hint" class="hint">Select a version to review row summaries, add rows, or transition status.</p>
-            </div>
-            <div class="grid ft-row-grid nested-grid">
-              <div>
-                <p id="ft-row-summary" class="muted-line">Version rows will appear here.</p>
-                <div id="ft-row-list" class="stack-list empty">Version rows will appear here.</div>
-              </div>
-              <div id="ft-row-detail" class="detail-stack empty">Select a row to inspect its input, target, and validation state.</div>
-            </div>
-          </article>
-        </section>
+        <div id="chat-suggestions" class="flex flex-wrap gap-2 text-xs"></div>
 
-        <section class="grid ft-training-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Training enqueue</h2>
-                <p class="section-copy">Training jobs run here after a dataset version is locked. Keep the serving/base model lineage separate from the small trainer model you may use for a local smoke test.</p>
-              </div>
-            </div>
-            <div class="controls compact-controls">
-              <div class="field">
-                <label for="ft-base-model-name">Base model name</label>
-                <input id="ft-base-model-name" type="text" placeholder="qwen2.5:7b-instruct-q4_K_M" />
-              </div>
-              <div class="field">
-                <label for="ft-training-method">Training method</label>
-                <input id="ft-training-method" type="text" value="sft_lora" />
-              </div>
-              <div class="field">
-                <label for="ft-training-hyperparams-json">Hyperparameters JSON</label>
-                <textarea id="ft-training-hyperparams-json" rows="4" placeholder='{"epochs":1}'>{}</textarea>
-              </div>
-              <button id="ft-enqueue-training-button" type="button" class="run-button">Enqueue training job</button>
-              <p id="ft-training-hint" class="hint">Select a locked dataset version, run preflight first for any new worker runtime, use a host worker for Apple Silicon MPS or <code>./scripts/ft_smoke_preflight.sh --worker-runtime docker</code> for Docker checks, then enqueue training. Smoke jobs validate adapter artifacts and do not publish an Ollama model.</p>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Training jobs</h2>
-                <p class="section-copy">Review queued, running, succeeded, and failed fine-tuning jobs with registered model outputs.</p>
-              </div>
-              <button id="ft-training-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="grid ft-training-detail-grid nested-grid">
-              <div id="ft-training-list" class="stack-list empty">Fine-tuning training jobs will appear here.</div>
-              <div id="ft-training-detail" class="detail-stack empty">Select a training job to inspect artifacts and registered models.</div>
-            </div>
-          </article>
-        </section>
-
-        <section class="panel smoke-guide-panel">
-          <div class="section-heading">
-            <div>
-              <h2>Smoke test guide</h2>
-                <p class="section-copy">Use the local helper script or the reviewer UI helpers to verify the SFT + LoRA artifact path. Run preflight first for the worker runtime you plan to use, then keep smoke outcomes in review-only artifact territory until a real serving model exists.</p>
-            </div>
-            <div class="button-row">
-              <button id="ft-fill-smoke-preset-button" type="button" class="secondary-button">Fill smoke hyperparameter preset</button>
-              <button id="ft-prepare-smoke-dataset-button" type="button" class="secondary-button">Prepare smoke dataset</button>
-              <button id="ft-enqueue-smoke-training-button" type="button" class="secondary-button">Enqueue smoke training</button>
-            </div>
-          </div>
-          <p class="section-copy smoke-guide-copy">Run preflight first, then prepare a smoke dataset and enqueue the tiny preset. Docker demo defaults are CPU-friendly for tiny smoke tests, while a host worker is still recommended for Apple Silicon MPS validation. If the smoke fallback trainer was used, that still only validates the dataset/export/artifact/registry pipeline and keeps the result review-only. Smoke training validates adapter artifact creation, not Ollama serving readiness. Artifact-ready rows remain review-only.</p>
-          <div class="smoke-guide-grid">
-            <section class="callout warning">
-              <p class="callout-title">Runtime preflight</p>
-              <div class="smoke-guide-stack">
-                <p>Run preflight first. Docker demo defaults are CPU-friendly for tiny smoke tests.</p>
-                <p>Host worker recommended for Apple Silicon MPS validation.</p>
-                <p>Docker worker is not macOS MPS-capable.</p>
-                <p>Do not treat CPU smoke defaults as guidance for large-model training.</p>
-                <div class="smoke-guide-command-list">
-                  <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime host</pre>
-                  <pre class="mono">./scripts/ft_smoke_preflight.sh --worker-runtime docker</pre>
-                </div>
-              </div>
-            </section>
-            <section class="callout">
-              <p class="callout-title">Local script command</p>
-              <pre class="mono">./scripts/ft_smoke_test.sh</pre>
-              <p>After preflight, the script creates a small instruction_sft dataset, locks a smoke version, and queues a tiny local training job against <code>hf-internal/testing-tiny-random-gpt2</code>.</p>
-            </section>
-            <section class="callout warning">
-              <p class="callout-title">Smoke fallback notes</p>
-              <p>Smoke fallback trainer was used.</p>
-              <p>This validates dataset/export/artifact/registry flow, not model quality.</p>
-              <p>Use host MPS/local_peft path for real trainer validation.</p>
-            </section>
-            <section class="callout">
-              <p class="callout-title">Expected artifacts</p>
-              <div class="badge-row">
-                <span class="tag">data/model_artifacts/&lt;job_id&gt;/trainer_output/adapter/</span>
-                <span class="tag">training_report.json</span>
-                <span class="tag">training.log</span>
-                <span class="tag">publish/publish_manifest.json</span>
-                <span class="tag">Modelfile.template</span>
-              </div>
-              <p>Expect adapter, report, log, and publish-manifest files under <code>data/model_artifacts/&lt;job_id&gt;/</code> after a successful smoke run. Smoke training validates adapter artifact creation, not Ollama serving readiness.</p>
-            </section>
-            <section class="callout warning">
-              <p class="callout-title">Registry expectations</p>
-              <div class="badge-row">
-                <span class="tag">artifact_ready</span>
-                <span class="tag">publish_ready</span>
-                <span class="tag">not inference-selectable</span>
-              </div>
-              <p>Artifact-ready rows remain review-only. Smoke-test outputs stay reviewable as validated adapter artifacts. They may become publish_ready, but they remain non-selectable for inference until a real serving model exists.</p>
-            </section>
-          </div>
-        </section>
+        <form id="chat-form" class="flex flex-wrap items-end gap-3">
+          <input
+            id="chat-input"
+            type="text"
+            placeholder="Ask a question…"
+            class="flex-1 min-w-[200px] rounded-md border border-border bg-card px-3 py-2 text-sm"
+            required
+          />
+          <button type="submit" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+            Send
+          </button>
+          <button id="chat-clear" type="button" class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">
+            Clear
+          </button>
+        </form>
       </section>
 
-      <section id="models-mode" class="demo-mode" hidden>
-        <section class="mode-start" aria-label="Models quick start">
-          <div class="mode-start-head">
-            <div>
-              <span class="mode-start-eyebrow">Models</span>
-              <h3 class="mode-start-title">Review lineage before selecting a runtime-ready inference model</h3>
-              <p class="mode-start-copy">Artifact-only rows remain visible for review while inference actions stay gated to real selectable models.</p>
-            </div>
-            <span class="tag">registry &middot; readiness &middot; inference</span>
-          </div>
-          <div class="mode-start-actions">
-            <a class="secondary-button" href="#models-list">Review registry</a>
-            <a class="secondary-button" href="#inference-model-select">Choose inference model</a>
-            <a class="secondary-button" href="#inference-run-button">Run inference</a>
-          </div>
-        </section>
-        <section class="grid models-browser-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Model registry</h2>
-                <p class="section-copy">View registered base and fine-tuned models, distinguish validated adapter artifacts from real serving readiness, and review trainer source versus serving lineage before inference.</p>
-              </div>
-              <button id="models-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div id="models-list" class="stack-list empty">Registered models will appear here.</div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Model detail</h2>
-                <p class="section-copy">Inspect the selected model source, base lineage, trainer source, adapter validation status, publish readiness, and serving name.</p>
-              </div>
-            </div>
-            <div id="model-detail" class="detail-stack empty">Select a model to inspect registry metadata and artifact detail.</div>
-          </article>
-        </section>
-
-        <section class="panel models-status-panel">
-          <div class="section-heading">
-            <div>
-              <h2>Model selection status</h2>
-              <p class="section-copy">Keep review selection and inference selection separate here. Registry clicks update the reviewing model only, while inference stays limited to models the registry marks as selectable. Artifact-only models remain reviewable but cannot run inference until serving readiness exists.</p>
-            </div>
-          </div>
-          <div id="models-status-summary" class="status-summary">
-            <section class="callout">
-              <p class="callout-title">Reviewing model</p>
-              <p>Choose a model from the registry to inspect its readiness, lineage, and artifact detail.</p>
-            </section>
-            <section class="callout">
-              <p class="callout-title">Inference model</p>
-              <p>Choose a selectable model in the inference form or promote the reviewing model with the dedicated CTA.</p>
-            </section>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="section-heading">
-            <div>
-              <h2>Inference run</h2>
-              <p class="section-copy">Run inference with the separately selected inference model, optionally layering in RAG collection context before reviewing the answer.</p>
-            </div>
-          </div>
-          <div id="inference-selection-summary" class="detail-stack empty">Only runtime-ready/selectable models can run inference. Select one in the inference selector or use a model card action.</div>
-          <div class="controls compact-controls">
-            <div class="form-grid">
-              <div class="field">
-                <label for="inference-model-select">Inference model selector</label>
-                <select id="inference-model-select"></select>
-              </div>
-              <div class="field">
-                <label for="inference-rag-collection-select">Optional RAG collection selector</label>
-                <select id="inference-rag-collection-select"></select>
-              </div>
-              <div class="field">
-                <label for="inference-temperature">Temperature</label>
-                <input id="inference-temperature" type="number" step="0.1" value="0" />
-              </div>
-              <div class="field">
-                <label for="inference-max-tokens">Max tokens</label>
-                <input id="inference-max-tokens" type="number" step="1" placeholder="Optional" />
-              </div>
-              <div class="field">
-                <label for="inference-top-k">RAG top k</label>
-                <input id="inference-top-k" type="number" step="1" value="3" />
-              </div>
-            </div>
-            <div class="field">
-              <label for="inference-prompt">Prompt</label>
-              <textarea id="inference-prompt" rows="5" placeholder="Ask the current inference model to summarize, classify, or reason over the current reviewer context."></textarea>
-            </div>
-            <button id="inference-run-button" type="button" class="run-button">Run inference</button>
-            <p id="inference-run-hint" class="hint">Choose an inference model, optionally attach a RAG collection, and run inference here.</p>
-          </div>
-          <div id="inference-result" class="detail-stack empty">Inference answers, model metadata, and retrieval preview will appear here.</div>
-        </section>
+      <!-- Settings (collapsed) -->
+      <section class="rounded-xl border border-border bg-card">
+        <details class="group p-6 space-y-3">
+          <summary class="cursor-pointer text-sm font-medium text-muted-fg list-none flex items-center justify-between">
+            <span>Advanced · service status</span>
+            <span class="text-xs text-muted-fg group-open:hidden">show</span>
+            <span class="text-xs text-muted-fg hidden group-open:inline">hide</span>
+          </summary>
+          <div id="settings-status" class="text-xs text-muted-fg space-y-1 pt-2"></div>
+          <p class="text-xs text-muted-fg pt-2">
+            Want a richer chat client? Configure
+            <a class="underline" href="https://github.com/lobehub/lobe-chat" target="_blank" rel="noopener">lobe-chat</a>
+            or
+            <a class="underline" href="https://github.com/open-webui/open-webui" target="_blank" rel="noopener">Open WebUI</a>
+            with an OpenAI-compatible base URL pointing at <code class="bg-muted px-1 py-0.5 rounded">/v1</code>.
+          </p>
+        </details>
       </section>
+    </main>
 
-      <section id="rag-mode" class="demo-mode" hidden>
-        <section class="mode-start" aria-label="RAG quick start">
-          <div class="mode-start-head">
-            <div>
-              <span class="mode-start-eyebrow">RAG</span>
-              <h3 class="mode-start-title">Create collections, upload documents, and preview retrieval</h3>
-              <p class="mode-start-copy">Grounding data gets its own reviewer surface so retrieval quality can be inspected before model inference.</p>
-            </div>
-            <span class="tag">collections &middot; documents &middot; retrieval</span>
-          </div>
-          <div class="mode-start-actions">
-            <a class="secondary-button" href="#rag-collection-name">Create collection</a>
-            <a class="secondary-button" href="#rag-document-file">Upload document</a>
-            <a class="secondary-button" href="#rag-preview-button">Preview retrieval</a>
-          </div>
-        </section>
-        <section class="grid rag-browser-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Create RAG collection</h2>
-                <p class="section-copy">Manage retrieval data separately here so the reviewer can tell which documents are grounding inference.</p>
-              </div>
-              <button id="rag-collections-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="controls compact-controls">
-              <div class="field">
-                <label for="rag-collection-name">Collection name</label>
-                <input id="rag-collection-name" type="text" placeholder="Maintenance docs" />
-              </div>
-              <div class="field">
-                <label for="rag-collection-description">Description</label>
-                <textarea id="rag-collection-description" rows="3" placeholder="Short reviewer-facing note about the collection contents."></textarea>
-              </div>
-              <div class="field">
-                <label for="rag-embedding-model">Embedding model</label>
-                <input id="rag-embedding-model" type="text" placeholder="Optional override" />
-              </div>
-              <div class="field">
-                <label for="rag-chunking-policy-json">Chunking policy JSON</label>
-                <textarea id="rag-chunking-policy-json" rows="3" placeholder='{"chunk_size":800,"chunk_overlap":120}'>{}</textarea>
-              </div>
-              <button id="rag-create-collection-button" type="button" class="run-button">Create collection</button>
-              <p id="rag-collection-hint" class="hint">Create or refresh a collection to manage document-level grounding data.</p>
-            </div>
-            <div id="rag-collection-list" class="stack-list empty">RAG collections will appear here.</div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Collection detail</h2>
-                <p class="section-copy">Inspect the selected collection before uploading documents or previewing retrieval behavior.</p>
-              </div>
-            </div>
-            <div id="rag-collection-detail" class="detail-stack empty">Select a collection to inspect document counts, embedding settings, and chunking policy.</div>
-          </article>
-        </section>
-
-        <section class="grid rag-doc-grid">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Collection documents</h2>
-                <p class="section-copy">Upload documents here, review document metadata and previews, and delete collection-managed files without touching the legacy workflow rag.db index.</p>
-              </div>
-              <button id="rag-documents-refresh" type="button" class="secondary-button">Refresh</button>
-            </div>
-            <div class="controls compact-controls">
-              <div class="form-grid">
-                <div class="field">
-                  <label for="rag-document-source-type">Source type</label>
-                  <select id="rag-document-source-type">
-                    <option value="upload">upload</option>
-                    <option value="reviewer">reviewer</option>
-                    <option value="seed">seed</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="rag-document-file">Document file</label>
-                  <input id="rag-document-file" type="file" accept=".txt,.md,.pdf" />
-                </div>
-              </div>
-              <button id="rag-upload-document-button" type="button" class="secondary-button">Upload document</button>
-              <p id="rag-document-hint" class="hint">Select a collection and upload TXT, Markdown, or PDF files to manage RAG grounding data.</p>
-            </div>
-            <p id="rag-document-summary" class="muted-line">Collection documents will appear here.</p>
-            <div id="rag-document-list" class="stack-list empty">Collection documents will appear here.</div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>Document detail</h2>
-                <p class="section-copy">Inspect upload status, preview text, parse metadata, and delete the selected collection-managed document here.</p>
-              </div>
-            </div>
-            <div id="rag-document-detail" class="detail-stack empty">Select a document to inspect filename, source type, and preview detail.</div>
-          </article>
-        </section>
-
-        <section class="panel">
-          <div class="section-heading">
-            <div>
-              <h2>Retrieval preview</h2>
-              <p class="section-copy">Preview how the selected collection retrieves evidence before you use it from the Models inference surface. This retrieval preview does not call an LLM.</p>
-            </div>
-          </div>
-          <div class="controls compact-controls">
-            <div class="form-grid">
-              <div class="field">
-                <label for="rag-preview-query">Preview query</label>
-                <input id="rag-preview-query" type="text" placeholder="maintenance automation" />
-              </div>
-              <div class="field">
-                <label for="rag-preview-top-k">Top k</label>
-                <input id="rag-preview-top-k" type="number" step="1" value="3" />
-              </div>
-            </div>
-            <button id="rag-preview-button" type="button" class="run-button">Preview retrieval</button>
-            <p id="rag-preview-hint" class="hint">Select a collection and run a retrieval preview to inspect document-level context before inference. This does not call an LLM.</p>
-          </div>
-          <div id="rag-preview-result" class="detail-stack empty">Retrieval preview results will appear here.</div>
-        </section>
-      </section>
-      </main>
-    </div>
-
-    <script src="/demo/assets/app.js" defer></script>
+    <script src="/demo/assets/app.js"></script>
   </body>
 </html>

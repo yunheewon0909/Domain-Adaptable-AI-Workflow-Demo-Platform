@@ -8,37 +8,15 @@ from api.db import Base, get_engine
 from api.main import create_app
 from api.services import starter_definitions
 from api.services.starter_definitions import DEFAULT_STARTER, get_default_starter
-from api.services.workflows.contracts import (
-    DRAFT_MODEL_BY_WORKFLOW_KEY,
-    RESULT_MODEL_BY_WORKFLOW_KEY,
-)
 
 
-def test_default_starter_preserves_current_demo_pack() -> None:
+def test_default_starter_has_app_and_demo_metadata() -> None:
     starter = get_default_starter()
 
     assert starter.app.title == "Domain-Adaptable AI Workflow Demo API"
     assert starter.demo.enabled is True
-    assert [dataset.key for dataset in starter.datasets] == [
-        "industrial_demo",
-        "enterprise_docs",
-    ]
-    assert [workflow.key for workflow in starter.workflows] == [
-        "briefing",
-        "recommendation",
-        "report_generator",
-    ]
-    assert [profile.key for profile in starter.profiles] == [
-        "industrial_ops",
-        "enterprise_docs",
-    ]
-
-
-def test_default_starter_workflows_align_with_contract_maps() -> None:
-    workflow_keys = [workflow.key for workflow in get_default_starter().workflows]
-
-    assert workflow_keys == list(DRAFT_MODEL_BY_WORKFLOW_KEY)
-    assert workflow_keys == list(RESULT_MODEL_BY_WORKFLOW_KEY)
+    assert starter.demo.eyebrow
+    assert starter.demo.subtitle
 
 
 def _build_test_client(monkeypatch, tmp_path: Path, *, starter) -> TestClient:

@@ -9,8 +9,8 @@ from api.config import Settings
 from api.services.fine_tuning.dataset_formatters import DatasetExportResult
 
 
-SUPPORTED_REAL_TRAINING_METHODS = {"sft_lora"}
-SUPPORTED_TRAINER_BACKENDS = {"local_peft", "deterministic_smoke"}
+SUPPORTED_REAL_TRAINING_METHODS = {"sft_qlora"}
+SUPPORTED_TRAINER_BACKENDS = {"deterministic_smoke", "mlx_qlora"}
 DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME = "deterministic-smoke-trainer"
 HF_MODEL_RESOLUTION_ERROR_MARKERS = (
     "huggingface.co",
@@ -50,6 +50,12 @@ class TrainingConfig:
     max_steps: int
     export_merged_model: bool
     per_device_eval_batch_size: int
+    # MLX QLoRA-specific
+    mlx_iters: int = 1000
+    mlx_steps_per_eval: int = 200
+    mlx_val_batches: int = 10
+    mlx_save_every: int = 500
+    mlx_lora_layers: int = 16
 
 
 @dataclass
@@ -75,6 +81,72 @@ def _parse_model_map(raw_value: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in parsed.items() if str(value).strip()}
 
 
+def _resolve_lmstudio_model_path(model_key: str) -> str | None:
+    """Resolve an LM Studio modelKey (e.g. `qwen3.5-4b-mlx`) to the
+    absolute on-disk path of its MLX repo directory.
+
+    Lets the trainer use the same model the chat picker selected, so
+    "I picked the 4B base in the dropdown" actually trains the 4B
+    instead of silently swapping to whatever `FT_TRAINER_MODEL_MAP_JSON`
+    maps to.
+
+    Returns None when:
+    - `lms` CLI is not on PATH
+    - the model is not indexed by LM Studio
+    - the resolved path doesn't look like an MLX repo
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    lms_exe = _shutil.which("lms") or str(
+        Path.home() / ".lmstudio" / "bin" / "lms"
+    )
+    if not Path(lms_exe).is_file():
+        return None
+    try:
+        completed = _subprocess.run(
+            [lms_exe, "ls", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (_subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        listing = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(listing, list):
+        return None
+    # LM Studio surfaces three identifiers per model; any can match the
+    # `serving_model_name` we received: `modelKey` (short id, e.g.
+    # `qwen3.5-4b-mlx`), `indexedModelIdentifier` (namespaced, e.g.
+    # `mlx-community/Qwen3.5-4B-MLX-4bit`), or the relative `path`
+    # (same as indexed id for most models). Accept any of the three.
+    for entry in listing:
+        if not isinstance(entry, dict):
+            continue
+        candidates = {
+            str(entry.get(field) or "").strip()
+            for field in ("modelKey", "indexedModelIdentifier", "path")
+        }
+        if model_key not in candidates:
+            continue
+        rel_path = str(entry.get("path") or "").strip()
+        if not rel_path:
+            continue
+        absolute = Path.home() / ".lmstudio" / "models" / rel_path
+        if (absolute / "config.json").is_file() and (
+            (absolute / "model.safetensors").is_file()
+            or (absolute / "model.npz").is_file()
+        ):
+            return str(absolute)
+        return None
+    return None
+
+
 def resolve_trainer_model_name(
     base_model_name: str,
     hyperparams_json: dict[str, Any],
@@ -83,13 +155,20 @@ def resolve_trainer_model_name(
     explicit = str(hyperparams_json.get("trainer_model_name") or "").strip()
     if explicit:
         return explicit
+    # If the user picked a base model that LM Studio already has on disk,
+    # train on that exact local copy. Avoids silently swapping a 4B
+    # picker selection for a 0.5B HF checkpoint via the env map.
+    local_path = _resolve_lmstudio_model_path(base_model_name)
+    if local_path:
+        return local_path
     model_map = _parse_model_map(settings.ft_trainer_model_map_json)
     if base_model_name in model_map:
         return model_map[base_model_name]
     if "/" in base_model_name:
         return base_model_name
     raise RuntimeError(
-        "trainer_model_name is required unless FT_TRAINER_MODEL_MAP_JSON maps the selected base model"
+        "trainer_model_name is required: no LM Studio model matches the base, "
+        "no FT_TRAINER_MODEL_MAP_JSON entry, and the base is not a HF model id."
     )
 
 
@@ -105,7 +184,7 @@ def build_training_config(
         raise RuntimeError(
             f"unsupported real training method: {normalized_method}. Supported methods: {sorted(SUPPORTED_REAL_TRAINING_METHODS)}"
         )
-    trainer_backend = settings.ft_trainer_backend.strip() or "local_peft"
+    trainer_backend = settings.ft_trainer_backend.strip() or "mlx_qlora"
     if trainer_backend not in SUPPORTED_TRAINER_BACKENDS:
         raise RuntimeError(
             f"unsupported trainer backend: {trainer_backend}. Supported backends: {sorted(SUPPORTED_TRAINER_BACKENDS)}"
@@ -136,55 +215,21 @@ def build_training_config(
         per_device_eval_batch_size=max(
             1, int(hyperparams_json.get("per_device_eval_batch_size", 1))
         ),
+        mlx_iters=max(10, int(hyperparams_json.get("mlx_iters", settings.ft_mlx_iters))),
+        mlx_steps_per_eval=max(
+            1, int(hyperparams_json.get("mlx_steps_per_eval", settings.ft_mlx_steps_per_eval))
+        ),
+        mlx_val_batches=max(
+            1, int(hyperparams_json.get("mlx_val_batches", settings.ft_mlx_val_batches))
+        ),
+        mlx_save_every=max(
+            1, int(hyperparams_json.get("mlx_save_every", settings.ft_mlx_save_every))
+        ),
+        mlx_lora_layers=max(
+            1, int(hyperparams_json.get("mlx_lora_layers", settings.ft_mlx_lora_layers))
+        ),
     )
 
-
-def _detect_device(settings: Settings) -> str:
-    try:
-        import torch
-    except Exception as exc:  # pragma: no cover - import error validated by caller
-        raise RuntimeError(
-            "torch is required for real fine-tuning. Install training dependencies first."
-        ) from exc
-
-    requested = settings.training_device
-    if requested == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("TRAINING_DEVICE=cuda but CUDA is not available")
-        return "cuda"
-    if requested == "mps":
-        if not torch.backends.mps.is_available():
-            raise RuntimeError("TRAINING_DEVICE=mps but MPS is not available")
-        return "mps"
-    if requested == "cpu":
-        if not settings.training_allow_cpu:
-            raise RuntimeError(
-                "CPU training is disabled by default. Set TRAINING_ALLOW_CPU=true only for tiny smoke-test models."
-            )
-        return "cpu"
-
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    if settings.training_allow_cpu:
-        return "cpu"
-    raise RuntimeError(
-        "No GPU accelerator is available and CPU training is disabled. Set TRAINING_DEVICE explicitly or enable TRAINING_ALLOW_CPU for tiny local smoke tests."
-    )
-
-
-def _require_training_dependencies() -> None:
-    missing: list[str] = []
-    for package_name in ["torch", "datasets", "transformers", "peft", "accelerate"]:
-        try:
-            __import__(package_name)
-        except Exception:
-            missing.append(package_name)
-    if missing:
-        raise RuntimeError(
-            "real fine-tuning dependencies are missing: " + ", ".join(sorted(missing))
-        )
 
 
 def run_training_backend(
@@ -209,11 +254,11 @@ def run_training_backend(
             output_dir=output_dir,
             lineage_backend="deterministic_smoke",
         )
-    if config.trainer_backend != "local_peft":
+    if config.trainer_backend != "mlx_qlora":
         raise RuntimeError(f"unsupported trainer backend: {config.trainer_backend}")
+
     try:
-        _require_training_dependencies()
-        return _run_local_peft_training(
+        return _run_mlx_qlora_training(
             export_result, config=config, settings=settings, output_dir=output_dir
         )
     except Exception as exc:
@@ -233,7 +278,7 @@ def run_training_backend(
                 export_result,
                 config=config,
                 output_dir=output_dir,
-                lineage_backend="local_peft+smoke_fallback",
+                lineage_backend="mlx_qlora+smoke_fallback",
                 root_cause=str(exc),
             )
         except Exception as fallback_exc:
@@ -257,6 +302,9 @@ def _should_use_smoke_fallback(
     return is_hf_model_resolution_error(exc)
 
 
+# ---- Deterministic smoke (kept for testing) ---------------------------
+
+
 def _run_deterministic_smoke_training(
     export_result: DatasetExportResult,
     *,
@@ -273,20 +321,14 @@ def _run_deterministic_smoke_training(
 
     adapter_config = {
         "base_model_name_or_path": config.base_model_name,
-        "peft_type": "LORA",
-        "task_type": "CAUSAL_LM",
-        "r": config.lora_r,
-        "lora_alpha": config.lora_alpha,
-        "lora_dropout": config.lora_dropout,
-        "bias": "none",
-        "target_modules": ["q_proj", "v_proj"],
-        "inference_mode": True,
+        "adapter_type": "deterministic_smoke",
+        "training_method": config.training_method,
         "smoke_fallback": True,
     }
     (adapter_dir / "adapter_config.json").write_text(
         json.dumps(adapter_config, indent=2), encoding="utf-8"
     )
-    (adapter_dir / "adapter_model.safetensors").write_bytes(
+    (adapter_dir / "adapters.safetensors").write_bytes(
         b"deterministic-smoke-adapter-placeholder\n"
     )
 
@@ -319,7 +361,7 @@ def _run_deterministic_smoke_training(
             "used": True,
             "message": "Smoke fallback trainer was used",
             "quality_note": "This validates dataset/export/artifact/registry flow, not model quality",
-            "runtime_note": "Use host MPS/local_peft path for real trainer validation",
+            "runtime_note": "Use the Mac-native MLX QLoRA path for real trainer validation",
             "root_cause": root_cause,
         },
     }
@@ -332,7 +374,7 @@ def _run_deterministic_smoke_training(
         "smoke_fallback_used=true",
         "Smoke fallback trainer was used",
         "This validates dataset/export/artifact/registry flow, not model quality",
-        "Use host MPS/local_peft path for real trainer validation",
+        "Use the Mac-native MLX QLoRA path for real trainer validation",
     ]
     if root_cause:
         log_lines.append(f"fallback_trigger={root_cause}")
@@ -351,180 +393,243 @@ def _run_deterministic_smoke_training(
     )
 
 
-def _run_local_peft_training(
+# ---- MLX QLoRA backend ------------------------------------------------
+
+
+_TOKENIZER_AUX_FILES = (
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "vocab.json",
+    "merges.txt",
+    "tokenizer.model",
+    "generation_config.json",
+)
+
+
+def _backfill_tokenizer_aux_files(
+    *, fused_dir: Path, base_model_repo_id: str, logs_path: Path
+) -> None:
+    """Copy missing tokenizer aux files from the base model's HF snapshot.
+
+    `mlx_lm.fuse` only emits the core model + tokenizer.json /
+    tokenizer_config.json. LM Studio's MLX loader rejects the fused dir
+    when `special_tokens_map.json` (or sometimes vocab.json/merges.txt)
+    is absent — the symptom reviewers see is "Load failed" in LM Studio's
+    UI. Best-effort: if any aux file is missing in the fused dir but
+    present in the base model's HF snapshot, copy it across.
+    """
+    import shutil as _shutil
+
+    if "/" not in base_model_repo_id:
+        return
+    cache_dir_name = "models--" + base_model_repo_id.replace("/", "--")
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / cache_dir_name / "snapshots"
+    if not hf_cache.is_dir():
+        return
+    snapshots = sorted(hf_cache.iterdir())
+    if not snapshots:
+        return
+    snapshot = snapshots[-1]
+    copied: list[str] = []
+    for filename in _TOKENIZER_AUX_FILES:
+        source = snapshot / filename
+        if not source.exists():
+            continue
+        target = fused_dir / filename
+        if target.exists():
+            continue
+        try:
+            _shutil.copy2(source, target)
+            copied.append(filename)
+        except OSError:
+            continue
+    if copied:
+        with logs_path.open("a", encoding="utf-8") as log_fh:
+            log_fh.write(
+                f"\nbackfilled tokenizer aux from base model snapshot: {', '.join(copied)}\n"
+            )
+
+
+def _tail_text(path: Path, *, max_bytes: int = 2000) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return ""
+    return data[-max_bytes:].decode("utf-8", errors="replace").strip()
+
+
+def _run_mlx_qlora_training(
     export_result: DatasetExportResult,
     *,
     config: TrainingConfig,
     settings: Settings,
     output_dir: Path,
 ) -> TrainingArtifacts:
-    import torch
-    from datasets import load_dataset
-    from peft import LoraConfig, TaskType, get_peft_model
-    from transformers import (
-        AutoModelForCausalLM,
-        AutoTokenizer,
-        DataCollatorForLanguageModeling,
-        Trainer,
-        TrainingArguments,
-        set_seed,
-    )
+    """Run MLX QLoRA training via subprocess (mlx_lm.lora + mlx_lm.fuse).
 
-    device = _detect_device(settings)
+    Subprocess stdout/stderr is streamed directly to logs_path so memory usage
+    is bounded for long runs.
+    """
+    import shutil
+    import subprocess
+    import time
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    adapter_dir = output_dir / "adapter"
+    adapter_dir = output_dir / "adapters"
+    fused_dir = output_dir / "fused_model"
     logs_path = output_dir / "training.log"
     report_path = output_dir / "training_report.json"
-    merged_model_dir = output_dir / "merged_model"
 
-    set_seed(config.seed)
-    logs: list[str] = [
-        f"trainer_backend={config.trainer_backend}",
-        f"trainer_model_name={config.trainer_model_name}",
-        f"device={device}",
-        f"training_method={config.training_method}",
+    # Build MLX training data dir (train.jsonl + valid.jsonl from export)
+    if not export_result.train_file:
+        raise RuntimeError(
+            "MLX QLoRA training requires a non-empty train split in the dataset export."
+        )
+
+    mlx_data_dir = output_dir / "mlx_data"
+    mlx_data_dir.mkdir(parents=True, exist_ok=True)
+    (mlx_data_dir / "train.jsonl").write_bytes(
+        Path(export_result.train_file).read_bytes()
+    )
+    if export_result.val_file:
+        (mlx_data_dir / "valid.jsonl").write_bytes(
+            Path(export_result.val_file).read_bytes()
+        )
+
+    header_lines = [
+        "trainer_backend=mlx_qlora",
+        f"base_model={config.base_model_name}",
+        f"trainer_model={config.trainer_model_name}",
+        f"iters={config.mlx_iters}",
+        f"batch_size={config.batch_size}",
+        f"lora_layers={config.mlx_lora_layers}",
+        f"lora_r={config.lora_r}",
+        f"learning_rate={config.learning_rate}",
     ]
 
-    tokenizer = AutoTokenizer.from_pretrained(config.trainer_model_name)
-    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    torch_dtype = None
-    if device == "cuda" and torch.cuda.is_bf16_supported():
-        torch_dtype = torch.bfloat16
-
-    model = AutoModelForCausalLM.from_pretrained(
-        config.trainer_model_name,
-        torch_dtype=torch_dtype,
-    )
-    if tokenizer.pad_token_id is not None:
-        model.config.pad_token_id = tokenizer.pad_token_id
-
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=config.lora_r,
-        lora_alpha=config.lora_alpha,
-        lora_dropout=config.lora_dropout,
-    )
-    model = get_peft_model(model, lora_config)
-
-    data_files: dict[str, str] = {}
-    if export_result.train_file:
-        data_files["train"] = export_result.train_file
-    if export_result.val_file:
-        data_files["validation"] = export_result.val_file
-    dataset_dict = load_dataset("json", data_files=data_files)
-
-    def _tokenize(batch: dict[str, list[Any]]) -> dict[str, Any]:
-        texts = [str(item) for item in batch.get("text", [])]
-        encoded = tokenizer(
-            texts,
-            truncation=True,
-            max_length=config.max_seq_length,
-            padding=False,
+    lora_exe = shutil.which("mlx_lm.lora")
+    if not lora_exe:
+        raise RuntimeError(
+            "mlx_lm.lora CLI is required. Install with: brew install mlx-lm"
         )
-        encoded["labels"] = [list(item) for item in encoded["input_ids"]]
-        return encoded
+    lora_cmd = [
+        lora_exe,
+        "--model", config.trainer_model_name,
+        "--data", str(mlx_data_dir),
+        "--train",
+        "--num-layers", str(config.mlx_lora_layers),
+        "--batch-size", str(config.batch_size),
+        "--iters", str(config.mlx_iters),
+        "--steps-per-eval", str(config.mlx_steps_per_eval),
+        "--val-batches", str(config.mlx_val_batches),
+        "--save-every", str(config.mlx_save_every),
+        "--adapter-path", str(adapter_dir),
+        "--learning-rate", str(config.learning_rate),
+        "--seed", str(config.seed),
+        "--max-seq-length", str(config.max_seq_length),
+    ]
+    header_lines.append("lora_cmd=" + " ".join(str(a) for a in lora_cmd))
+    print(f"[MLX QLoRA] Starting training: {' '.join(str(a) for a in lora_cmd)}")
 
-    tokenized_train = dataset_dict["train"].map(
-        _tokenize,
-        batched=True,
-        remove_columns=dataset_dict["train"].column_names,
-    )
-    tokenized_val = None
-    if "validation" in dataset_dict:
-        tokenized_val = dataset_dict["validation"].map(
-            _tokenize,
-            batched=True,
-            remove_columns=dataset_dict["validation"].column_names,
+    # Stream lora subprocess output directly to logs_path (bounded memory).
+    start = time.monotonic()
+    with logs_path.open("w", encoding="utf-8") as log_fh:
+        log_fh.write("\n".join(header_lines) + "\n")
+        log_fh.write("--- mlx_lm.lora stdout/stderr ---\n")
+        log_fh.flush()
+        result = subprocess.run(
+            lora_cmd, stdout=log_fh, stderr=subprocess.STDOUT
+        )
+    elapsed = time.monotonic() - start
+
+    with logs_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write(f"\ntraining_elapsed_s={elapsed:.1f}\n")
+        log_fh.write(f"training_returncode={result.returncode}\n")
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"MLX QLoRA training failed (exit={result.returncode}): "
+            f"{_tail_text(logs_path, max_bytes=500)}"
         )
 
-    training_args = TrainingArguments(
-        output_dir=str(output_dir / "trainer_state"),
-        overwrite_output_dir=True,
-        num_train_epochs=config.epochs,
-        learning_rate=config.learning_rate,
-        per_device_train_batch_size=config.batch_size,
-        per_device_eval_batch_size=config.per_device_eval_batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        eval_strategy=(
-            config.eval_strategy
-            if tokenized_val is not None and config.eval_strategy != "no"
-            else "no"
-        ),
-        save_strategy="no",
-        logging_strategy="epoch",
-        report_to=[],
-        seed=config.seed,
-        max_steps=config.max_steps,
-        fp16=device == "cuda" and not torch.cuda.is_bf16_supported(),
-        bf16=device == "cuda" and torch.cuda.is_bf16_supported(),
-        use_cpu=device == "cpu",
+    adapter_weights = adapter_dir / "adapters.safetensors"
+    if not adapter_weights.exists():
+        # mlx-lm 0.20+ may use npz format
+        adapter_weights = adapter_dir / "adapters.npz"
+    if not adapter_weights.exists():
+        raise RuntimeError(
+            f"MLX QLoRA training completed but adapter not found at {adapter_dir}/*"
+        )
+
+    fuse_exe = shutil.which("mlx_lm.fuse")
+    if not fuse_exe:
+        raise RuntimeError(
+            "mlx_lm.fuse CLI is required. Install with: brew install mlx-lm"
+        )
+    fuse_cmd = [
+        fuse_exe,
+        "--model", config.trainer_model_name,
+        "--adapter-path", str(adapter_dir),
+        "--save-path", str(fused_dir),
+    ]
+    print(f"[MLX QLoRA] Fusing model: {' '.join(fuse_cmd)}")
+
+    with logs_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write(f"\nfusing model to {fused_dir}\n")
+        log_fh.write("--- mlx_lm.fuse stdout/stderr ---\n")
+        log_fh.flush()
+        fuse_result = subprocess.run(
+            fuse_cmd, stdout=log_fh, stderr=subprocess.STDOUT
+        )
+
+    if fuse_result.returncode != 0:
+        raise RuntimeError(
+            f"MLX model fusion failed (exit={fuse_result.returncode}): "
+            f"{_tail_text(logs_path, max_bytes=500)}"
+        )
+
+    # mlx_lm.fuse writes only the core model + tokenizer.json /
+    # tokenizer_config.json. LM Studio's MLX loader (and stricter HF
+    # transformers builds) also want the auxiliary tokenizer files
+    # (`special_tokens_map.json`, `vocab.json`, `merges.txt`,
+    # `added_tokens.json`, `tokenizer.model`, `generation_config.json`).
+    # Copy them from the base model's HF snapshot if present so the
+    # fused dir is a fully-loadable MLX repo.
+    _backfill_tokenizer_aux_files(
+        fused_dir=fused_dir,
+        base_model_repo_id=config.trainer_model_name,
+        logs_path=logs_path,
     )
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_train,
-        eval_dataset=tokenized_val,
-        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
-        processing_class=tokenizer,
-    )
-    train_output = trainer.train()
+    with logs_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write("\nfusion succeeded\n")
 
-    adapter_dir.mkdir(parents=True, exist_ok=True)
-    model_for_save = cast(Any, trainer.model)
-    assert model_for_save is not None
-    model_for_save.save_pretrained(str(adapter_dir))
-    tokenizer.save_pretrained(str(adapter_dir))
-
-    metrics: dict[str, Any] = dict(train_output.metrics)
-    evaluation: dict[str, Any] = {
-        "status": "not_run" if tokenized_val is None else "available",
-        "baseline_comparison": "not_implemented",
+    metrics = {
+        "train_runtime_s": round(elapsed, 1),
+        "mlx_returncode": result.returncode,
+        "training_method": "qlora",
     }
-    if tokenized_val is not None:
-        evaluation_metrics = trainer.evaluate()
-        evaluation = {
-            "status": "completed",
-            "baseline_comparison": "not_implemented",
-            "metrics": evaluation_metrics,
-        }
-        metrics["evaluation"] = evaluation_metrics
-
-    merged_output_path: str | None = None
-    if config.export_merged_model:
-        merge_source = cast(Any, trainer.model)
-        assert merge_source is not None
-        merged_model = merge_source.merge_and_unload()
-        merged_model_dir.mkdir(parents=True, exist_ok=True)
-        merged_model.save_pretrained(str(merged_model_dir))
-        tokenizer.save_pretrained(str(merged_model_dir))
-        merged_output_path = str(merged_model_dir)
-
     report_payload = {
-        "config": asdict(config),
-        "device": device,
+        "config": {**asdict(config), "trainer_backend": "mlx_qlora"},
+        "device": "mlx",
         "export": export_result.format_summary,
         "metrics": metrics,
-        "evaluation": evaluation,
+        "evaluation": {},
         "artifacts": {
             "adapter_dir": str(adapter_dir),
-            "merged_model_dir": merged_output_path,
+            "fused_model_dir": str(fused_dir) if fused_dir.exists() else None,
         },
     }
     report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
-    logs.append(json.dumps(metrics, ensure_ascii=False))
-    logs_path.write_text("\n".join(logs) + "\n", encoding="utf-8")
 
     return TrainingArtifacts(
         adapter_dir=str(adapter_dir),
         report_path=str(report_path),
-        merged_model_dir=merged_output_path,
+        merged_model_dir=str(fused_dir) if fused_dir.exists() else None,
         logs_path=str(logs_path),
         metrics=metrics,
-        evaluation=evaluation,
-        trainer_backend=config.trainer_backend,
+        evaluation={},
+        trainer_backend="mlx_qlora",
         trainer_model_name=config.trainer_model_name,
-        device=device,
+        device="mlx",
     )

@@ -1,18 +1,24 @@
 from __future__ import annotations
 
-from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
+import math
 from pathlib import Path
 import re
 from typing import Any
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.config import get_project_root, get_settings
 from api.models import RAGCollectionRecord, RAGDocumentRecord
+from api.services.rag.embedding_client import (
+    EmbeddingClientError,
+    LMStudioEmbeddingClient,
+)
 
 try:
     from pypdf import PdfReader
@@ -20,13 +26,8 @@ except Exception:  # pragma: no cover - exercised only when dependency unavailab
     PdfReader = None
 
 
-def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
-    next_value = 1
-    for existing_id in session.scalars(select(model.id)).all():
-        suffix = str(existing_id).replace(f"{prefix}-", "", 1)
-        if suffix.isdigit():
-            next_value = max(next_value, int(suffix) + 1)
-    return f"{prefix}-{next_value}"
+def _next_prefixed_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _collections_root() -> Path:
@@ -66,6 +67,71 @@ def _extract_preview_text(content: bytes, mime_type: str) -> tuple[str, str]:
 
 def _tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if token]
+
+
+def _lexical_score(query: str, text: str) -> float:
+    if not query or not text:
+        return 0.0
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return 0.0
+    text_tokens = _tokenize(text)
+    if not text_tokens:
+        return 0.0
+    counts: dict[str, int] = {}
+    for token in text_tokens:
+        counts[token] = counts.get(token, 0) + 1
+    return float(sum(counts.get(token, 0) for token in query_tokens))
+
+
+_embedding_client: LMStudioEmbeddingClient | None = None
+
+
+def _get_embedding_client() -> LMStudioEmbeddingClient | None:
+    """Lazy-initialize the LM Studio embedding client.
+
+    Returns None when no embedding model is configured (e.g. test env), so
+    callers can degrade to lexical scoring without forcing an HTTP call.
+    """
+    global _embedding_client
+    if _embedding_client is not None:
+        return _embedding_client
+    settings = get_settings()
+    model = (settings.lmstudio_embed_model or "").strip()
+    if not model:
+        return None
+    _embedding_client = LMStudioEmbeddingClient(
+        base_url=settings.lmstudio_base_url,
+        model=model,
+    )
+    return _embedding_client
+
+
+def _embed_text(text: str) -> list[float] | None:
+    """Embed a single text via LM Studio, or None if unavailable."""
+    client = _get_embedding_client()
+    if client is None:
+        return None
+    try:
+        vectors = client.embed_texts([text])
+    except EmbeddingClientError:
+        return None
+    return vectors[0] if vectors else None
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return dot / math.sqrt(norm_a * norm_b)
 
 
 def _serialize_document(document: RAGDocumentRecord) -> dict[str, Any]:
@@ -123,16 +189,17 @@ def create_collection(
 ) -> dict[str, Any]:
     settings = get_settings()
     now = datetime.now(timezone.utc)
+    embedding = (embedding_model or settings.lmstudio_embed_model).strip()
+    policy = chunking_policy_json or {
+        "chunk_size": settings.rag_chunk_size,
+        "chunk_overlap": settings.rag_chunk_overlap,
+    }
     collection = RAGCollectionRecord(
-        id=_next_prefixed_id(session, RAGCollectionRecord, "rag-collection"),
+        id=_next_prefixed_id("rag-collection"),
         name=name.strip(),
         description=description.strip() if description else None,
-        embedding_model=(embedding_model or settings.ollama_embed_model).strip(),
-        chunking_policy_json=chunking_policy_json
-        or {
-            "chunk_size": settings.rag_chunk_size,
-            "chunk_overlap": settings.rag_chunk_overlap,
-        },
+        embedding_model=embedding,
+        chunking_policy_json=policy,
         updated_at=now,
     )
     session.add(collection)
@@ -184,18 +251,18 @@ def add_collection_document(
         raise KeyError(collection_id)
 
     now = datetime.now(timezone.utc)
-    document_id = _next_prefixed_id(session, RAGDocumentRecord, "rag-doc")
     checksum = hashlib.sha256(content).hexdigest()
+    preview_text, parse_method = _extract_preview_text(content, mime_type)
+    status = "parsed" if preview_text else "uploaded"
     storage_dir = _collections_root() / collection_id / "documents"
     storage_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix
+
+    document_id = _next_prefixed_id("rag-doc")
     stored_filename = f"{document_id}{suffix}" if suffix else document_id
     storage_path = storage_dir / _sanitize_filename(stored_filename)
-    storage_path.write_bytes(content)
-
-    preview_text, parse_method = _extract_preview_text(content, mime_type)
-    status = "parsed" if preview_text else "uploaded"
-    metadata_json = {
+    embedding_vector = _embed_text(preview_text) if preview_text else None
+    metadata_json: dict[str, Any] = {
         "storage_path": str(storage_path),
         "text_preview": preview_text[:4000],
         "text_length": len(preview_text),
@@ -207,6 +274,8 @@ def add_collection_document(
         if preview_text
         else [],
     }
+    if embedding_vector is not None:
+        metadata_json["embedding"] = embedding_vector
     document = RAGDocumentRecord(
         id=document_id,
         collection_id=collection_id,
@@ -220,6 +289,8 @@ def add_collection_document(
     )
     session.add(document)
     collection.updated_at = now
+    session.flush()
+    storage_path.write_bytes(content)
     session.commit()
     return get_document(session, document.id) or {"id": document.id}
 
@@ -240,6 +311,47 @@ def get_document(session: Session, document_id: str) -> dict[str, Any] | None:
     if document is None:
         return None
     return _serialize_document(document)
+
+
+def delete_collection(session: Session, collection_id: str) -> dict[str, Any]:
+    """Delete a RAG collection, all its documents, and the on-disk storage.
+
+    Cascade is explicit here (no FK ON DELETE) because the documents table
+    keeps `collection_id` as a plain string column and reviewers will hit a
+    constraint error otherwise. The collection storage directory under
+    `data/rag_collections/<id>/` is removed wholesale after the row commits.
+    """
+    import shutil as _shutil
+
+    collection = session.get(RAGCollectionRecord, collection_id)
+    if collection is None:
+        raise KeyError(collection_id)
+
+    documents = session.scalars(
+        select(RAGDocumentRecord).where(
+            RAGDocumentRecord.collection_id == collection_id
+        )
+    ).all()
+    document_count = len(documents)
+    for document in documents:
+        session.delete(document)
+    # Flush the child deletes before deleting the parent so Postgres sees
+    # them in the right order (the FK has no ON DELETE CASCADE).
+    session.flush()
+    session.delete(collection)
+    session.commit()
+
+    storage_dir = _collections_root() / collection_id
+    storage_deleted = False
+    if storage_dir.exists():
+        _shutil.rmtree(storage_dir, ignore_errors=True)
+        storage_deleted = not storage_dir.exists()
+    return {
+        "collection_id": collection_id,
+        "deleted": True,
+        "document_count": document_count,
+        "storage_deleted": storage_deleted,
+    }
 
 
 def delete_document(session: Session, document_id: str) -> dict[str, Any]:
@@ -271,6 +383,196 @@ def delete_document(session: Session, document_id: str) -> dict[str, Any]:
     return response
 
 
+SEED_COLLECTION_OWNER_TAG = "demo_seed"
+
+
+@dataclass(frozen=True)
+class _SeedDocumentSpec:
+    document_id: str
+    source_path: str
+    filename: str
+    mime_type: str
+
+
+@dataclass(frozen=True)
+class _SeedCollectionSpec:
+    collection_id: str
+    name: str
+    description: str
+    documents: tuple[_SeedDocumentSpec, ...]
+
+
+_DEMO_SEED_COLLECTIONS: tuple[_SeedCollectionSpec, ...] = (
+    _SeedCollectionSpec(
+        collection_id="rag-collection-demo-ops",
+        name="Demo Operations Handbook",
+        description=(
+            "Pre-seeded industrial operations knowledge base. Use it to demo "
+            "RAG-grounded chat and to derive a QA dataset for fine-tuning."
+        ),
+        documents=(
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-ops-getting-started",
+                source_path="data/sample_docs/getting_started.txt",
+                filename="getting_started.txt",
+                mime_type="text/plain",
+            ),
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-ops-maintenance",
+                source_path="data/sample_docs/maintenance.md",
+                filename="maintenance.md",
+                mime_type="text/markdown",
+            ),
+        ),
+    ),
+    _SeedCollectionSpec(
+        collection_id="rag-collection-demo-enterprise",
+        name="Demo Enterprise Knowledge",
+        description=(
+            "Pre-seeded enterprise enablement and pilot notes. Second "
+            "collection for grounded-chat or QA-dataset experimentation."
+        ),
+        documents=(
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-enterprise-enablement",
+                source_path="data/datasets/enterprise_docs/source/quarterly_enablement.md",
+                filename="quarterly_enablement.md",
+                mime_type="text/markdown",
+            ),
+            _SeedDocumentSpec(
+                document_id="rag-doc-seed-enterprise-pilot",
+                source_path="data/datasets/enterprise_docs/source/pilot_notes.md",
+                filename="pilot_notes.md",
+                mime_type="text/markdown",
+            ),
+        ),
+    ),
+)
+
+
+def _seed_document(
+    session: Session,
+    *,
+    collection_id: str,
+    spec: _SeedDocumentSpec,
+    content: bytes,
+) -> RAGDocumentRecord:
+    now = datetime.now(timezone.utc)
+    checksum = hashlib.sha256(content).hexdigest()
+    storage_dir = _collections_root() / collection_id / "documents"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(spec.filename).suffix
+    stored_filename = f"{spec.document_id}{suffix}" if suffix else spec.document_id
+    storage_path = storage_dir / _sanitize_filename(stored_filename)
+    storage_path.write_bytes(content)
+
+    preview_text, parse_method = _extract_preview_text(content, spec.mime_type)
+    status = "parsed" if preview_text else "uploaded"
+    metadata_json = {
+        "storage_path": str(storage_path),
+        "text_preview": preview_text[:4000],
+        "text_length": len(preview_text),
+        "parse_method": parse_method,
+        "chunk_preview": [
+            preview_text[i : i + 300]
+            for i in range(0, min(len(preview_text), 900), 300)
+        ]
+        if preview_text
+        else [],
+        "owner_tag": SEED_COLLECTION_OWNER_TAG,
+        "seed_source_path": spec.source_path,
+    }
+    record = RAGDocumentRecord(
+        id=spec.document_id,
+        collection_id=collection_id,
+        filename=spec.filename,
+        mime_type=spec.mime_type,
+        source_type="seed",
+        status=status,
+        checksum=checksum,
+        metadata_json=metadata_json,
+        updated_at=now,
+    )
+    session.add(record)
+    return record
+
+
+def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
+    """Seed deterministic demo RAG collections if they are missing.
+
+    Idempotent: existing collection/document records keyed by the seed ids are
+    left untouched, so reviewers can edit or delete the seed without it being
+    silently restored on the next API restart. Documents are only re-created
+    when both the seed source file is present on disk and the record does not
+    already exist.
+    """
+    settings = get_settings()
+    project_root = get_project_root()
+    now = datetime.now(timezone.utc)
+    seeded: list[dict[str, Any]] = []
+    changed = False
+
+    for spec in _DEMO_SEED_COLLECTIONS:
+        collection = session.get(RAGCollectionRecord, spec.collection_id)
+        is_new_collection = collection is None
+        if is_new_collection:
+            collection = RAGCollectionRecord(
+                id=spec.collection_id,
+                name=spec.name,
+                description=spec.description,
+                embedding_model=settings.lmstudio_embed_model,
+                chunking_policy_json={
+                    "chunk_size": settings.rag_chunk_size,
+                    "chunk_overlap": settings.rag_chunk_overlap,
+                    "owner_tag": SEED_COLLECTION_OWNER_TAG,
+                },
+                updated_at=now,
+            )
+            session.add(collection)
+            session.flush()
+            changed = True
+        else:
+            # Re-sync description + embedding_model on seed-owned rows when the
+            # spec drifts (e.g. legacy `nomic-embed-text` rows after the LM
+            # Studio cut-over). Rows whose owner_tag no longer matches are
+            # treated as reviewer-modified and left alone.
+            assert collection is not None  # narrowed: not new => exists
+            policy = collection.chunking_policy_json or {}
+            if policy.get("owner_tag") == SEED_COLLECTION_OWNER_TAG:
+                desired_embed = settings.lmstudio_embed_model
+                if (
+                    collection.description != spec.description
+                    or collection.embedding_model != desired_embed
+                ):
+                    collection.description = spec.description
+                    collection.embedding_model = desired_embed
+                    changed = True
+
+        # Only populate documents on first creation. A reviewer deleting a seed
+        # document should not see it silently restored on the next restart;
+        # deleting the whole collection is the documented way to re-seed.
+        if is_new_collection:
+            assert collection is not None  # narrowed: created on the branch above
+            for doc_spec in spec.documents:
+                source_path = project_root / doc_spec.source_path
+                if not source_path.is_file():
+                    continue
+                content = source_path.read_bytes()
+                _seed_document(
+                    session,
+                    collection_id=spec.collection_id,
+                    spec=doc_spec,
+                    content=content,
+                )
+                changed = True
+
+        seeded.append({"id": spec.collection_id, "name": spec.name})
+
+    if changed:
+        session.commit()
+    return seeded
+
+
 def preview_collection_retrieval(
     session: Session, *, collection_id: str, query: str, top_k: int = 3
 ) -> dict[str, Any]:
@@ -282,13 +584,27 @@ def preview_collection_retrieval(
             RAGDocumentRecord.collection_id == collection_id
         )
     ).all()
-    query_tokens = _tokenize(query)
+    query_embedding = _embed_text(query)
     scored_results: list[dict[str, Any]] = []
     for document in documents:
-        preview_text = str((document.metadata_json or {}).get("text_preview") or "")
-        text_tokens = Counter(_tokenize(preview_text))
-        score = sum(text_tokens[token] for token in query_tokens)
-        if score <= 0:
+        metadata = document.metadata_json or {}
+        preview_text = str(metadata.get("text_preview") or "")
+        doc_embedding_raw = metadata.get("embedding")
+        score = 0.0
+        if (
+            query_embedding is not None
+            and isinstance(doc_embedding_raw, list)
+            and doc_embedding_raw
+        ):
+            doc_embedding = [float(v) for v in doc_embedding_raw]
+            score = _cosine_similarity(query_embedding, doc_embedding)
+        else:
+            # No embedding for either side (e.g. LM Studio unreachable, or the
+            # doc was seeded before embeddings were wired in). Fall back to
+            # lexical token overlap so retrieval still works in offline /
+            # test environments.
+            score = _lexical_score(query, preview_text)
+        if score <= 0.0:
             continue
         scored_results.append(
             {
@@ -299,7 +615,7 @@ def preview_collection_retrieval(
                 "status": document.status,
             }
         )
-    scored_results.sort(key=lambda item: (-int(item["score"]), str(item["filename"])))
+    scored_results.sort(key=lambda item: (-float(item["score"]), str(item["filename"])))
     return {
         "collection_id": collection.id,
         "collection_name": collection.name,

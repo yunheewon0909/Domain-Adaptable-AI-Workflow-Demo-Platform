@@ -1,22 +1,16 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from api.config import get_settings
 from api.db import get_engine
-from api.dependencies import get_embedding_client, get_llm_client
-from api.llm import LLMClient, LLMClientError
-from api.services.datasets import DatasetNotFoundError, resolve_dataset
-from api.services.jobs import create_job, find_conflicting_job
-from api.services.retrieval.service import retrieve_evidence
 from api.services.rag.collections import (
     add_collection_document,
     create_collection,
+    delete_collection,
     delete_document,
     get_collection,
     get_document,
@@ -24,23 +18,8 @@ from api.services.rag.collections import (
     list_collections,
     preview_collection_retrieval,
 )
-from api.services.rag.embedding_client import EmbeddingClient
 
 router = APIRouter(tags=["rag"])
-
-
-class AskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    question: str = Field(min_length=1)
-    k: int = Field(default=3, ge=1, le=20)
-    dataset_key: str | None = None
-
-
-class ReindexEnqueueRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    payload_json: dict[str, Any] | None = None
 
 
 class CreateRAGCollectionRequest(BaseModel):
@@ -60,65 +39,6 @@ class RetrievalPreviewRequest(BaseModel):
     top_k: int = Field(default=3, ge=1, le=10)
 
 
-def _job_type_for_reindex_mode(mode: Literal["full", "incremental"]) -> str:
-    if mode == "incremental":
-        return "rag_reindex_incremental"
-    return "rag_reindex"
-
-
-def _enqueue_operational_job(
-    *,
-    job_type: str,
-    payload_json: dict[str, Any] | None = None,
-    active_types: tuple[str, ...] | None = None,
-) -> JSONResponse:
-    with Session(get_engine()) as session:
-        existing = find_conflicting_job(
-            session,
-            job_type=job_type,
-            active_types=active_types,
-        )
-        if existing is not None:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "detail": f"{job_type} already queued/running",
-                    "existing_job_id": existing.id,
-                },
-            )
-
-        job = create_job(
-            session,
-            job_type=job_type,
-            payload_json=payload_json,
-        )
-    return JSONResponse(
-        status_code=202, content={"job_id": job.id, "status": job.status}
-    )
-
-
-@router.post("/rag/reindex")
-def enqueue_rag_reindex(
-    request: ReindexEnqueueRequest | None = None,
-    mode: Literal["full", "incremental"] = Query(default="full"),
-) -> JSONResponse:
-    payload_json = request.payload_json if request is not None else None
-    return _enqueue_operational_job(
-        job_type=_job_type_for_reindex_mode(mode),
-        payload_json=payload_json,
-    )
-
-
-@router.post("/rag/warmup")
-def enqueue_rag_warmup() -> JSONResponse:
-    return _enqueue_operational_job(job_type="ollama_warmup")
-
-
-@router.post("/rag/verify")
-def enqueue_rag_verify_index() -> JSONResponse:
-    return _enqueue_operational_job(job_type="rag_verify_index")
-
-
 @router.post("/rag-collections", status_code=201)
 def post_rag_collection(request: CreateRAGCollectionRequest) -> dict[str, Any]:
     with Session(get_engine()) as session:
@@ -129,6 +49,34 @@ def post_rag_collection(request: CreateRAGCollectionRequest) -> dict[str, Any]:
             embedding_model=request.embedding_model,
             chunking_policy_json=request.chunking_policy_json,
         )
+
+
+@router.post("/rag-collections/{collection_id}/reveal")
+def post_rag_reveal(collection_id: str) -> dict[str, Any]:
+    """Open the collection's on-disk storage dir in Finder (macOS only).
+
+    Demo convenience: lets the reviewer inspect the raw uploaded files
+    + the per-document storage layout without `cd`-ing in a terminal.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from api.services.rag.collections import _collections_root
+
+    with Session(get_engine()) as session:
+        collection = get_collection(session, collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="RAG collection not found")
+    storage = Path(_collections_root()) / collection_id
+    storage.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(["open", str(storage)], check=True, timeout=5)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"`open` failed ({exc}); macOS Finder is required for this convenience endpoint.",
+        ) from exc
+    return {"collection_id": collection_id, "opened": str(storage)}
 
 
 @router.get("/rag-collections")
@@ -144,6 +92,17 @@ def get_rag_collection(collection_id: str) -> dict[str, Any]:
     if collection is None:
         raise HTTPException(status_code=404, detail="RAG collection not found")
     return collection
+
+
+@router.delete("/rag-collections/{collection_id}")
+def delete_rag_collection(collection_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return delete_collection(session, collection_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
 
 
 @router.post("/rag-collections/{collection_id}/documents", status_code=201)
@@ -187,6 +146,59 @@ def get_rag_document(document_id: str) -> dict[str, Any]:
     return document
 
 
+@router.get("/rag-documents/{document_id}/content")
+def get_rag_document_content(document_id: str) -> dict[str, Any]:
+    """Return the full document text + metadata for the demo viewer.
+
+    `/rag-documents/{id}` returns only the 4KB `text_preview` cap.
+    This endpoint reads the original stored file from disk and returns
+    the full text (up to a 256KB safety cap so a 1MB document doesn't
+    bloat the response). Binary files come back base64-encoded as a
+    fallback.
+    """
+    from pathlib import Path
+
+    with Session(get_engine()) as session:
+        document = get_document(session, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="RAG document not found")
+    storage_path_raw = str(
+        (document.get("metadata_json") or {}).get("storage_path") or ""
+    ).strip()
+    if not storage_path_raw:
+        raise HTTPException(
+            status_code=404,
+            detail="document has no stored content on disk",
+        )
+    path = Path(storage_path_raw)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=410,
+            detail="stored document file is missing on disk",
+        )
+    raw = path.read_bytes()
+    truncated = len(raw) > 262_144
+    if truncated:
+        raw = raw[:262_144]
+    try:
+        text = raw.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        import base64
+
+        text = base64.b64encode(raw).decode("ascii")
+        encoding = "base64"
+    return {
+        "document_id": document.get("id"),
+        "filename": document.get("filename"),
+        "mime_type": document.get("mime_type"),
+        "byte_length": path.stat().st_size,
+        "encoding": encoding,
+        "truncated": truncated,
+        "content": text,
+    }
+
+
 @router.delete("/rag-documents/{document_id}")
 def delete_rag_document(document_id: str) -> dict[str, Any]:
     with Session(get_engine()) as session:
@@ -217,94 +229,3 @@ def post_rag_retrieval_preview(request: RetrievalPreviewRequest) -> dict[str, An
             raise HTTPException(
                 status_code=404, detail="RAG collection not found"
             ) from exc
-
-
-@router.get("/rag/search")
-def rag_search(
-    q: str,
-    embedding_client: Annotated[EmbeddingClient, Depends(get_embedding_client)],
-    k: int = 3,
-    dataset_key: str | None = Query(default=None),
-) -> list[dict[str, object]]:
-    if not q.strip():
-        raise HTTPException(status_code=400, detail="q must not be empty")
-
-    with Session(get_engine()) as session:
-        try:
-            dataset = resolve_dataset(session, dataset_key)
-        except DatasetNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="dataset not found") from exc
-
-    try:
-        evidence = retrieve_evidence(
-            dataset=dataset,
-            query_text=q,
-            top_k=max(1, min(k, 20)),
-            embedding_client=embedding_client,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    return [item.model_dump(mode="json") for item in evidence]
-
-
-@router.post("/ask")
-def ask(
-    request: AskRequest,
-    llm_client: Annotated[LLMClient, Depends(get_llm_client)],
-    embedding_client: Annotated[EmbeddingClient, Depends(get_embedding_client)],
-) -> dict[str, Any]:
-    question = request.question.strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="question must not be empty")
-
-    with Session(get_engine()) as session:
-        try:
-            dataset = resolve_dataset(session, request.dataset_key)
-        except DatasetNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="dataset not found") from exc
-
-    try:
-        evidence = retrieve_evidence(
-            dataset=dataset,
-            query_text=question,
-            top_k=request.k,
-            embedding_client=embedding_client,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    context = (
-        "\n\n".join(
-            f"[{item.source_path}#{item.chunk_id}]\n{item.text}" for item in evidence
-        )
-        or "No relevant context found in local retrieval index."
-    )
-
-    try:
-        chat_result = llm_client.generate_answer(question=question, context=context)
-    except LLMClientError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"LLM request failed: {exc}"
-        ) from exc
-
-    settings = get_settings()
-
-    return {
-        "answer": chat_result.answer,
-        "sources": [item.model_dump(mode="json") for item in evidence],
-        "meta": {
-            "provider": "ollama",
-            "model": chat_result.model,
-            "used_fallback": chat_result.used_fallback,
-            "retrieval_k": request.k,
-            "retrieved_count": len(evidence),
-            "ollama_base_url": settings.ollama_base_url,
-            "dataset_key": dataset.key,
-            "dataset_title": dataset.title,
-        },
-    }

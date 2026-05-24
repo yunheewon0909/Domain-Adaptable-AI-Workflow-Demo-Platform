@@ -22,7 +22,6 @@ def list_jobs(
     type: str | None = Query(default=None),
     workflow_key: str | None = Query(default=None),
     dataset_key: str | None = Query(default=None),
-    plc_suite_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
 ) -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
@@ -31,7 +30,6 @@ def list_jobs(
             job_type=type,
             workflow_key=workflow_key,
             dataset_key=dataset_key,
-            plc_suite_id=plc_suite_id,
             status=status,
         )
         jobs = session.scalars(

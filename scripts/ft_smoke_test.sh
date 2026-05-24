@@ -4,9 +4,9 @@ set -euo pipefail
 
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8000}"
 DATASET_FILE="${DATASET_FILE:-examples/ft_smoke_instruction_dataset.jsonl}"
-BASE_MODEL_NAME="${BASE_MODEL_NAME:-qwen2.5:7b-instruct-q4_K_M}"
-TRAINER_MODEL_NAME="${TRAINER_MODEL_NAME:-hf-internal/testing-tiny-random-gpt2}"
-TRAINING_METHOD="${TRAINING_METHOD:-sft_lora}"
+BASE_MODEL_NAME="${BASE_MODEL_NAME:-qwen3.5-4b-mlx}"
+TRAINER_MODEL_NAME="${TRAINER_MODEL_NAME:-mlx-community/Qwen2.5-0.5B-Instruct-4bit}"
+TRAINING_METHOD="${TRAINING_METHOD:-sft_qlora}"
 
 require_file() {
   local path="$1"
@@ -28,11 +28,12 @@ Fine-tuning smoke test helper
 =============================
 
 Prerequisites:
-- API and worker must already be running.
-- Run ./scripts/ft_smoke_preflight.sh first so the worker runtime/device path is clear.
-- Recommended on Apple Silicon: TRAINING_DEVICE=mps with a host worker runtime
-- CPU smoke tests stay opt-in: TRAINING_ALLOW_CPU=true
-- This flow validates adapter/report/registry output only. It does not create an Ollama serving model.
+- API must already be running (host uvicorn, no separate worker process).
+- Run ./scripts/ft_smoke_preflight.sh first to validate brew mlx-lm + Metal.
+- For a non-real run set FT_TRAINER_BACKEND=deterministic_smoke before
+  launching uvicorn.
+- This flow validates adapter/report/registry output only. It does not
+  import the artifact into LM Studio for serving.
 
 Using:
 - API_BASE_URL=$API_BASE_URL

@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import argparse
-import importlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 
 
-EXPECTED_DEPENDENCIES = ("torch", "transformers", "peft", "datasets", "accelerate")
-EXPECTED_TINY_MODEL = "hf-internal/testing-tiny-random-gpt2"
-SUPPORTED_TRAINER_BACKENDS = {"local_peft"}
-SUPPORTED_TRAINING_METHODS = {"sft_lora"}
+EXPECTED_CLI_TOOLS = ("mlx_lm.lora", "mlx_lm.fuse")
+EXPECTED_TINY_MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+SUPPORTED_TRAINER_BACKENDS = {"mlx_qlora"}
+SUPPORTED_TRAINING_METHODS = {"sft_qlora"}
 
 
 @dataclass(frozen=True)
@@ -29,91 +29,71 @@ class CheckResult:
 class PackageStatus:
     name: str
     available: bool
-    detail: str
-
-
-@dataclass(frozen=True)
-class DeviceStatus:
-    torch_available: bool
-    cuda_available: bool
-    mps_available: bool
     detail: str = ""
 
 
 @dataclass(frozen=True)
-class ComposeStatus:
-    available: bool
-    running_services: tuple[str, ...]
-    detail: str
+class DeviceStatus:
+    mlx_available: bool
+    metal_available: bool
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class LMStudioStatus:
+    reachable: bool
+    loaded_models: tuple[str, ...]
+    chat_model_loaded: bool
+    embed_model_loaded: bool
+    detail: str = ""
 
 
 @dataclass(frozen=True)
 class PreflightConfig:
     api_base_url: str
-    worker_runtime: str
-    current_runtime: str
-    training_device: str
-    training_allow_cpu: bool
     artifact_dir: Path
     trainer_backend: str
     default_training_method: str
     trainer_model_map_json: str
     project_root: Path
+    lmstudio_base_url: str
+    lmstudio_chat_model: str
+    lmstudio_embed_model: str
 
 
 def _find_project_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
-        if (parent / "compose.yml").exists() and (parent / "apps").exists():
+        if (parent / "apps").exists() and (parent / "pyproject.toml").exists():
             return parent
     return Path.cwd()
 
 
-def _detect_current_runtime() -> str:
-    return "docker" if Path("/.dockerenv").exists() else "host"
-
-
-def _parse_bool(value: str | None, *, default: bool) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _normalize_worker_runtime(raw_value: str | None, *, current_runtime: str) -> str:
-    normalized = (raw_value or "auto").strip().lower()
-    if normalized in {"", "auto", "current"}:
-        return current_runtime
-    if normalized in {"host", "docker"}:
-        return normalized
-    return current_runtime
-
-
 def load_config() -> PreflightConfig:
     project_root = _find_project_root()
-    current_runtime = _detect_current_runtime()
     artifact_dir_raw = os.getenv("MODEL_ARTIFACT_DIR", "data/model_artifacts")
     artifact_dir = Path(artifact_dir_raw)
     if not artifact_dir.is_absolute():
         artifact_dir = project_root / artifact_dir
     return PreflightConfig(
         api_base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
-        worker_runtime=_normalize_worker_runtime(
-            os.getenv("FT_SMOKE_WORKER_RUNTIME"), current_runtime=current_runtime
-        ),
-        current_runtime=current_runtime,
-        training_device=(
-            os.getenv("TRAINING_DEVICE", "auto").strip().lower() or "auto"
-        ),
-        training_allow_cpu=_parse_bool(os.getenv("TRAINING_ALLOW_CPU"), default=False),
         artifact_dir=artifact_dir,
-        trainer_backend=os.getenv("FT_TRAINER_BACKEND", "local_peft").strip()
-        or "local_peft",
+        trainer_backend=os.getenv("FT_TRAINER_BACKEND", "mlx_qlora").strip()
+        or "mlx_qlora",
         default_training_method=os.getenv(
-            "FT_DEFAULT_TRAINING_METHOD", "sft_lora"
+            "FT_DEFAULT_TRAINING_METHOD", "sft_qlora"
         ).strip()
-        or "sft_lora",
-        trainer_model_map_json=os.getenv("FT_TRAINER_MODEL_MAP_JSON", "{}"),
+        or "sft_qlora",
+        trainer_model_map_json=os.getenv(
+            "FT_TRAINER_MODEL_MAP_JSON",
+            '{"qwen3.5-4b-mlx":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"}',
+        ),
         project_root=project_root,
+        lmstudio_base_url=os.getenv(
+            "LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1"
+        ).rstrip("/"),
+        lmstudio_chat_model=os.getenv("LMSTUDIO_CHAT_MODEL", "").strip(),
+        lmstudio_embed_model=os.getenv("LMSTUDIO_EMBED_MODEL", "").strip(),
     )
 
 
@@ -129,84 +109,153 @@ def check_api_health(api_base_url: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def inspect_dependencies() -> list[PackageStatus]:
-    packages: list[PackageStatus] = []
-    for name in EXPECTED_DEPENDENCIES:
-        try:
-            importlib.import_module(name)
-        except (
-            Exception
-        ) as exc:  # pragma: no cover - exercised via monkeypatch in tests
-            packages.append(PackageStatus(name=name, available=False, detail=str(exc)))
-        else:
-            packages.append(
-                PackageStatus(name=name, available=True, detail="import ok")
-            )
-    return packages
-
-
-def inspect_torch_devices() -> DeviceStatus:
+def inspect_lmstudio(
+    base_url: str, *, chat_model: str, embed_model: str
+) -> LMStudioStatus:
     try:
-        torch = importlib.import_module("torch")
-    except Exception as exc:  # pragma: no cover - exercised via monkeypatch in tests
-        return DeviceStatus(
-            torch_available=False,
-            cuda_available=False,
-            mps_available=False,
-            detail=str(exc),
+        with urllib.request.urlopen(f"{base_url}/models", timeout=5) as response:
+            payload = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        return LMStudioStatus(
+            reachable=False,
+            loaded_models=(),
+            chat_model_loaded=False,
+            embed_model_loaded=False,
+            detail=f"unreachable at {base_url}/models: {exc}",
         )
-
-    cuda_available = bool(torch.cuda.is_available())
-    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
-    mps_available = bool(mps_backend and mps_backend.is_available())
-    return DeviceStatus(
-        torch_available=True,
-        cuda_available=cuda_available,
-        mps_available=mps_available,
-        detail="torch import ok",
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        return LMStudioStatus(
+            reachable=False,
+            loaded_models=(),
+            chat_model_loaded=False,
+            embed_model_loaded=False,
+            detail=f"non-JSON response: {exc}",
+        )
+    loaded = tuple(
+        str(item.get("id"))
+        for item in parsed.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    )
+    return LMStudioStatus(
+        reachable=True,
+        loaded_models=loaded,
+        chat_model_loaded=bool(chat_model and chat_model in loaded),
+        embed_model_loaded=bool(embed_model and embed_model in loaded),
+        detail=f"{len(loaded)} model(s) loaded: {', '.join(loaded) or '<none>'}",
     )
 
 
-def inspect_compose_services(project_root: Path) -> ComposeStatus:
-    compose_file = project_root / "compose.yml"
-    if not compose_file.exists():
-        return ComposeStatus(
-            available=False,
-            running_services=(),
-            detail="compose.yml not found; skipping docker compose status check.",
-        )
+def _run_subprocess(
+    cmd: list[str], *, timeout: int
+) -> tuple[int | None, str, str]:
     try:
         completed = subprocess.run(
-            ["docker", "compose", "ps", "--services", "--status", "running"],
-            cwd=project_root,
+            cmd,
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout,
         )
-    except FileNotFoundError:
-        return ComposeStatus(
-            available=False,
-            running_services=(),
-            detail="docker compose is not available in this shell.",
-        )
+    except subprocess.TimeoutExpired:
+        return None, "", f"command timed out after {timeout}s"
+    except FileNotFoundError as exc:
+        return None, "", str(exc)
+    return completed.returncode, completed.stdout, completed.stderr
 
-    if completed.returncode != 0:
-        detail = (
-            completed.stderr.strip()
-            or completed.stdout.strip()
-            or "docker compose ps failed"
-        )
-        return ComposeStatus(available=False, running_services=(), detail=detail)
 
-    services = tuple(
-        line.strip() for line in completed.stdout.splitlines() if line.strip()
+def inspect_dependencies() -> list[PackageStatus]:
+    tools: list[PackageStatus] = []
+    for name in EXPECTED_CLI_TOOLS:
+        path = shutil.which(name)
+        if path is None:
+            tools.append(
+                PackageStatus(
+                    name=name,
+                    available=False,
+                    detail="not found on PATH; install with `brew install mlx-lm`",
+                )
+            )
+            continue
+        returncode, stdout, stderr = _run_subprocess([path, "--help"], timeout=20)
+        if returncode is None:
+            tools.append(
+                PackageStatus(name=name, available=False, detail=stderr)
+            )
+            continue
+        tools.append(
+            PackageStatus(
+                name=name,
+                available=returncode == 0,
+                detail=(
+                    f"{path} --help ok"
+                    if returncode == 0
+                    else (stderr.strip() or stdout.strip())
+                ),
+            )
+        )
+    return tools
+
+
+def _mlx_python_interpreter() -> str | None:
+    """Return the Python that brew's mlx_lm.lora was installed against.
+
+    The trainer shells out to brew `mlx_lm.lora`, which has its own
+    libexec venv with mlx installed. The uv workspace deliberately does
+    not ship mlx as a pip dep (see CLAUDE.md), so probing with the host
+    python3 always fails. Read the shebang of the mlx_lm.lora console
+    script to find the right interpreter.
+    """
+    lora_path = shutil.which("mlx_lm.lora")
+    if not lora_path:
+        return None
+    try:
+        with open(lora_path, "r", encoding="utf-8") as handle:
+            first_line = handle.readline().strip()
+    except OSError:
+        return None
+    if not first_line.startswith("#!"):
+        return None
+    candidate = first_line[2:].strip()
+    return candidate or None
+
+
+def inspect_mlx_runtime() -> DeviceStatus:
+    python_exe = (
+        _mlx_python_interpreter()
+        or shutil.which("python3.14")
+        or shutil.which("python3")
     )
-    detail = (
-        f"running services: {', '.join(services)}"
-        if services
-        else "no running compose services were reported"
+    if python_exe is None:
+        return DeviceStatus(
+            mlx_available=False,
+            metal_available=False,
+            detail="No python interpreter with mlx found (checked brew mlx_lm.lora shebang and python3.14/python3 on PATH).",
+        )
+    returncode, stdout, stderr = _run_subprocess(
+        [
+            python_exe,
+            "-c",
+            (
+                "import mlx.core as mx; "
+                "print('metal=' + str(bool(mx.metal.is_available())).lower())"
+            ),
+        ],
+        timeout=20,
     )
-    return ComposeStatus(available=True, running_services=services, detail=detail)
+    if returncode is None or returncode != 0:
+        return DeviceStatus(
+            mlx_available=False,
+            metal_available=False,
+            detail=stderr.strip() or stdout.strip(),
+        )
+    metal_available = "metal=true" in stdout.strip().lower()
+    return DeviceStatus(
+        mlx_available=True,
+        metal_available=metal_available,
+        detail=f"{python_exe}: {stdout.strip()}",
+    )
 
 
 def check_artifact_dir(artifact_dir: Path) -> tuple[bool, str]:
@@ -231,7 +280,7 @@ def _validate_runtime_config(config: PreflightConfig) -> list[CheckResult]:
             results,
             "ok",
             "Trainer backend",
-            f"FT_TRAINER_BACKEND={config.trainer_backend} matches the supported local training backend.",
+            f"FT_TRAINER_BACKEND={config.trainer_backend} matches the supported MLX training backend.",
         )
     else:
         _append(
@@ -239,7 +288,7 @@ def _validate_runtime_config(config: PreflightConfig) -> list[CheckResult]:
             "fail",
             "Trainer backend",
             (
-                f"FT_TRAINER_BACKEND={config.trainer_backend} is not supported by the local smoke trainer. "
+                f"FT_TRAINER_BACKEND={config.trainer_backend} is not supported by the Mac-native trainer. "
                 f"Supported values: {', '.join(sorted(SUPPORTED_TRAINER_BACKENDS))}."
             ),
         )
@@ -249,7 +298,7 @@ def _validate_runtime_config(config: PreflightConfig) -> list[CheckResult]:
             results,
             "ok",
             "Training method",
-            f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method} matches the supported smoke-training method.",
+            f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method} matches the supported MLX training method.",
         )
     else:
         _append(
@@ -257,7 +306,7 @@ def _validate_runtime_config(config: PreflightConfig) -> list[CheckResult]:
             "fail",
             "Training method",
             (
-                f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method} is not supported by the local smoke trainer. "
+                f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method} is not supported by the Mac-native trainer. "
                 f"Supported values: {', '.join(sorted(SUPPORTED_TRAINING_METHODS))}."
             ),
         )
@@ -269,9 +318,9 @@ def run_preflight(
     *,
     api_health_checker=check_api_health,
     dependency_inspector=inspect_dependencies,
-    device_inspector=inspect_torch_devices,
-    compose_inspector=inspect_compose_services,
+    device_inspector=inspect_mlx_runtime,
     artifact_dir_checker=check_artifact_dir,
+    lmstudio_inspector=inspect_lmstudio,
 ) -> list[CheckResult]:
     config = config or load_config()
     results: list[CheckResult] = []
@@ -288,48 +337,46 @@ def run_preflight(
         ),
     )
 
-    _append(
-        results,
-        "ok",
-        "Worker runtime target",
-        (
-            f"Current Python runtime: {config.current_runtime}. Smoke-training worker target: {config.worker_runtime}. "
-            "The training device is validated where the worker subprocess runs, not where the HTTP API is hosted."
-        ),
+    lmstudio = lmstudio_inspector(
+        config.lmstudio_base_url,
+        chat_model=config.lmstudio_chat_model,
+        embed_model=config.lmstudio_embed_model,
     )
-    if config.worker_runtime != config.current_runtime:
+    if not lmstudio.reachable:
         _append(
             results,
             "warn",
-            "Runtime mismatch",
+            "LM Studio runtime",
             (
-                f"You are checking from a {config.current_runtime} shell while targeting a {config.worker_runtime} worker. "
-                "Dependency and device checks below describe the current Python runtime, so use them as guidance unless you run the preflight from the actual worker environment."
+                f"{lmstudio.detail} Inference and RAG retrieval will fail until "
+                "LM Studio is reachable. Open LM Studio → Local Server tab and start the server."
             ),
         )
-
-    compose_status = compose_inspector(config.project_root)
-    if compose_status.available:
-        if "worker" in compose_status.running_services:
-            level = "ok"
-            detail = f"docker compose reports the worker service as running ({compose_status.detail})."
-        else:
-            level = "warn"
-            detail = (
-                f"docker compose status is available but the worker service is not running ({compose_status.detail}). "
-                "This is acceptable for a host-worker smoke path, but queue-backed training still needs some worker runtime to consume jobs."
-            )
-        _append(results, level, "Worker/container status", detail)
     else:
-        _append(
-            results,
-            "warn",
-            "Worker/container status",
-            (
-                f"Could not confirm docker compose worker status: {compose_status.detail} "
-                "This is non-fatal because host-worker smoke validation is allowed."
-            ),
-        )
+        chat_ok = lmstudio.chat_model_loaded or not config.lmstudio_chat_model
+        embed_ok = lmstudio.embed_model_loaded or not config.lmstudio_embed_model
+        if chat_ok and embed_ok:
+            _append(
+                results,
+                "ok",
+                "LM Studio runtime",
+                lmstudio.detail,
+            )
+        else:
+            missing = []
+            if config.lmstudio_chat_model and not lmstudio.chat_model_loaded:
+                missing.append(f"chat={config.lmstudio_chat_model}")
+            if config.lmstudio_embed_model and not lmstudio.embed_model_loaded:
+                missing.append(f"embed={config.lmstudio_embed_model}")
+            _append(
+                results,
+                "warn",
+                "LM Studio runtime",
+                (
+                    f"LM Studio reachable but configured models are not loaded: {', '.join(missing)}. "
+                    f"Loaded: {lmstudio.detail}. Load the model(s) in LM Studio's Local Server tab."
+                ),
+            )
 
     dependencies = dependency_inspector()
     missing = [item for item in dependencies if not item.available]
@@ -338,113 +385,42 @@ def run_preflight(
         _append(
             results,
             "fail",
-            "Python dependencies",
-            f"Missing training dependencies: {names}. The local smoke path needs torch, transformers, peft, datasets, and accelerate in the runtime that will execute training.",
+            "MLX CLI tools",
+            f"Missing MLX training tools: {names}. Install/update with `brew install mlx mlx-lm`.",
         )
     else:
+        details = "; ".join(item.detail for item in dependencies)
         _append(
             results,
             "ok",
-            "Python dependencies",
-            "torch, transformers, peft, datasets, and accelerate imported successfully in the current Python runtime.",
+            "MLX CLI tools",
+            f"brew mlx-lm tools are available: {details}",
         )
 
     device_status = device_inspector()
-    if not device_status.torch_available:
+    if not device_status.mlx_available:
         _append(
             results,
             "fail",
-            "PyTorch device detection",
-            f"torch import failed, so device checks could not run: {device_status.detail}",
+            "MLX Metal runtime",
+            f"MLX import failed in the host Python runtime: {device_status.detail}",
+        )
+    elif not device_status.metal_available:
+        _append(
+            results,
+            "fail",
+            "MLX Metal runtime",
+            f"MLX imported but Metal is unavailable: {device_status.detail}",
         )
     else:
         _append(
             results,
             "ok",
-            "PyTorch device detection",
-            (
-                f"cuda_available={device_status.cuda_available}, mps_available={device_status.mps_available}, "
-                f"training_device={config.training_device}, training_allow_cpu={config.training_allow_cpu}."
-            ),
+            "MLX Metal runtime",
+            f"MLX Metal is available ({device_status.detail}).",
         )
 
-        if config.training_device == "mps":
-            if config.worker_runtime == "docker":
-                _append(
-                    results,
-                    "fail",
-                    "MPS worker topology",
-                    "TRAINING_DEVICE=mps is a host-worker validation path. Standard Docker Linux workers should not be treated as MPS-capable.",
-                )
-            elif not device_status.mps_available:
-                _append(
-                    results,
-                    "fail",
-                    "MPS availability",
-                    "TRAINING_DEVICE=mps was requested but torch.backends.mps.is_available() is false in the current host runtime.",
-                )
-            else:
-                _append(
-                    results,
-                    "ok",
-                    "MPS availability",
-                    "MPS is available in the current host runtime, so this machine can validate the Apple Silicon host-worker smoke path.",
-                )
-        elif config.training_device == "cuda":
-            _append(
-                results,
-                "ok" if device_status.cuda_available else "fail",
-                "CUDA availability",
-                (
-                    "CUDA is available in the current runtime."
-                    if device_status.cuda_available
-                    else "TRAINING_DEVICE=cuda was requested but torch.cuda.is_available() is false."
-                ),
-            )
-        elif config.training_device == "cpu":
-            _append(
-                results,
-                "ok" if config.training_allow_cpu else "fail",
-                "CPU fallback policy",
-                (
-                    "CPU smoke runs are explicitly enabled for this runtime."
-                    if config.training_allow_cpu
-                    else "TRAINING_DEVICE=cpu was requested while TRAINING_ALLOW_CPU is false. CPU fallback is intentionally opt-in for tiny smoke runs only."
-                ),
-            )
-        else:
-            if device_status.cuda_available:
-                _append(
-                    results,
-                    "ok",
-                    "Auto device resolution",
-                    "Auto mode can resolve to CUDA in the current runtime.",
-                )
-            elif config.worker_runtime == "host" and device_status.mps_available:
-                _append(
-                    results,
-                    "ok",
-                    "Auto device resolution",
-                    "Auto mode can resolve to MPS in the current host runtime.",
-                )
-            elif config.training_allow_cpu:
-                _append(
-                    results,
-                    "warn",
-                    "Auto device resolution",
-                    "No accelerator was detected in the current runtime, but TRAINING_ALLOW_CPU=true permits a tiny CPU smoke run.",
-                )
-            else:
-                _append(
-                    results,
-                    "fail",
-                    "Auto device resolution",
-                    "No accelerator was detected and TRAINING_ALLOW_CPU=false. The smoke job will fail unless you switch to a host-MPS/CUDA path or deliberately enable tiny CPU fallback.",
-                )
-
     env_details = [
-        f"TRAINING_DEVICE={config.training_device}",
-        f"TRAINING_ALLOW_CPU={str(config.training_allow_cpu).lower()}",
         f"MODEL_ARTIFACT_DIR={config.artifact_dir}",
         f"FT_TRAINER_BACKEND={config.trainer_backend}",
         f"FT_DEFAULT_TRAINING_METHOD={config.default_training_method}",
@@ -481,7 +457,7 @@ def run_preflight(
                 results,
                 "warn",
                 "Trainer model map",
-                "FT_TRAINER_MODEL_MAP_JSON is empty. Smoke runs will need trainer_model_name supplied explicitly in the enqueue payload.",
+                "FT_TRAINER_MODEL_MAP_JSON is empty. Runs can still supply trainer_model_name explicitly in the enqueue payload.",
             )
 
     artifact_ok, artifact_detail = artifact_dir_checker(config.artifact_dir)
@@ -497,7 +473,7 @@ def run_preflight(
         "warn",
         "Tiny trainer model access",
         (
-            f"The smoke path typically resolves to {EXPECTED_TINY_MODEL}. If that model or tokenizer is not already cached, the first run may need network access to download it."
+            f"The MLX smoke path typically resolves to {EXPECTED_TINY_MODEL}. If that model is not cached, the first run may need network access."
         ),
     )
 
@@ -517,25 +493,17 @@ def exit_code_for_results(results: list[CheckResult]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ft-smoke-preflight",
-        description="Check local fine-tuning smoke-training runtime prerequisites.",
+        description="Check Mac-native MLX fine-tuning prerequisites.",
     )
     parser.add_argument(
         "--api-base-url",
         default=None,
         help="Override API_BASE_URL for the /health check.",
     )
-    parser.add_argument(
-        "--worker-runtime",
-        choices=("auto", "current", "host", "docker"),
-        default=None,
-        help="Describe where the smoke-training worker will run.",
-    )
     args = parser.parse_args(argv)
 
     if args.api_base_url is not None:
         os.environ["API_BASE_URL"] = args.api_base_url
-    if args.worker_runtime is not None:
-        os.environ["FT_SMOKE_WORKER_RUNTIME"] = args.worker_runtime
 
     results = run_preflight()
     print(format_results(results), flush=True)

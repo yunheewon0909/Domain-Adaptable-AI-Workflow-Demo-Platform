@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import re
 from typing import Any
@@ -39,7 +39,6 @@ def serialize_job_summary(job: JobRecord) -> dict[str, Any]:
         "type": job.type,
         "workflow_key": job.workflow_key,
         "dataset_key": job.dataset_key,
-        "plc_suite_id": job.plc_suite_id,
         "status": job.status,
     }
 
@@ -50,7 +49,6 @@ def serialize_job_detail(job: JobRecord) -> dict[str, Any]:
         "type": job.type,
         "workflow_key": job.workflow_key,
         "dataset_key": job.dataset_key,
-        "plc_suite_id": job.plc_suite_id,
         "status": job.status,
         "payload_json": _normalized_json_object(job.payload_json),
         "attempts": job.attempts,
@@ -70,7 +68,6 @@ def apply_job_filters(
     job_type: str | None = None,
     workflow_key: str | None = None,
     dataset_key: str | None = None,
-    plc_suite_id: str | None = None,
     status: str | None = None,
 ) -> Select[tuple[JobRecord]]:
     if job_type is not None:
@@ -79,8 +76,6 @@ def apply_job_filters(
         stmt = stmt.where(JobRecord.workflow_key == workflow_key)
     if dataset_key is not None:
         stmt = stmt.where(JobRecord.dataset_key == dataset_key)
-    if plc_suite_id is not None:
-        stmt = stmt.where(JobRecord.plc_suite_id == plc_suite_id)
     if status is not None:
         stmt = stmt.where(JobRecord.status == status)
     return stmt
@@ -92,7 +87,6 @@ def find_conflicting_job(
     job_type: str,
     workflow_key: str | None = None,
     dataset_key: str | None = None,
-    plc_suite_id: str | None = None,
     active_types: tuple[str, ...] | None = None,
 ) -> JobRecord | None:
     conflict_types = active_types or (job_type,)
@@ -107,8 +101,6 @@ def find_conflicting_job(
         stmt = stmt.where(JobRecord.workflow_key == workflow_key)
     if dataset_key is not None:
         stmt = stmt.where(JobRecord.dataset_key == dataset_key)
-    if plc_suite_id is not None:
-        stmt = stmt.where(JobRecord.plc_suite_id == plc_suite_id)
     return session.scalar(stmt)
 
 
@@ -137,7 +129,6 @@ def create_job(
     payload_json: dict[str, Any] | None = None,
     workflow_key: str | None = None,
     dataset_key: str | None = None,
-    plc_suite_id: str | None = None,
     max_attempts: int = 3,
     commit: bool = True,
 ) -> JobRecord:
@@ -146,12 +137,10 @@ def create_job(
         type=job_type,
         workflow_key=workflow_key,
         dataset_key=dataset_key,
-        plc_suite_id=plc_suite_id,
         status=status,
         payload_json=payload_json,
         attempts=0,
         max_attempts=max_attempts,
-        updated_at=datetime.now(timezone.utc),
     )
     session.add(job)
     if commit:

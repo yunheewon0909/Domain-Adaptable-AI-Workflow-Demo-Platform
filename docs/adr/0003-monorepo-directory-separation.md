@@ -1,3 +1,5 @@
+> **Superseded (2026-05-23) by v0.9.0**: the PLC slice was removed; this ADR is kept as historical record only.
+
 # ADR 0003: Use directory separation to show skeleton, demo, service, and shared core in one repo
 
 ## Status

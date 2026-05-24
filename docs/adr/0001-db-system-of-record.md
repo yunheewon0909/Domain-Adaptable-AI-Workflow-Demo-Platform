@@ -1,3 +1,5 @@
+> **Superseded (2026-05-23) by v0.9.0**: the PLC slice was removed; this ADR is kept as historical record only.
+
 # ADR 0001: Use the database as the system of record for PLC suites and runs
 
 ## Status

@@ -2,6 +2,106 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [0.9.1] - 2026-05-23
+
+### Changed (UI)
+
+- `/demo` redesigned as a single-screen 3-step wizard (Knowledge base → Train → Chat) with inline plain-language explainers. Replaces the 3-tab admin console (~50 buttons → ~10).
+- Tailwind via Play CDN + shadcn-inspired CSS vars; auto dark/light via `prefers-color-scheme`. No build step.
+- Embedded chat panel with model picker + RAG grounding toggle + source surfacing.
+- `static/demo/{index.html,app.js,styles.css}`: 4688 → 674 lines total (-86%).
+- README + CLAUDE.md + architecture.md updated to describe the wizard shape.
+
+### Added
+
+- `LMStudioChatClient` falls back to `reasoning_content` when `content` is empty (Qwen3 / DeepSeek-R1 thinking-mode models).
+- External chat client hints in the Advanced section: lobe-chat + Open WebUI.
+
+## [0.9.0] - 2026-05-23 (in progress)
+
+### Improved (B1 polish)
+
+- `qa_generator.py` retries once on JSON parse failure with a stricter "JSON-only, example shape" prompt; tests cover the retry success path.
+- Generated Q/A pairs are deduplicated across chunks by a normalized question key (lowercase + whitespace-collapsed + first 80 chars). Near-identical questions emitted from adjacent chunks are folded into a single row.
+- Minimum question length 8 chars, minimum answer length 4 chars; shorter pairs are dropped silently as malformed.
+
+### Added (D2)
+
+- In-process **background dispatcher** (`apps/api/src/api/services/background_runner.py`): async loop started in lifespan that polls `jobs` table, claims `queued` rows of registered types (currently `ft_train_model`), and runs the matching runner via `asyncio.to_thread()`. Uses `SELECT ... FOR UPDATE SKIP LOCKED` on Postgres and an in-process `asyncio.Lock` fallback for SQLite. Failed runners flip the queue row to `failed` with the captured error.
+- Env var `FT_BACKGROUND_DISPATCH` (default `true`) to opt out. Test suite forces `false` so the TestClient doesn't race with the trainer subprocess.
+- Tests cover claim-only-dispatchable-types, dispatch success → `succeeded`, dispatch exception → `failed`, and the disabled-via-env path.
+
+### Added (D3)
+
+- `LMStudioChatClient.stream_chat_messages()` — generator that yields LM Studio SSE chunks as decoded dicts.
+- `/v1/chat/completions` with `"stream": true` now proxies LM Studio's real token-by-token SSE chunks (id/model rewritten to the platform's exposed identifiers) instead of buffering one completed response and wrapping it. Trailing platform metadata chunk + `data: [DONE]` are appended. Non-LM-Studio clients still get the buffered wrapper path for compatibility.
+
+### Deferred (C1)
+
+- markitdown for RAG ingestion: blocked by Python 3.14 — markitdown pulls `magika` which pulls `onnxruntime==1.20.1`, and onnxruntime has no Python 3.14 wheel as of 2026-05. Kept `pypdf` for PDF text extraction. Revisit when onnxruntime ships 3.14 wheels (or drop project to Python 3.13).
+
+### Changed (A3)
+
+- DB column `model_registry.ollama_model_name` renamed to `serving_model_name`; index renamed to `ix_model_registry_serving_model_name`. Alembic migration `20260523_0014_rename_ollama_model_name_to_serving_model_name` performs the rename via `batch_alter_table`.
+- `InferenceRunRequest.ollama_model_name` → `serving_model_name`. `resolve_model_selection(..., ollama_model_name=)` → `serving_model_name=`.
+- `_serialize_model` response dropped duplicate `ollama_model_name` field; only `serving_model_name` (effective serving id) and `published_model_name` remain. Test fixtures + frontend fallbacks updated.
+
+### Removed (A2)
+
+- **Legacy `rag.db` workflow source** (entire): `apps/api/src/api/services/workflows/`, `apps/api/src/api/services/datasets/`, `apps/api/src/api/services/retrieval/`, legacy RAG modules (`services/rag/{ingest,query,sqlite_store,loader,chunker,embedder,reindex_job_runner,incremental_reindex_job_runner,verify_index_job_runner,warmup_job_runner,index_store}.py`), `apps/api/src/api/routers/datasets.py`, `apps/api/src/api/routers/workflows.py`, `apps/api/src/api/ingest.py` + `rag-ingest` entry point. Settings dropped: `rag_source_dir`, `rag_index_dir`, `rag_db_path`, `rag_expected_embed_dim`, `rag_verify_sample_query` (kept `rag_chunk_size`/`rag_chunk_overlap` for collection ingestion). Open WebUI tool methods removed: `list_workflows`, `list_workflow_sources`, `enqueue_workflow_job`, `run_workflow_and_wait`. Demo UI Workflow mode + 68-line `<section id="workflow-mode">` removed; default landing mode is Fine-tuning.
+- 10 test files deleted: `test_ask.py`, `test_datasets_workflows.py`, `test_incremental_reindex_runner.py`, `test_rag_ingest.py`, `test_rag_reindex_api.py`, `test_rag_reindex_runner.py`, `test_rag_search.py`, `test_rag_sqlite_store.py`, `test_rag_verify_runner.py`, `test_rag_warmup_runner.py`
+- `StarterDefinition` simplified to `app` + `demo` only (workflows/profiles/datasets metadata gone)
+
+### Added
+
+- `POST /ft-datasets/from-rag-collection` — generate a fine-tuning dataset by asking LM Studio for Q/A pairs grounded in a RAG collection's documents (`apps/api/src/api/services/fine_tuning/qa_generator.py`)
+- LM Studio auto-register: after `mlx_lm.fuse`, the publish flow now symlinks the fused MLX model into `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` and probes `/v1/models`; if LM Studio reports the model loaded, the registry row transitions to `published`/selectable automatically (`apps/api/src/api/services/model_registry/lmstudio_register.py`)
+- LM Studio runtime probe at API startup (lifespan handler) and inside `./scripts/ft_smoke_preflight.sh` — warns if the configured chat/embed models are not loaded
+- `LMSTUDIO_MODELS_DIR` env var (defaults to `~/.lmstudio/models`)
+
+### Removed
+
+- **PLC test-automation slice** (entire domain): `apps/api/src/api/services/plc/`, `apps/api/src/api/routers/plc.py`, all `PLC*Record` ORM classes, `jobs.plc_suite_id` column + index, `plc_executor_mode`/`plc_cli_path`/`plc_cli_timeout_seconds` settings, `examples/ls-add-demo.csv`, `apps/api/tests/test_plc_*.py`, `scripts/e2e_plc_stub_pipeline.py`, the PLC reviewer mode + section in `/demo`. Alembic migration `20260523_0013_drop_plc_domain` drops 8 PLC tables + `jobs.plc_suite_id`. Scope: focus the repo on QLoRA fine-tuning + RAG only.
+- Deprecated `@app.on_event("startup")` (replaced by `lifespan` context manager)
+
+### Changed
+
+- `CreateTrainingJobRequest.training_method` is now `Literal["sft_qlora", "deterministic_smoke"]` (rejected at the API boundary)
+- `publish_training_job_artifacts` now writes `lmstudio_register` + `lmstudio_model_loaded` into the publish manifest and flips the registry row to `published`/`active` when LM Studio reports the model loaded
+
+## [0.8.0] - 2026-05-23
+
+### Removed
+
+- separate `apps/worker/` package (queue runners now dispatch directly from the API process / smoke scripts)
+- `compose.yml` (postgres now runs via `brew services start postgresql@16`)
+- `shared/` placeholder directory and its `JobRepository` Protocol
+- `/admin` route alias (the static console is canonical at `/demo`)
+- `--worker-runtime` flag from `scripts/ft_smoke_preflight.sh` and `preflight.py`
+- `scripts/e2e_docker_stack_smoke.sh` and `scripts/e2e_ollama_inference_smoke.py`
+- `OllamaChatClient`, `OllamaEmbeddingClient`, and all `OLLAMA_*` settings (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_FALLBACK_MODEL`, `OLLAMA_EMBED_*`, `OLLAMA_TIMEOUT_SECONDS`)
+- `TRAINING_DEVICE` / `TRAINING_ALLOW_CPU` env vars (MLX detects Metal automatically)
+- dead failure-classifier branches in `service.py:_classify_training_failure` and `app.js:classifyFtTrainingFailure` (`metal_runtime_unavailable` keyed on torch errors, `cpu_fallback_disabled`, `device_unavailable`, `docker_mps_invalid`)
+- `WorkerHeartbeatRecord` ORM class (migration kept for historical integrity)
+- Open WebUI Docker Compose sidecar (the importable platform tool at `/openwebui/platform_tools.py` is unaffected)
+
+### Added
+
+- Mac-native MLX QLoRA trainer that shells out to brew-provided `mlx_lm.lora` + `mlx_lm.fuse` with stdout/stderr streamed directly to `training.log` (bounded memory)
+- `LMStudioChatClient` / `LMStudioEmbeddingClient` as the sole OpenAI-compatible serving target
+- alembic migration `20260523_0012_backfill_sft_lora_to_sft_qlora` that rewrites legacy `ft_training_jobs.training_method='sft_lora'` rows to `'sft_qlora'`
+- `mlx_subprocess_failed` classification for mlx_lm.lora / mlx_lm.fuse non-zero exits
+
+### Changed
+
+- env vars: `OLLAMA_PUBLISH_ENABLED` → `ADAPTER_PUBLISH_ENABLED`, `OLLAMA_MODEL_NAMESPACE` → `MLX_MODEL_NAMESPACE`; settings renamed accordingly
+- `CreateTrainingJobRequest.training_method` is now `Literal["sft_qlora", "deterministic_smoke"]` (rejected at the API boundary instead of failing inside the trainer)
+- `validate_training_artifacts` derives `artifact_format` from exact backend (`mlx_lora_adapter` vs `deterministic_smoke_adapter`) rather than a `startswith` prefix that previously mislabelled `mlx_qlora+smoke_fallback`
+- `inspect_dependencies` / `inspect_mlx_runtime` in preflight wrap subprocess calls in a single helper that handles `TimeoutExpired` and `FileNotFoundError` instead of crashing the preflight
+- `ensure_default_models` seeds the default registry row from `LMSTUDIO_CHAT_MODEL` (skips when empty); the Ollama fallback chain is gone
+- `/demo` UI strings updated to Mac-native phrasing (no more "Docker worker", "MPS", `--worker-runtime docker`)
+- README + `.env.example` rewritten for the Mac-native shape; `docs/adr/0004-open-webui-integration.md` marked Superseded
+
 ## [0.7.7] - 2026-04-22
 
 ### Added

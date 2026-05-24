@@ -2,6 +2,9 @@
 .omx/
 .codex/
 .agents/
+.claude/
+.panda/
+.aider*
 
 # Python
 __pycache__/
@@ -13,6 +16,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
 
 # OS/editor
 .DS_Store

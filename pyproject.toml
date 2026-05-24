@@ -1,22 +1,19 @@
 [project]
 name = "industrial-ai-harness-platform"
 version = "0.7.0"
-description = "Monorepo-ready industrial AI skeleton with PLC automation and local AI ops reviewer domains"
-requires-python = "==3.11.*"
+description = "Mac-native MLX fine-tuning and inference platform"
+requires-python = ">=3.11"
 dependencies = [
   "industrial-ai-api",
-  "industrial-ai-worker",
 ]
 
 [tool.uv.workspace]
 members = [
   "apps/api",
-  "apps/worker",
 ]
 
 [tool.uv.sources]
 industrial-ai-api = { workspace = true }
-industrial-ai-worker = { workspace = true }
 
 [dependency-groups]
 dev = [

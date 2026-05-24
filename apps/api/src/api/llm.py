@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Protocol
+import json
+from typing import Any, Protocol
 
 import httpx
 
@@ -29,18 +31,22 @@ class LLMClient(Protocol):
     ) -> ChatResult: ...
 
 
-class OllamaChatClient:
+class LMStudioChatClient:
+    """LM Studio OpenAI-compatible chat client.
+
+    LM Studio exposes /v1/chat/completions in OpenAI format but loads one model
+    at a time (no fallback chain, no model switching in-flight).
+    """
+
     def __init__(
         self,
         *,
         base_url: str,
         default_model: str,
-        fallback_model: str,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 60.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._default_model = default_model
-        self._fallback_model = fallback_model
         self._timeout_seconds = timeout_seconds
 
     def generate_answer(
@@ -52,39 +58,20 @@ class OllamaChatClient:
         temperature: float = 0,
         max_tokens: int | None = None,
     ) -> ChatResult:
-        last_error: Exception | None = None
-        for candidate_model, used_fallback in self._model_candidates(model):
-            try:
-                content = self._chat_completion(
-                    model=candidate_model,
-                    question=question,
-                    context=context,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-            except (httpx.HTTPError, ValueError) as exc:
-                last_error = exc
-                if used_fallback:
-                    raise LLMClientError(str(exc)) from exc
-                continue
-
-            return ChatResult(
-                answer=content, model=candidate_model, used_fallback=used_fallback
+        try:
+            content = self._chat_completion(
+                model=model or self._default_model,
+                question=question,
+                context=context,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise LLMClientError(str(exc)) from exc
 
-        if last_error is not None:
-            raise LLMClientError(str(last_error)) from last_error
-        raise LLMClientError("No model candidates configured")
-
-    def _model_candidates(
-        self, requested_model: str | None = None
-    ) -> list[tuple[str, bool]]:
-        if requested_model and requested_model.strip():
-            return [(requested_model.strip(), False)]
-        candidates: list[tuple[str, bool]] = [(self._default_model, False)]
-        if self._fallback_model and self._fallback_model != self._default_model:
-            candidates.append((self._fallback_model, True))
-        return candidates
+        return ChatResult(
+            answer=content, model=model or self._default_model, used_fallback=False
+        )
 
     def _chat_completion(
         self,
@@ -103,8 +90,10 @@ class OllamaChatClient:
                     {
                         "role": "system",
                         "content": (
-                            "Answer using only the provided context when possible. "
-                            "If context is insufficient, say so briefly."
+                            "Answer the user's question concisely. If the "
+                            "Context block contains relevant evidence, ground "
+                            "your answer in it; otherwise rely on your own "
+                            "knowledge."
                         ),
                     },
                     {
@@ -113,9 +102,18 @@ class OllamaChatClient:
                     },
                 ],
                 "temperature": temperature,
+                # Suppress Qwen3 / DeepSeek-R1 thinking pass so demo answers
+                # stay concise instead of dumping reasoning_content into the
+                # chat panel. Non-thinking models silently ignore this kwarg.
+                "chat_template_kwargs": {"enable_thinking": False},
                 **({"max_tokens": max_tokens} if max_tokens is not None else {}),
             },
-            timeout=self._timeout_seconds,
+            timeout=httpx.Timeout(
+                connect=5.0,
+                read=self._timeout_seconds,
+                write=self._timeout_seconds,
+                pool=5.0,
+            ),
         )
         response.raise_for_status()
 
@@ -125,10 +123,88 @@ class OllamaChatClient:
             raise ValueError("Invalid chat completion payload: missing choices")
 
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(message, dict):
+            raise ValueError(
+                "Invalid chat completion payload: missing assistant message"
+            )
+        content = message.get("content")
         if not isinstance(content, str) or not content.strip():
+            # Qwen3 / DeepSeek-R1 style reasoning models put output in
+            # `reasoning_content` and leave `content` empty when only the
+            # thinking pass ran (typically because max_tokens cut the
+            # response off before the post-think summary). Returning the
+            # raw reasoning chain shows the user a `Thinking Process:`
+            # preamble instead of an answer, which is worse than no
+            # answer; surface a clear error so the demo can advise the
+            # reviewer to raise max_tokens.
+            reasoning = message.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                raise ValueError(
+                    "Model ran out of tokens during its reasoning pass and did "
+                    "not emit a final answer. Increase max_tokens (the current "
+                    "budget was consumed entirely by the thinking phase)."
+                )
             raise ValueError(
                 "Invalid chat completion payload: missing assistant content"
             )
 
         return content.strip()
+
+    def stream_chat_messages(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        temperature: float = 0,
+        max_tokens: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream raw chat-completion chunks from LM Studio.
+
+        Yields decoded `data: ...` events as dicts. The terminal `[DONE]`
+        sentinel is consumed and not yielded. Callers can rewrite the `id`
+        and `model` fields before re-encoding the chunks for downstream
+        clients.
+        """
+        body: dict[str, Any] = {
+            "model": model or self._default_model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+
+        timeout = httpx.Timeout(
+            connect=5.0,
+            read=self._timeout_seconds,
+            write=self._timeout_seconds,
+            pool=5.0,
+        )
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                with client.stream(
+                    "POST",
+                    f"{self._base_url}/chat/completions",
+                    json=body,
+                ) as response:
+                    response.raise_for_status()
+                    for raw_line in response.iter_lines():
+                        if not raw_line:
+                            continue
+                        line = raw_line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        payload_text = line[len("data:") :].strip()
+                        if payload_text == "[DONE]":
+                            return
+                        try:
+                            chunk = json.loads(payload_text)
+                        except json.JSONDecodeError as exc:
+                            raise LLMClientError(
+                                f"LM Studio stream returned invalid JSON: {exc}"
+                            ) from exc
+                        if isinstance(chunk, dict):
+                            yield chunk
+        except httpx.HTTPError as exc:
+            raise LLMClientError(str(exc)) from exc

@@ -16,14 +16,12 @@ from api.services.fine_tuning.trainer import (
 def _settings(**overrides):
     return replace(
         get_settings(),
-        training_device="cpu",
-        training_allow_cpu=True,
-        ft_default_training_method="sft_lora",
-        ft_trainer_backend="local_peft",
+        ft_default_training_method="sft_qlora",
+        ft_trainer_backend="mlx_qlora",
         ft_allow_smoke_fallback=True,
         ft_smoke_fallback_backend="deterministic_smoke",
         ft_trainer_model_map_json=(
-            '{"qwen2.5:7b-instruct-q4_K_M":"hf-internal/testing-tiny-random-gpt2"}'
+            '{"qwen3.5:4b":"hf-internal/testing-tiny-random-gpt2"}'
         ),
         **overrides,
     )
@@ -57,11 +55,6 @@ def _export_result(tmp_path: Path) -> DatasetExportResult:
 def test_run_training_backend_uses_deterministic_smoke_fallback_for_hf_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._require_training_dependencies",
-        lambda: None,
-    )
-
     def _raise_hf_resolution_failure(*args, **kwargs):
         raise RuntimeError(
             "RepositoryNotFoundError: 404 Client Error while resolving model files from "
@@ -69,14 +62,14 @@ def test_run_training_backend_uses_deterministic_smoke_fallback_for_hf_failures(
         )
 
     monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._run_local_peft_training",
+        "api.services.fine_tuning.trainer._run_mlx_qlora_training",
         _raise_hf_resolution_failure,
     )
 
     result = run_training_backend(
         _export_result(tmp_path),
-        base_model_name="qwen2.5:7b-instruct-q4_K_M",
-        training_method="sft_lora",
+        base_model_name="qwen3.5:4b",
+        training_method="sft_qlora",
         hyperparams_json={
             "smoke_test": True,
             "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",
@@ -85,7 +78,7 @@ def test_run_training_backend_uses_deterministic_smoke_fallback_for_hf_failures(
         output_dir=tmp_path / "trainer_output",
     )
 
-    assert result.trainer_backend == "local_peft+smoke_fallback"
+    assert result.trainer_backend == "mlx_qlora+smoke_fallback"
     assert result.trainer_model_name == DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME
     assert Path(result.adapter_dir, "adapter_config.json").exists()
     assert Path(result.report_path).exists()
@@ -95,16 +88,11 @@ def test_run_training_backend_uses_deterministic_smoke_fallback_for_hf_failures(
 def test_run_training_backend_does_not_fallback_for_non_hf_resolution_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._require_training_dependencies",
-        lambda: None,
-    )
-
     def _raise_non_hf_resolution_failure(*args, **kwargs):
         raise RuntimeError("failed to resolve local artifact directory permissions")
 
     monkeypatch.setattr(
-        "api.services.fine_tuning.trainer._run_local_peft_training",
+        "api.services.fine_tuning.trainer._run_mlx_qlora_training",
         _raise_non_hf_resolution_failure,
     )
 
@@ -113,8 +101,8 @@ def test_run_training_backend_does_not_fallback_for_non_hf_resolution_errors(
     ):
         run_training_backend(
             _export_result(tmp_path),
-            base_model_name="qwen2.5:7b-instruct-q4_K_M",
-            training_method="sft_lora",
+            base_model_name="qwen3.5:4b",
+            training_method="sft_qlora",
             hyperparams_json={
                 "smoke_test": True,
                 "trainer_model_name": "hf-internal/testing-tiny-random-gpt2",

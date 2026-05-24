@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,7 +31,10 @@ class CreateTrainingJobRequest(BaseModel):
 
     dataset_version_id: str = Field(min_length=1)
     base_model_name: str = Field(min_length=1)
-    training_method: str = Field(default="stub_adapter", min_length=1)
+    # Only `sft_qlora` is a real training method. The `deterministic_smoke`
+    # path is a trainer backend, not a method — switch backends via the
+    # FT_TRAINER_BACKEND env (see services/fine_tuning/trainer.py).
+    training_method: Literal["sft_qlora"] = Field(default="sft_qlora")
     hyperparams_json: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -40,7 +43,7 @@ class InferenceRunRequest(BaseModel):
 
     prompt: str = Field(min_length=1)
     model_id: str | None = None
-    ollama_model_name: str | None = None
+    serving_model_name: str | None = None
     rag_collection_id: str | None = None
     temperature: float = Field(default=0, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1)
@@ -158,7 +161,7 @@ def post_inference_run(
             model = resolve_model_selection(
                 session,
                 model_id=request.model_id,
-                ollama_model_name=request.ollama_model_name,
+                serving_model_name=request.serving_model_name,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -208,7 +211,7 @@ def post_inference_run(
         "answer": result.answer,
         "model": model,
         "meta": {
-            "provider": "ollama",
+            "provider": "lmstudio",
             "model": result.model,
             "used_fallback": result.used_fallback,
             "rag_collection_id": request.rag_collection_id,

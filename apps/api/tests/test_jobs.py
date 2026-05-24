@@ -26,7 +26,6 @@ def test_jobs_returns_seeded_row(client: TestClient) -> None:
             "type": "generic",
             "workflow_key": None,
             "dataset_key": None,
-            "plc_suite_id": None,
             "status": "queued",
         }
     ]
@@ -80,7 +79,6 @@ def test_jobs_support_type_workflow_dataset_and_status_filters(
             "type": "workflow_run",
             "workflow_key": "briefing",
             "dataset_key": "industrial_demo",
-            "plc_suite_id": None,
             "status": "queued",
         }
     ]
