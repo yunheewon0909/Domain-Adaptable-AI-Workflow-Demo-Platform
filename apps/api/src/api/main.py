@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import logging
@@ -21,6 +22,7 @@ from api.routers.openwebui import router as openwebui_router
 from api.routers.rag import router as rag_router
 from api.services.background_runner import (
     reap_stale_running_jobs,
+    reap_stale_training_jobs,
     reap_unsupported_queue_rows,
     start_dispatcher_task,
     stop_dispatcher_task,
@@ -98,7 +100,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "marked %d stale running jobs (left over from a previous process) as failed",
                 stale_running,
             )
-    probe_lmstudio_health()
+        stale_training = reap_stale_training_jobs(session)
+        if stale_training:
+            logger.info(
+                "marked %d stale training jobs (mid-flight phase, no running backing job) as failed",
+                stale_training,
+            )
+    await asyncio.to_thread(probe_lmstudio_health)
     dispatcher_task, dispatcher_stop = start_dispatcher_task()
     try:
         yield

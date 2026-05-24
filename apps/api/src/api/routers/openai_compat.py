@@ -90,6 +90,41 @@ def _model_sort_key(model: dict[str, Any]) -> tuple[int, str]:
     return (priority, _exposed_model_id(model))
 
 
+def _apply_rag_to_context(
+    *,
+    rag_collection_id: str,
+    question: str,
+    top_k: int,
+    context: str,
+) -> tuple[str, dict[str, Any]]:
+    with Session(get_engine()) as session:
+        try:
+            retrieval_preview = preview_collection_retrieval(
+                session,
+                collection_id=rag_collection_id,
+                query=question,
+                top_k=top_k,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
+    rag_context = (
+        "\n\n".join(
+            f"[{item['filename']}]\n{item['excerpt']}"
+            for item in retrieval_preview.get("results", [])
+        )
+        or "No matching RAG collection context found."
+    )
+    new_context = (
+        f"{context}\n\n"
+        "Use the following platform RAG collection evidence when it is relevant. "
+        "If it is insufficient, say so.\n\n"
+        f"{rag_context}"
+    )
+    return new_context, retrieval_preview
+
+
 def _build_prompt(messages: list[ChatMessage]) -> tuple[str, str]:
     last_user_idx: int | None = None
     for idx in range(len(messages) - 1, -1, -1):
@@ -234,30 +269,11 @@ def _run_chat_completion(
 
     retrieval_preview: dict[str, Any] | None = None
     if request.rag_collection_id:
-        with Session(get_engine()) as session:
-            try:
-                retrieval_preview = preview_collection_retrieval(
-                    session,
-                    collection_id=request.rag_collection_id,
-                    query=question,
-                    top_k=request.top_k,
-                )
-            except KeyError as exc:
-                raise HTTPException(
-                    status_code=404, detail="RAG collection not found"
-                ) from exc
-        rag_context = (
-            "\n\n".join(
-                f"[{item['filename']}]\n{item['excerpt']}"
-                for item in retrieval_preview.get("results", [])
-            )
-            or "No matching RAG collection context found."
-        )
-        context = (
-            f"{context}\n\n"
-            "Use the following platform RAG collection evidence when it is relevant. "
-            "If it is insufficient, say so.\n\n"
-            f"{rag_context}"
+        context, retrieval_preview = _apply_rag_to_context(
+            rag_collection_id=request.rag_collection_id,
+            question=question,
+            top_k=request.top_k,
+            context=context,
         )
 
     serving_model_name = model.get("serving_model_name")
@@ -491,30 +507,11 @@ def post_v1_chat_completion(
 
         retrieval_preview: dict[str, Any] | None = None
         if request.rag_collection_id:
-            with Session(get_engine()) as session:
-                try:
-                    retrieval_preview = preview_collection_retrieval(
-                        session,
-                        collection_id=request.rag_collection_id,
-                        query=question,
-                        top_k=request.top_k,
-                    )
-                except KeyError as exc:
-                    raise HTTPException(
-                        status_code=404, detail="RAG collection not found"
-                    ) from exc
-            rag_context = (
-                "\n\n".join(
-                    f"[{item['filename']}]\n{item['excerpt']}"
-                    for item in retrieval_preview.get("results", [])
-                )
-                or "No matching RAG collection context found."
-            )
-            context = (
-                f"{context}\n\n"
-                "Use the following platform RAG collection evidence when it is relevant. "
-                "If it is insufficient, say so.\n\n"
-                f"{rag_context}"
+            context, retrieval_preview = _apply_rag_to_context(
+                rag_collection_id=request.rag_collection_id,
+                question=question,
+                top_k=request.top_k,
+                context=context,
             )
 
         serving_model_name = model.get("serving_model_name")

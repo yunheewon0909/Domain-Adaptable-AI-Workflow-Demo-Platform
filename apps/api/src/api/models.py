@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -64,6 +65,7 @@ class JobRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -86,9 +88,9 @@ class DatasetRecord(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     domain_type: Mapped[str] = mapped_column(String(64), nullable=False)
     profile_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_dir: Mapped[str] = mapped_column(String(512), nullable=False)
-    index_dir: Mapped[str] = mapped_column(String(512), nullable=False)
-    db_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_dir: Mapped[str] = mapped_column(String(512), nullable=False)  # DEPRECATED: legacy ingest path, no longer used by any service
+    index_dir: Mapped[str] = mapped_column(String(512), nullable=False)  # DEPRECATED: legacy ingest path, no longer used by any service
+    db_path: Mapped[str] = mapped_column(String(512), nullable=False)  # DEPRECATED: legacy ingest path, no longer used by any service
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -103,6 +105,7 @@ class DatasetRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -128,6 +131,7 @@ class FTDatasetRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -173,6 +177,7 @@ class FTDatasetVersionRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -211,6 +216,7 @@ class FTDatasetRowRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -253,6 +259,12 @@ class FTTrainingJobRecord(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
+    )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -279,6 +291,12 @@ class FTModelArtifactRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -317,6 +335,7 @@ class ModelRegistryRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -344,6 +363,7 @@ class RAGCollectionRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )
 
 
@@ -376,4 +396,5 @@ class RAGDocumentRecord(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
     )

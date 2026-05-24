@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
+import math
 from pathlib import Path
 import re
 from typing import Any
+import uuid
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.config import get_project_root, get_settings
 from api.models import RAGCollectionRecord, RAGDocumentRecord
+from api.services.rag.embedding_client import (
+    EmbeddingClientError,
+    LMStudioEmbeddingClient,
+)
 
 try:
     from pypdf import PdfReader
@@ -22,13 +26,8 @@ except Exception:  # pragma: no cover - exercised only when dependency unavailab
     PdfReader = None
 
 
-def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
-    next_value = 1
-    for existing_id in session.scalars(select(model.id)).all():
-        suffix = str(existing_id).replace(f"{prefix}-", "", 1)
-        if suffix.isdigit():
-            next_value = max(next_value, int(suffix) + 1)
-    return f"{prefix}-{next_value}"
+def _next_prefixed_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _collections_root() -> Path:
@@ -68,6 +67,71 @@ def _extract_preview_text(content: bytes, mime_type: str) -> tuple[str, str]:
 
 def _tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if token]
+
+
+def _lexical_score(query: str, text: str) -> float:
+    if not query or not text:
+        return 0.0
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return 0.0
+    text_tokens = _tokenize(text)
+    if not text_tokens:
+        return 0.0
+    counts: dict[str, int] = {}
+    for token in text_tokens:
+        counts[token] = counts.get(token, 0) + 1
+    return float(sum(counts.get(token, 0) for token in query_tokens))
+
+
+_embedding_client: LMStudioEmbeddingClient | None = None
+
+
+def _get_embedding_client() -> LMStudioEmbeddingClient | None:
+    """Lazy-initialize the LM Studio embedding client.
+
+    Returns None when no embedding model is configured (e.g. test env), so
+    callers can degrade to lexical scoring without forcing an HTTP call.
+    """
+    global _embedding_client
+    if _embedding_client is not None:
+        return _embedding_client
+    settings = get_settings()
+    model = (settings.lmstudio_embed_model or "").strip()
+    if not model:
+        return None
+    _embedding_client = LMStudioEmbeddingClient(
+        base_url=settings.lmstudio_base_url,
+        model=model,
+    )
+    return _embedding_client
+
+
+def _embed_text(text: str) -> list[float] | None:
+    """Embed a single text via LM Studio, or None if unavailable."""
+    client = _get_embedding_client()
+    if client is None:
+        return None
+    try:
+        vectors = client.embed_texts([text])
+    except EmbeddingClientError:
+        return None
+    return vectors[0] if vectors else None
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return dot / math.sqrt(norm_a * norm_b)
 
 
 def _serialize_document(document: RAGDocumentRecord) -> dict[str, Any]:
@@ -130,28 +194,17 @@ def create_collection(
         "chunk_size": settings.rag_chunk_size,
         "chunk_overlap": settings.rag_chunk_overlap,
     }
-    # `_next_prefixed_id` does SELECT-then-INSERT, which races under
-    # concurrent POSTs and collides on the PK. Retry on IntegrityError
-    # the same way create_training_job does.
-    last_error: IntegrityError | None = None
-    for _ in range(5):
-        collection = RAGCollectionRecord(
-            id=_next_prefixed_id(session, RAGCollectionRecord, "rag-collection"),
-            name=name.strip(),
-            description=description.strip() if description else None,
-            embedding_model=embedding,
-            chunking_policy_json=policy,
-            updated_at=now,
-        )
-        session.add(collection)
-        try:
-            session.commit()
-            return get_collection(session, collection.id) or {"id": collection.id}
-        except IntegrityError as exc:
-            last_error = exc
-            session.rollback()
-    assert last_error is not None
-    raise last_error
+    collection = RAGCollectionRecord(
+        id=_next_prefixed_id("rag-collection"),
+        name=name.strip(),
+        description=description.strip() if description else None,
+        embedding_model=embedding,
+        chunking_policy_json=policy,
+        updated_at=now,
+    )
+    session.add(collection)
+    session.commit()
+    return get_collection(session, collection.id) or {"id": collection.id}
 
 
 def list_collections(session: Session) -> list[dict[str, Any]]:
@@ -205,54 +258,41 @@ def add_collection_document(
     storage_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix
 
-    # Retry the SELECT-then-INSERT pattern on PK collision. Build the file
-    # path from the freshly-allocated id only after the row commits so a
-    # losing concurrent race doesn't leave an orphan file on disk under a
-    # stale document id.
-    last_error: IntegrityError | None = None
-    for _ in range(5):
-        document_id = _next_prefixed_id(session, RAGDocumentRecord, "rag-doc")
-        stored_filename = f"{document_id}{suffix}" if suffix else document_id
-        storage_path = storage_dir / _sanitize_filename(stored_filename)
-        metadata_json = {
-            "storage_path": str(storage_path),
-            "text_preview": preview_text[:4000],
-            "text_length": len(preview_text),
-            "parse_method": parse_method,
-            "chunk_preview": [
-                preview_text[i : i + 300]
-                for i in range(0, min(len(preview_text), 900), 300)
-            ]
-            if preview_text
-            else [],
-        }
-        document = RAGDocumentRecord(
-            id=document_id,
-            collection_id=collection_id,
-            filename=filename,
-            mime_type=mime_type,
-            source_type=source_type,
-            status=status,
-            checksum=checksum,
-            metadata_json=metadata_json,
-            updated_at=now,
-        )
-        session.add(document)
-        collection.updated_at = now
-        try:
-            session.flush()
-        except IntegrityError as exc:
-            last_error = exc
-            session.rollback()
-            collection = session.get(RAGCollectionRecord, collection_id)
-            if collection is None:
-                raise KeyError(collection_id) from exc
-            continue
-        storage_path.write_bytes(content)
-        session.commit()
-        return get_document(session, document.id) or {"id": document.id}
-    assert last_error is not None
-    raise last_error
+    document_id = _next_prefixed_id("rag-doc")
+    stored_filename = f"{document_id}{suffix}" if suffix else document_id
+    storage_path = storage_dir / _sanitize_filename(stored_filename)
+    embedding_vector = _embed_text(preview_text) if preview_text else None
+    metadata_json: dict[str, Any] = {
+        "storage_path": str(storage_path),
+        "text_preview": preview_text[:4000],
+        "text_length": len(preview_text),
+        "parse_method": parse_method,
+        "chunk_preview": [
+            preview_text[i : i + 300]
+            for i in range(0, min(len(preview_text), 900), 300)
+        ]
+        if preview_text
+        else [],
+    }
+    if embedding_vector is not None:
+        metadata_json["embedding"] = embedding_vector
+    document = RAGDocumentRecord(
+        id=document_id,
+        collection_id=collection_id,
+        filename=filename,
+        mime_type=mime_type,
+        source_type=source_type,
+        status=status,
+        checksum=checksum,
+        metadata_json=metadata_json,
+        updated_at=now,
+    )
+    session.add(document)
+    collection.updated_at = now
+    session.flush()
+    storage_path.write_bytes(content)
+    session.commit()
+    return get_document(session, document.id) or {"id": document.id}
 
 
 def list_collection_documents(
@@ -506,7 +546,6 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
                 ):
                     collection.description = spec.description
                     collection.embedding_model = desired_embed
-                    collection.updated_at = now
                     changed = True
 
         # Only populate documents on first creation. A reviewer deleting a seed
@@ -525,7 +564,6 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
                     spec=doc_spec,
                     content=content,
                 )
-                collection.updated_at = now
                 changed = True
 
         seeded.append({"id": spec.collection_id, "name": spec.name})
@@ -546,13 +584,27 @@ def preview_collection_retrieval(
             RAGDocumentRecord.collection_id == collection_id
         )
     ).all()
-    query_tokens = _tokenize(query)
+    query_embedding = _embed_text(query)
     scored_results: list[dict[str, Any]] = []
     for document in documents:
-        preview_text = str((document.metadata_json or {}).get("text_preview") or "")
-        text_tokens = Counter(_tokenize(preview_text))
-        score = sum(text_tokens[token] for token in query_tokens)
-        if score <= 0:
+        metadata = document.metadata_json or {}
+        preview_text = str(metadata.get("text_preview") or "")
+        doc_embedding_raw = metadata.get("embedding")
+        score = 0.0
+        if (
+            query_embedding is not None
+            and isinstance(doc_embedding_raw, list)
+            and doc_embedding_raw
+        ):
+            doc_embedding = [float(v) for v in doc_embedding_raw]
+            score = _cosine_similarity(query_embedding, doc_embedding)
+        else:
+            # No embedding for either side (e.g. LM Studio unreachable, or the
+            # doc was seeded before embeddings were wired in). Fall back to
+            # lexical token overlap so retrieval still works in offline /
+            # test environments.
+            score = _lexical_score(query, preview_text)
+        if score <= 0.0:
             continue
         scored_results.append(
             {
@@ -563,7 +615,7 @@ def preview_collection_retrieval(
                 "status": document.status,
             }
         )
-    scored_results.sort(key=lambda item: (-int(item["score"]), str(item["filename"])))
+    scored_results.sort(key=lambda item: (-float(item["score"]), str(item["filename"])))
     return {
         "collection_id": collection.id,
         "collection_name": collection.name,

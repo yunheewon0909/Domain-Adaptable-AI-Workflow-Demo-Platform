@@ -35,12 +35,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
-from api.models import JobRecord
+from api.models import FTTrainingJobRecord, JobRecord
 
 
 logger = logging.getLogger("api.background_runner")
 
-_POLL_INTERVAL_SECONDS = 2.0
+_POLL_INTERVAL_SECONDS = float(os.getenv("FT_DISPATCH_POLL_INTERVAL", "2.0"))
 _CLAIM_LOCK = asyncio.Lock()
 
 
@@ -79,7 +79,6 @@ def _claim_next_queued_job(session: Session) -> JobRecord | None:
     job.status = "running"
     job.attempts = (job.attempts or 0) + 1
     job.started_at = now
-    job.updated_at = now
     session.commit()
     return job
 
@@ -118,7 +117,6 @@ def reap_unsupported_queue_rows(session: Session) -> int:
     for row in rows:
         row.status = "failed"
         row.finished_at = now
-        row.updated_at = now
         row.error = (
             f"job type '{row.type}' is no longer supported by the dispatcher "
             f"(known runners: {sorted(supported)})"
@@ -152,7 +150,6 @@ def reap_stale_running_jobs(session: Session) -> int:
     for row in rows:
         row.status = "failed"
         row.finished_at = now
-        row.updated_at = now
         row.error = (
             "Job left in `running` state by a previous API process. "
             "The dispatcher does not resume in-flight jobs; re-enqueue "
@@ -161,6 +158,64 @@ def reap_stale_running_jobs(session: Session) -> int:
     if rows:
         session.commit()
     return len(rows)
+
+
+_STALE_TRAINING_PHASES = (
+    "preparing_data",
+    "training",
+    "packaging",
+    "registering",
+)
+
+
+def reap_stale_training_jobs(session: Session) -> int:
+    """Fail any FT training job stuck in a mid-flight phase without a running queue row.
+
+    `complete_training_job` advances the domain row through `preparing_data →
+    training → packaging → registering` while the backing `jobs` row holds
+    `running`. If the API is killed mid-run, `reap_stale_running_jobs` flips
+    the queue row to `failed`, but the FT training row stays in a mid-flight
+    phase forever. Mark such rows `failed` with a crash_recovery error so
+    reviewers can re-enqueue instead of waiting on a zombie.
+    """
+    stmt = select(FTTrainingJobRecord).where(
+        FTTrainingJobRecord.status.in_(_STALE_TRAINING_PHASES)
+    )
+    rows = session.scalars(stmt).all()
+    if not rows:
+        return 0
+    now = datetime.now(timezone.utc)
+    reaped = 0
+    for row in rows:
+        backing_running = False
+        if row.backing_job_id:
+            backing = session.get(JobRecord, row.backing_job_id)
+            backing_running = (
+                backing is not None
+                and backing.type == "ft_train_model"
+                and backing.status == "running"
+            )
+        if backing_running:
+            continue
+        prior_phase = row.status
+        row.status = "failed"
+        row.finished_at = now
+        row.error_json = {
+            "category": "crash_recovery",
+            "phase": prior_phase,
+            "message": (
+                "Training job left in a mid-flight phase by a previous API process; "
+                "no running backing job exists. Re-enqueue to retry."
+            ),
+        }
+        row.log_text = (
+            (row.log_text or "")
+            + "\nTraining job reaped on startup: no running backing job found."
+        ).strip()
+        reaped += 1
+    if reaped:
+        session.commit()
+    return reaped
 
 
 async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> None:
@@ -181,7 +236,6 @@ async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> 
             if row is not None:
                 row.status = "failed"
                 row.finished_at = now
-                row.updated_at = now
                 row.error = str(exc)[:4000]
                 session.commit()
         return
@@ -194,7 +248,6 @@ async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> 
             # domain table; only the queue row needs to flip to succeeded.
             row.status = "succeeded"
             row.finished_at = now
-            row.updated_at = now
             session.commit()
 
 
@@ -247,7 +300,7 @@ def start_dispatcher_task(
         logger.info("background dispatcher disabled (FT_BACKGROUND_DISPATCH=false)")
         return None, None
     stop_event = asyncio.Event()
-    target_loop = loop or asyncio.get_event_loop()
+    target_loop = loop or asyncio.get_running_loop()
     task = target_loop.create_task(dispatcher_loop(stop_event), name="ft-dispatcher")
     return task, stop_event
 

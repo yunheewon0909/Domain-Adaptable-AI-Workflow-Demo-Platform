@@ -139,8 +139,9 @@ def _resolve_lmstudio_model_path(model_key: str) -> str | None:
             continue
         absolute = Path.home() / ".lmstudio" / "models" / rel_path
         if (absolute / "config.json").is_file() and (
-            absolute / "model.safetensors"
-        ).is_file():
+            (absolute / "model.safetensors").is_file()
+            or (absolute / "model.npz").is_file()
+        ):
             return str(absolute)
         return None
     return None

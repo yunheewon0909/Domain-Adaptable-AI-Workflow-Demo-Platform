@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+import uuid
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.config import get_settings
@@ -53,13 +53,8 @@ READY_MODEL_STATUSES = {"published", "active"}
 ALLOWED_PUBLISH_STATUSES = {"not_requested", "publish_ready", "published", "failed"}
 
 
-def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
-    next_value = 1
-    for existing_id in session.scalars(select(model.id)).all():
-        suffix = str(existing_id).replace(f"{prefix}-", "", 1)
-        if suffix.isdigit():
-            next_value = max(next_value, int(suffix) + 1)
-    return f"{prefix}-{next_value}"
+def _next_prefixed_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _artifacts_root() -> Path:
@@ -537,7 +532,6 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
             # User-promoted non-auto-seed pointing the wrong way — demote
             # so we don't lose user-curated history.
             model.status = "registered"
-            model.updated_at = now
 
     for item in defaults:
         existing = session.scalar(
@@ -554,11 +548,10 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
             existing.published_model_name = item["serving_model_name"]
             existing.tags_json = item["tags_json"]
             existing.description = item["description"]
-            existing.updated_at = now
             continue
         session.add(
             ModelRegistryRecord(
-                id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
+                id=_next_prefixed_id("model"),
                 display_name=item["display_name"],
                 source_type="base",
                 base_model_name=item["base_model_name"],
@@ -650,56 +643,38 @@ def create_training_job(
     if resolved_training_method == "sft_qlora" and dataset_version.status != "locked":
         raise ValueError("real sft_qlora training requires a locked dataset version")
 
-    # `_next_prefixed_id` does SELECT-then-INSERT, which races under
-    # concurrent POSTs and collides on the PK. Retry on IntegrityError with
-    # a fresh id allocation. The validation above is repeated implicitly
-    # because dataset_version_id is immutable; we only need to re-fetch the
-    # ORM instance after rollback to keep the session usable.
     base_model_clean = base_model_name.strip()
     trainer_backend = get_settings().ft_trainer_backend
     hyperparams = hyperparams_json or {}
-    last_error: IntegrityError | None = None
-    for _ in range(5):
-        training_job = FTTrainingJobRecord(
-            id=_next_prefixed_id(session, FTTrainingJobRecord, "ft-job"),
-            dataset_version_id=dataset_version_id,
-            base_model_name=base_model_clean,
-            training_method=resolved_training_method,
-            hyperparams_json=hyperparams,
-            trainer_backend=trainer_backend,
-        )
-        session.add(training_job)
-        try:
-            session.flush()
-            queue_job = create_job(
-                session,
-                job_type="ft_train_model",
-                payload_json={
-                    "training_job_id": training_job.id,
-                    "dataset_version_id": dataset_version_id,
-                    "base_model_name": training_job.base_model_name,
-                    "training_method": training_job.training_method,
-                },
-                max_attempts=2,
-                commit=False,
-            )
-            training_job.backing_job_id = queue_job.id
-            training_job.log_text = (
-                "Queued fine-tuning job. "
-                "Real trainer execution requires a locked dataset version and compatible local training dependencies."
-            )
-            session.commit()
-            return get_training_job(session, training_job.id) or {"id": training_job.id}
-        except IntegrityError as exc:
-            last_error = exc
-            session.rollback()
-            # ORM identity map is cleared; ensure we don't reuse stale state
-            # on the next attempt.
-            dataset_version = session.get(FTDatasetVersionRecord, dataset_version_id)
-            if dataset_version is None:
-                raise KeyError(dataset_version_id) from exc
-    assert last_error is not None
-    raise last_error
+    training_job = FTTrainingJobRecord(
+        id=_next_prefixed_id("ft-job"),
+        dataset_version_id=dataset_version_id,
+        base_model_name=base_model_clean,
+        training_method=resolved_training_method,
+        hyperparams_json=hyperparams,
+        trainer_backend=trainer_backend,
+    )
+    session.add(training_job)
+    session.flush()
+    queue_job = create_job(
+        session,
+        job_type="ft_train_model",
+        payload_json={
+            "training_job_id": training_job.id,
+            "dataset_version_id": dataset_version_id,
+            "base_model_name": training_job.base_model_name,
+            "training_method": training_job.training_method,
+        },
+        max_attempts=2,
+        commit=False,
+    )
+    training_job.backing_job_id = queue_job.id
+    training_job.log_text = (
+        "Queued fine-tuning job. "
+        "Real trainer execution requires a locked dataset version and compatible local training dependencies."
+    )
+    session.commit()
+    return get_training_job(session, training_job.id) or {"id": training_job.id}
 
 
 def list_training_jobs(session: Session) -> list[dict[str, Any]]:
@@ -957,7 +932,7 @@ def complete_training_job(
         )
 
         dataset_export_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type="dataset_export",
             local_path=export_result.export_dir,
@@ -974,7 +949,7 @@ def complete_training_job(
         session.flush()
 
         adapter_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type=artifact_type,
             local_path=training_output.adapter_dir,
@@ -998,7 +973,7 @@ def complete_training_job(
         session.flush()
 
         report_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type="training_report",
             local_path=training_output.report_path,
@@ -1015,7 +990,7 @@ def complete_training_job(
 
         if training_output.merged_model_dir is not None:
             merged_artifact = FTModelArtifactRecord(
-                id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+                id=_next_prefixed_id("artifact"),
                 training_job_id=training_job.id,
                 artifact_type="merged_model",
                 local_path=training_output.merged_model_dir,
@@ -1050,7 +1025,7 @@ def complete_training_job(
                 + ", ".join(publish_validation["missing"])
             )
         publish_artifact = FTModelArtifactRecord(
-            id=_next_prefixed_id(session, FTModelArtifactRecord, "artifact"),
+            id=_next_prefixed_id("artifact"),
             training_job_id=training_job.id,
             artifact_type="publish_manifest",
             local_path=str(publish_manifest_path),
@@ -1066,7 +1041,7 @@ def complete_training_job(
         training_job.status = "registering"
         failure_phase = "registering"
         registry_entry = ModelRegistryRecord(
-            id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
+            id=_next_prefixed_id("model"),
             display_name=f"{dataset.name} {dataset_version.version_label}",
             source_type="fine_tuned",
             base_model_name=training_job.base_model_name,
@@ -1290,7 +1265,6 @@ def publish_training_job_artifacts(
                 "probe) to mark the registry row selectable."
             ),
         ]
-    model.updated_at = now
     publish_artifact.metadata_json = publish_metadata
     session.commit()
     return _serialize_model(

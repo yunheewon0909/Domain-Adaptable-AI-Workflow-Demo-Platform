@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+import uuid
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.models import FTDatasetRecord, FTDatasetRowRecord, FTDatasetVersionRecord
@@ -14,13 +14,8 @@ ALLOWED_VERSION_STATUSES = {"draft", "validated", "locked"}
 ALLOWED_ROW_SPLITS = {"train", "val", "test", "unlabeled"}
 
 
-def _next_prefixed_id(session: Session, model: type, prefix: str) -> str:
-    next_value = 1
-    for existing_id in session.scalars(select(model.id)).all():
-        suffix = str(existing_id).replace(f"{prefix}-", "", 1)
-        if suffix.isdigit():
-            next_value = max(next_value, int(suffix) + 1)
-    return f"{prefix}-{next_value}"
+def _next_prefixed_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _validate_split_ratios(train: float, val: float, test: float) -> None:
@@ -193,25 +188,16 @@ def create_dataset(
     normalized_task_type = task_type.strip()
     if normalized_task_type not in ALLOWED_TASK_TYPES:
         raise ValueError("unsupported task_type")
-    last_error: IntegrityError | None = None
-    for _ in range(5):
-        dataset = FTDatasetRecord(
-            id=_next_prefixed_id(session, FTDatasetRecord, "ft-dataset"),
-            name=name.strip(),
-            task_type=normalized_task_type,
-            schema_type=schema_type.strip() or "json",
-            description=description.strip() if description else None,
-            updated_at=datetime.now(timezone.utc),
-        )
-        session.add(dataset)
-        try:
-            session.commit()
-            return get_dataset(session, dataset.id) or {"id": dataset.id}
-        except IntegrityError as exc:
-            last_error = exc
-            session.rollback()
-    assert last_error is not None
-    raise last_error
+    dataset = FTDatasetRecord(
+        id=_next_prefixed_id("ft-dataset"),
+        name=name.strip(),
+        task_type=normalized_task_type,
+        schema_type=schema_type.strip() or "json",
+        description=description.strip() if description else None,
+    )
+    session.add(dataset)
+    session.commit()
+    return get_dataset(session, dataset.id) or {"id": dataset.id}
 
 
 def create_dataset_version(
@@ -227,32 +213,18 @@ def create_dataset_version(
     if dataset is None:
         raise KeyError(dataset_id)
     _validate_split_ratios(train_split_ratio, val_split_ratio, test_split_ratio)
-    last_error: IntegrityError | None = None
-    for _ in range(5):
-        now = datetime.now(timezone.utc)
-        version = FTDatasetVersionRecord(
-            id=_next_prefixed_id(session, FTDatasetVersionRecord, "ft-version"),
-            dataset_id=dataset_id,
-            version_label=version_label.strip(),
-            train_split_ratio=float(train_split_ratio),
-            val_split_ratio=float(val_split_ratio),
-            test_split_ratio=float(test_split_ratio),
-            updated_at=now,
-        )
-        session.add(version)
-        dataset.current_version_id = version.id
-        dataset.updated_at = now
-        try:
-            session.commit()
-            return get_dataset_version(session, version.id) or {"id": version.id}
-        except IntegrityError as exc:
-            last_error = exc
-            session.rollback()
-            dataset = session.get(FTDatasetRecord, dataset_id)
-            if dataset is None:
-                raise KeyError(dataset_id) from exc
-    assert last_error is not None
-    raise last_error
+    version = FTDatasetVersionRecord(
+        id=_next_prefixed_id("ft-version"),
+        dataset_id=dataset_id,
+        version_label=version_label.strip(),
+        train_split_ratio=float(train_split_ratio),
+        val_split_ratio=float(val_split_ratio),
+        test_split_ratio=float(test_split_ratio),
+    )
+    session.add(version)
+    dataset.current_version_id = version.id
+    session.commit()
+    return get_dataset_version(session, version.id) or {"id": version.id}
 
 
 def get_dataset_version(session: Session, version_id: str) -> dict[str, Any] | None:
@@ -313,7 +285,6 @@ def add_dataset_rows(
                 else {},
                 validation_status=validation_status,
                 validation_error=validation_error,
-                updated_at=now,
             )
         )
 
@@ -324,7 +295,6 @@ def add_dataset_rows(
         )
     ).all()
     version.row_count = len(persisted_rows)
-    version.updated_at = now
     session.commit()
     return get_dataset_version(session, version_id) or {"id": version_id}
 
@@ -354,6 +324,5 @@ def set_dataset_version_status(
     if normalized_status == "locked" and version.status != "validated":
         raise ValueError("dataset version must be validated before it can be locked")
     version.status = normalized_status
-    version.updated_at = datetime.now(timezone.utc)
     session.commit()
     return get_dataset_version(session, version_id) or {"id": version_id}

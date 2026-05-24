@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import re
 from typing import Any
@@ -141,7 +141,6 @@ def create_job(
         payload_json=payload_json,
         attempts=0,
         max_attempts=max_attempts,
-        updated_at=datetime.now(timezone.utc),
     )
     session.add(job)
     if commit:

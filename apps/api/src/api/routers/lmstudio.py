@@ -185,7 +185,7 @@ def _ensure_base_model_registered(serving_model_name: str) -> None:
         now = datetime.now(timezone.utc)
         session.add(
             ModelRegistryRecord(
-                id=_next_prefixed_id(session, ModelRegistryRecord, "model"),
+                id=_next_prefixed_id("model"),
                 display_name=serving_model_name,
                 source_type="base",
                 base_model_name=serving_model_name,
