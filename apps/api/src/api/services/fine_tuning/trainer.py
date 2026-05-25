@@ -178,6 +178,7 @@ def build_training_config(
     training_method: str,
     hyperparams_json: dict[str, Any],
     settings: Settings,
+    train_rows: int = 0,
 ) -> TrainingConfig:
     normalized_method = training_method.strip() or settings.ft_default_training_method
     if normalized_method not in SUPPORTED_REAL_TRAINING_METHODS:
@@ -189,6 +190,18 @@ def build_training_config(
         raise RuntimeError(
             f"unsupported trainer backend: {trainer_backend}. Supported backends: {sorted(SUPPORTED_TRAINER_BACKENDS)}"
         )
+    # Auto-scale iterations to ~3 effective epochs for small datasets.
+    # Users can override by passing mlx_iters explicitly in hyperparams_json.
+    # With batch_size=1 and no gradient accumulation, one iter = one example.
+    _user_iters = hyperparams_json.get("mlx_iters")
+    if _user_iters is not None:
+        resolved_iters = max(10, int(_user_iters))
+    elif train_rows > 0:
+        # Target ~3 passes over the data, clamped to [10, 500].
+        resolved_iters = max(10, min(500, train_rows * 3))
+    else:
+        resolved_iters = max(10, int(settings.ft_mlx_iters))
+
     return TrainingConfig(
         trainer_model_name=resolve_trainer_model_name(
             base_model_name, hyperparams_json, settings
@@ -215,7 +228,7 @@ def build_training_config(
         per_device_eval_batch_size=max(
             1, int(hyperparams_json.get("per_device_eval_batch_size", 1))
         ),
-        mlx_iters=max(10, int(hyperparams_json.get("mlx_iters", settings.ft_mlx_iters))),
+        mlx_iters=resolved_iters,
         mlx_steps_per_eval=max(
             1, int(hyperparams_json.get("mlx_steps_per_eval", settings.ft_mlx_steps_per_eval))
         ),
@@ -246,6 +259,7 @@ def run_training_backend(
         training_method=training_method,
         hyperparams_json=hyperparams_json,
         settings=settings,
+        train_rows=export_result.row_counts.get("train", 0),
     )
     if config.trainer_backend == "deterministic_smoke":
         return _run_deterministic_smoke_training(
