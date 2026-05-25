@@ -175,27 +175,25 @@ async function renderKbDocs() {
       return;
     }
     dom.kbDocs.innerHTML =
-      `<div class="text-muted-fg mb-1">${escapeHtml(collection.name)} · ${docs.length} document(s)</div>` +
-      '<ul class="space-y-1">' +
+      `<div class="text-muted-fg mb-2">${escapeHtml(collection.name)} · ${docs.length} document(s)</div>` +
+      '<ul class="space-y-3">' +
       docs
         .map(
           (d) => `
-            <li class="space-y-1">
-              <div class="flex items-center justify-between gap-2">
-                <span class="truncate">${escapeHtml(d.filename || d.id)} <span class="text-xs text-muted-fg">(${d.preview_length || 0}b)</span></span>
-                <div class="flex gap-3 text-xs">
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-view text-muted-fg hover:text-fg underline">view</button>
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-rename text-muted-fg hover:text-fg underline">rename</button>
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-edit text-muted-fg hover:text-fg underline">edit</button>
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-delete text-muted-fg hover:text-destructive underline">delete</button>
-                </div>
+            <li class="rounded-lg border-2 border-border bg-muted/30 p-3 space-y-2">
+              <div class="font-medium text-sm break-all">${escapeHtml(d.filename || d.id)} <span class="text-xs text-muted-fg font-normal">(${d.preview_length || 0}b)</span></div>
+              <div class="flex flex-wrap gap-2">
+                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-view rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted hover:border-accent transition-colors min-h-[40px]">👁 View</button>
+                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-rename rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted hover:border-accent transition-colors min-h-[40px]">✏️ Rename</button>
+                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-edit rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted hover:border-accent transition-colors min-h-[40px]">📝 Edit</button>
+                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-delete rounded-md border border-destructive/40 bg-card px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 hover:border-destructive transition-colors min-h-[40px]">🗑 Delete</button>
               </div>
               <pre data-doc-body="${escapeHtml(d.id)}" class="hidden mt-1 max-h-48 overflow-auto rounded-md border border-border bg-muted p-2 text-xs whitespace-pre-wrap"></pre>
               <div data-doc-edit-wrap="${escapeHtml(d.id)}" class="hidden mt-1 space-y-1">
                 <textarea data-doc-edit-area="${escapeHtml(d.id)}" rows="8" class="w-full rounded-md border border-border bg-card px-2 py-1 text-xs font-mono resize-y"></textarea>
                 <div class="flex gap-2 items-center">
                   <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-save-edit rounded-md bg-accent text-accent-fg px-3 py-1 text-xs font-medium hover:opacity-90">Save</button>
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-cancel-edit text-muted-fg hover:text-fg underline text-xs">Cancel</button>
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-cancel-edit rounded-md border border-border px-2 py-1 text-xs hover:bg-muted">Cancel</button>
                 </div>
               </div>
             </li>`,
