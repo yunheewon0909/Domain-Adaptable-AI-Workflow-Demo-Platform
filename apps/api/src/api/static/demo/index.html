@@ -67,6 +67,9 @@
           <button id="kb-reveal" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted" title="Open active collection's storage dir in Finder">
             Reveal
           </button>
+          <button id="kb-rename-collection" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted" title="Rename the active collection">
+            Rename
+          </button>
           <button id="kb-delete-collection" type="button" class="rounded-md border border-border px-4 py-2 text-sm text-destructive hover:bg-destructive/10" title="Delete the active collection and all of its documents">
             Delete
           </button>
@@ -78,6 +81,27 @@
             Upload to collection
           </button>
         </div>
+
+        <details class="text-sm">
+          <summary class="cursor-pointer text-muted-fg select-none">+ Add text document</summary>
+          <div class="mt-2 space-y-2">
+            <input
+              id="kb-text-name"
+              type="text"
+              placeholder="Filename (e.g. notes.txt)"
+              class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+            />
+            <textarea
+              id="kb-text-content"
+              rows="5"
+              placeholder="Paste or type document content…"
+              class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono resize-y"
+            ></textarea>
+            <button id="kb-text-save" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+              Save as document
+            </button>
+          </div>
+        </details>
 
         <div id="kb-docs" class="text-sm text-muted-fg">No collection selected.</div>
         <p id="kb-hint" class="text-xs text-muted-fg"></p>

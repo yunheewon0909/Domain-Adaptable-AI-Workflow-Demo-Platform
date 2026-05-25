@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from api.db import get_engine
 from api.services.rag.collections import (
     add_collection_document,
+    add_collection_document_text,
     create_collection,
     delete_collection,
     delete_document,
@@ -17,6 +18,9 @@ from api.services.rag.collections import (
     list_collection_documents,
     list_collections,
     preview_collection_retrieval,
+    rename_collection,
+    rename_document,
+    update_document_content,
 )
 
 router = APIRouter(tags=["rag"])
@@ -37,6 +41,32 @@ class RetrievalPreviewRequest(BaseModel):
     collection_id: str = Field(min_length=1)
     query: str = Field(min_length=1)
     top_k: int = Field(default=3, ge=1, le=10)
+
+
+class RenameRAGCollectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+
+
+class RenameRAGDocumentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1)
+
+
+class UpdateRAGDocumentContentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+    filename: str | None = None
+
+
+class CreateTextDocumentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(default="document.txt", min_length=1)
+    content: str
 
 
 @router.post("/rag-collections", status_code=201)
@@ -99,6 +129,37 @@ def delete_rag_collection(collection_id: str) -> dict[str, Any]:
     with Session(get_engine()) as session:
         try:
             return delete_collection(session, collection_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
+
+
+@router.patch("/rag-collections/{collection_id}")
+def patch_rag_collection(
+    collection_id: str, request: RenameRAGCollectionRequest
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return rename_collection(session, collection_id, request.name)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
+
+
+@router.post("/rag-collections/{collection_id}/documents/text", status_code=201)
+def post_rag_collection_document_text(
+    collection_id: str, request: CreateTextDocumentRequest
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return add_collection_document_text(
+                session,
+                collection_id=collection_id,
+                filename=request.filename,
+                content_text=request.content,
+            )
         except KeyError as exc:
             raise HTTPException(
                 status_code=404, detail="RAG collection not found"
@@ -212,6 +273,34 @@ def delete_rag_document(document_id: str) -> dict[str, Any]:
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to delete stored document content: {exc}",
+            ) from exc
+
+
+@router.patch("/rag-documents/{document_id}")
+def patch_rag_document(
+    document_id: str, request: RenameRAGDocumentRequest
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return rename_document(session, document_id, request.filename)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG document not found"
+            ) from exc
+
+
+@router.put("/rag-documents/{document_id}/content")
+def put_rag_document_content(
+    document_id: str, request: UpdateRAGDocumentContentRequest
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        try:
+            return update_document_content(
+                session, document_id, request.content, request.filename
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG document not found"
             ) from exc
 
 

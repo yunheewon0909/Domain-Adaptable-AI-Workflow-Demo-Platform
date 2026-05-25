@@ -16,9 +16,13 @@ const dom = {
   kbNewName: $('kb-new-name'),
   kbNewButton: $('kb-new-button'),
   kbReveal: $('kb-reveal'),
+  kbRenameCollection: $('kb-rename-collection'),
   kbDeleteCollection: $('kb-delete-collection'),
   kbFile: $('kb-file'),
   kbUploadButton: $('kb-upload-button'),
+  kbTextName: $('kb-text-name'),
+  kbTextContent: $('kb-text-content'),
+  kbTextSave: $('kb-text-save'),
   kbDocs: $('kb-docs'),
   kbHint: $('kb-hint'),
   trainPairs: $('train-pairs'),
@@ -181,14 +185,24 @@ async function renderKbDocs() {
                 <span class="truncate">${escapeHtml(d.filename || d.id)} <span class="text-xs text-muted-fg">(${d.preview_length || 0}b)</span></span>
                 <div class="flex gap-3 text-xs">
                   <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-view text-muted-fg hover:text-fg underline">view</button>
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-rename text-muted-fg hover:text-fg underline">rename</button>
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-edit text-muted-fg hover:text-fg underline">edit</button>
                   <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-delete text-muted-fg hover:text-destructive underline">delete</button>
                 </div>
               </div>
               <pre data-doc-body="${escapeHtml(d.id)}" class="hidden mt-1 max-h-48 overflow-auto rounded-md border border-border bg-muted p-2 text-xs whitespace-pre-wrap"></pre>
+              <div data-doc-edit-wrap="${escapeHtml(d.id)}" class="hidden mt-1 space-y-1">
+                <textarea data-doc-edit-area="${escapeHtml(d.id)}" rows="8" class="w-full rounded-md border border-border bg-card px-2 py-1 text-xs font-mono resize-y"></textarea>
+                <div class="flex gap-2 items-center">
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-save-edit rounded-md bg-accent text-accent-fg px-3 py-1 text-xs font-medium hover:opacity-90">Save</button>
+                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-cancel-edit text-muted-fg hover:text-fg underline text-xs">Cancel</button>
+                </div>
+              </div>
             </li>`,
         )
         .join('') +
       '</ul>';
+
     dom.kbDocs.querySelectorAll('.kb-doc-view').forEach((btn) => {
       btn.addEventListener('click', async (event) => {
         const id = event.currentTarget.getAttribute('data-doc-id');
@@ -212,6 +226,83 @@ async function renderKbDocs() {
         }
       });
     });
+
+    dom.kbDocs.querySelectorAll('.kb-doc-rename').forEach((btn) => {
+      btn.addEventListener('click', async (event) => {
+        const id = event.currentTarget.getAttribute('data-doc-id');
+        if (!id) return;
+        const doc = docs.find((d) => d.id === id);
+        const newName = window.prompt('Rename document to:', doc ? doc.filename : '');
+        if (!newName || !newName.trim()) return;
+        try {
+          await fetchJson(`/rag-documents/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: newName.trim() }),
+          });
+          setKbHint(`Renamed to "${newName.trim()}".`);
+          await renderKbDocs();
+        } catch (error) {
+          setKbHint(error.message);
+        }
+      });
+    });
+
+    dom.kbDocs.querySelectorAll('.kb-doc-edit').forEach((btn) => {
+      btn.addEventListener('click', async (event) => {
+        const id = event.currentTarget.getAttribute('data-doc-id');
+        if (!id) return;
+        const editWrap = dom.kbDocs.querySelector(`div[data-doc-edit-wrap="${CSS.escape(id)}"]`);
+        const editArea = dom.kbDocs.querySelector(`textarea[data-doc-edit-area="${CSS.escape(id)}"]`);
+        if (!editWrap || !editArea) return;
+        if (!editWrap.classList.contains('hidden')) {
+          editWrap.classList.add('hidden');
+          return;
+        }
+        editArea.value = '…loading…';
+        editWrap.classList.remove('hidden');
+        try {
+          const payload = await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`);
+          editArea.value = payload.encoding === 'base64'
+            ? '[binary content — cannot edit inline]'
+            : (payload.content || '');
+        } catch (error) {
+          editArea.value = `Failed to load content: ${error.message}`;
+        }
+      });
+    });
+
+    dom.kbDocs.querySelectorAll('.kb-doc-save-edit').forEach((btn) => {
+      btn.addEventListener('click', async (event) => {
+        const id = event.currentTarget.getAttribute('data-doc-id');
+        if (!id) return;
+        const editArea = dom.kbDocs.querySelector(`textarea[data-doc-edit-area="${CSS.escape(id)}"]`);
+        if (!editArea) return;
+        btn.disabled = true;
+        try {
+          await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: editArea.value }),
+          });
+          setKbHint('Document updated.');
+          await renderKbDocs();
+        } catch (error) {
+          setKbHint(error.message);
+          btn.disabled = false;
+        }
+      });
+    });
+
+    dom.kbDocs.querySelectorAll('.kb-doc-cancel-edit').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        const id = event.currentTarget.getAttribute('data-doc-id');
+        if (!id) return;
+        const editWrap = dom.kbDocs.querySelector(`div[data-doc-edit-wrap="${CSS.escape(id)}"]`);
+        if (editWrap) editWrap.classList.add('hidden');
+      });
+    });
+
     dom.kbDocs.querySelectorAll('.kb-doc-delete').forEach((btn) => {
       btn.addEventListener('click', async (event) => {
         const id = event.currentTarget.getAttribute('data-doc-id');
@@ -271,6 +362,57 @@ dom.kbDeleteCollection.addEventListener('click', async () => {
     setKbHint(error.message);
   } finally {
     dom.kbDeleteCollection.disabled = false;
+  }
+});
+
+dom.kbRenameCollection.addEventListener('click', async () => {
+  const collection = selectedCollection();
+  if (!collection) {
+    setKbHint('Select a collection to rename.');
+    return;
+  }
+  const newName = window.prompt(`Rename collection to:`, collection.name);
+  if (!newName || !newName.trim() || newName.trim() === collection.name) return;
+  try {
+    await fetchJson(`/rag-collections/${encodeURIComponent(collection.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    setKbHint(`Renamed to "${newName.trim()}".`);
+    await refreshCollections({ preferredId: collection.id });
+  } catch (error) {
+    setKbHint(error.message);
+  }
+});
+
+dom.kbTextSave.addEventListener('click', async () => {
+  const collection = selectedCollection();
+  if (!collection) {
+    setKbHint('Select or create a collection first.');
+    return;
+  }
+  const filename = dom.kbTextName.value.trim() || 'document.txt';
+  const content = dom.kbTextContent.value;
+  if (!content.trim()) {
+    setKbHint('Document content cannot be empty.');
+    return;
+  }
+  dom.kbTextSave.disabled = true;
+  try {
+    await fetchJson(`/rag-collections/${encodeURIComponent(collection.id)}/documents/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, content }),
+    });
+    setKbHint(`Saved "${filename}" to ${collection.name}.`);
+    dom.kbTextName.value = '';
+    dom.kbTextContent.value = '';
+    await renderKbDocs();
+  } catch (error) {
+    setKbHint(error.message);
+  } finally {
+    dom.kbTextSave.disabled = false;
   }
 });
 

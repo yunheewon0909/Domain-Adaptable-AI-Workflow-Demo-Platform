@@ -383,6 +383,105 @@ def delete_document(session: Session, document_id: str) -> dict[str, Any]:
     return response
 
 
+def rename_collection(
+    session: Session, collection_id: str, name: str
+) -> dict[str, Any]:
+    collection = session.get(RAGCollectionRecord, collection_id)
+    if collection is None:
+        raise KeyError(collection_id)
+    collection.name = name.strip()
+    collection.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return get_collection(session, collection_id) or {"id": collection_id}
+
+
+def rename_document(
+    session: Session, document_id: str, filename: str
+) -> dict[str, Any]:
+    document = session.get(RAGDocumentRecord, document_id)
+    if document is None:
+        raise KeyError(document_id)
+    document.filename = filename.strip()
+    document.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return get_document(session, document_id) or {"id": document_id}
+
+
+def update_document_content(
+    session: Session,
+    document_id: str,
+    content_text: str,
+    filename: str | None = None,
+) -> dict[str, Any]:
+    document = session.get(RAGDocumentRecord, document_id)
+    if document is None:
+        raise KeyError(document_id)
+
+    content = content_text.encode("utf-8")
+    now = datetime.now(timezone.utc)
+    mime_type = "text/plain"
+    checksum = hashlib.sha256(content).hexdigest()
+
+    metadata = dict(document.metadata_json or {})
+    storage_path_raw = str(metadata.get("storage_path") or "").strip()
+    if storage_path_raw and Path(storage_path_raw).parent.is_dir():
+        storage_path = Path(storage_path_raw)
+    else:
+        storage_dir = _collections_root() / document.collection_id / "documents"
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        doc_filename = filename or document.filename
+        suffix = Path(doc_filename).suffix or ".txt"
+        storage_path = storage_dir / _sanitize_filename(f"{document_id}{suffix}")
+
+    preview_text, parse_method = _extract_preview_text(content, mime_type)
+    embedding_vector = _embed_text(preview_text) if preview_text else None
+    metadata.update({
+        "storage_path": str(storage_path),
+        "text_preview": preview_text[:4000],
+        "text_length": len(preview_text),
+        "parse_method": parse_method,
+        "chunk_preview": [
+            preview_text[i : i + 300]
+            for i in range(0, min(len(preview_text), 900), 300)
+        ] if preview_text else [],
+    })
+    if embedding_vector is not None:
+        metadata["embedding"] = embedding_vector
+
+    document.checksum = checksum
+    document.mime_type = mime_type
+    document.status = "parsed" if preview_text else "uploaded"
+    document.metadata_json = dict(metadata)
+    if filename:
+        document.filename = filename.strip()
+    document.updated_at = now
+
+    collection = session.get(RAGCollectionRecord, document.collection_id)
+    if collection is not None:
+        collection.updated_at = now
+
+    session.commit()
+    storage_path.write_bytes(content)
+    return get_document(session, document_id) or {"id": document_id}
+
+
+def add_collection_document_text(
+    session: Session,
+    *,
+    collection_id: str,
+    filename: str,
+    content_text: str,
+) -> dict[str, Any]:
+    return add_collection_document(
+        session,
+        collection_id=collection_id,
+        filename=filename.strip() or "document.txt",
+        mime_type="text/plain",
+        source_type="text",
+        content=content_text.encode("utf-8"),
+    )
+
+
 SEED_COLLECTION_OWNER_TAG = "demo_seed"
 
 
