@@ -353,8 +353,34 @@ async function refreshTrainingLogs() {
       /* plain text */
     }
     const tail = body.split('\n').slice(-120).join('\n');
+
+    // Remember scroll position before updating so we can preserve intent.
+    const el = dom.trainLogs;
+    const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+
     dom.trainLogs.textContent = tail || '(no log output yet)';
     dom.trainLogsWrap.classList.remove('hidden');
+
+    // Auto-scroll to bottom only when user hasn't scrolled up to read history.
+    if (wasAtBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
+
+    // Show progress in the summary line if we can determine iter count.
+    // MLX lora prints "Training for N iters" at start and "Iter N: ..." per step.
+    const totalMatch = body.match(/Training for (\d+) iter/i) || body.match(/Total iterations[:\s]+(\d+)/i);
+    const iterMatches = [...body.matchAll(/Iter (\d+):/g)];
+    const lastIter = iterMatches.length ? parseInt(iterMatches[iterMatches.length - 1][1], 10) : null;
+    const totalIters = totalMatch ? parseInt(totalMatch[1], 10) : null;
+    let progressText = '';
+    if (lastIter !== null && totalIters !== null && totalIters > 0) {
+      const pct = Math.min(100, Math.round((lastIter / totalIters) * 100));
+      progressText = ` · Iter ${lastIter}/${totalIters} (${pct}%)`;
+    } else if (lastIter !== null) {
+      progressText = ` · Iter ${lastIter}`;
+    }
+    const summary = dom.trainLogsWrap.querySelector('summary');
+    if (summary) summary.textContent = `Show training log${progressText}`;
   } catch {
     /* swallow log fetch errors; main poll still drives status */
   }
