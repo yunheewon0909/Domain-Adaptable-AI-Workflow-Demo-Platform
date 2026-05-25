@@ -82,6 +82,157 @@ def probe_lmstudio_health() -> None:
             )
 
 
+def _auto_load_lmstudio_chat_model() -> None:
+    """Ensure an LLM is loaded in LM Studio at startup so inference works immediately.
+
+    Algorithm:
+    1. Run ``lms ls --json`` to discover locally indexed models.
+    2. If ``LMSTUDIO_CHAT_MODEL`` is among the indexed LLMs, prefer it.
+    3. Otherwise fall back to the smallest indexed LLM by ``sizeBytes``.
+    4. If the chosen model is not already loaded, call ``lms load``.
+    5. Update the "Default LM Studio model" registry row so its
+       ``serving_model_name`` matches the identifier actually loaded into
+       LM Studio (needed for /v1/chat/completions model resolution).
+    """
+    import json
+    import shutil
+    import subprocess
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session as _Session
+
+    from api.db import get_engine
+    from api.models import ModelRegistryRecord
+    from api.services.model_registry.lmstudio_register import (
+        invalidate_loaded_cache,
+        loaded_lmstudio_models,
+    )
+
+    settings = get_settings()
+    base_url = settings.lmstudio_base_url
+    configured_chat = (settings.lmstudio_chat_model or "").strip()
+
+    # Resolve lms CLI (mirrors _resolve_lms_exe in lmstudio router)
+    lms: str | None = shutil.which("lms")
+    if lms is None:
+        from pathlib import Path as _Path
+
+        candidate = _Path.home() / ".lmstudio" / "bin" / "lms"
+        lms = str(candidate) if candidate.is_file() else None
+    if lms is None:
+        logger.warning("auto_load: lms CLI not found; skipping model auto-load")
+        return
+
+    # Enumerate indexed models
+    try:
+        completed = subprocess.run(
+            [lms, "ls", "--json"], capture_output=True, text=True, timeout=10
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("auto_load: lms ls failed: %s", exc)
+        return
+    if completed.returncode != 0:
+        logger.warning(
+            "auto_load: lms ls exit %d: %s",
+            completed.returncode,
+            completed.stderr.strip()[:200],
+        )
+        return
+    try:
+        listing = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning("auto_load: lms ls non-JSON: %s", exc)
+        return
+    if not isinstance(listing, list):
+        logger.warning("auto_load: lms ls returned unexpected shape")
+        return
+
+    indexed_llms = [
+        e for e in listing if isinstance(e, dict) and e.get("type") == "llm"
+    ]
+    if not indexed_llms:
+        logger.warning("auto_load: no LLM models indexed in LM Studio; skipping")
+        return
+
+    # Pick model: prefer configured if indexed, else smallest by sizeBytes
+    target: dict | None = None
+    if configured_chat:
+        cfg_lower = configured_chat.lower()
+        for entry in indexed_llms:
+            candidates = {
+                (entry.get("modelKey") or "").lower(),
+                (entry.get("indexedModelIdentifier") or "").lower(),
+            }
+            if cfg_lower in candidates:
+                target = entry
+                break
+    if target is None:
+        target = min(indexed_llms, key=lambda e: e.get("sizeBytes") or float("inf"))
+        logger.info(
+            "auto_load: configured model %r not indexed; falling back to %r",
+            configured_chat or "(unset)",
+            target.get("modelKey"),
+        )
+
+    model_key = str(target.get("modelKey") or "")
+    indexed_id = str(target.get("indexedModelIdentifier") or model_key)
+    serving_name = indexed_id or model_key
+    if not model_key:
+        logger.warning("auto_load: selected model has no modelKey; aborting")
+        return
+
+    # Skip loading if the model is already live in LM Studio
+    currently_loaded = loaded_lmstudio_models(base_url=base_url)
+    candidate_ids = {s for s in (model_key, indexed_id) if s}
+    if candidate_ids & set(currently_loaded):
+        logger.info("auto_load: %r already loaded in LM Studio", serving_name)
+    else:
+        logger.info("auto_load: loading %r into LM Studio...", model_key)
+        cmd = [lms, "load", model_key, "--gpu", "max", "--exact"]
+        if indexed_id and indexed_id != model_key:
+            cmd.extend(["--identifier", indexed_id])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.warning("auto_load: lms load failed: %s", exc)
+            return
+        if result.returncode != 0:
+            logger.warning(
+                "auto_load: lms load exit %d: %s",
+                result.returncode,
+                result.stderr.strip()[:300],
+            )
+            return
+        logger.info("auto_load: %r loaded successfully", serving_name)
+        invalidate_loaded_cache()
+
+    # Update "Default LM Studio model" registry row to the actual serving name
+    with _Session(get_engine()) as db:
+        default_row = db.scalar(
+            select(ModelRegistryRecord).where(
+                ModelRegistryRecord.source_type == "base",
+                ModelRegistryRecord.display_name == "Default LM Studio model",
+            )
+        )
+        if default_row is not None:
+            if default_row.serving_model_name != serving_name:
+                logger.info(
+                    "auto_load: registry default row %r → %r",
+                    default_row.serving_model_name,
+                    serving_name,
+                )
+                default_row.serving_model_name = serving_name
+                default_row.base_model_name = serving_name
+                default_row.published_model_name = serving_name
+                default_row.updated_at = datetime.now(timezone.utc)
+            db.commit()
+        else:
+            logger.warning(
+                "auto_load: 'Default LM Studio model' row not found; skipping registry update"
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = get_engine()
@@ -106,6 +257,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "marked %d stale training jobs (mid-flight phase, no running backing job) as failed",
                 stale_training,
             )
+    await asyncio.to_thread(_auto_load_lmstudio_chat_model)
     await asyncio.to_thread(probe_lmstudio_health)
     dispatcher_task, dispatcher_stop = start_dispatcher_task()
     try:
