@@ -587,6 +587,8 @@ dom.trainStart.addEventListener('click', async () => {
   const qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || base;
   dom.trainStart.disabled = true;
   setTrainStep('generating');
+  setTrainStatus(`Loading Q/A model ${qaModelId}…`);
+  await ensureModelLoaded(qaModelId);
   setTrainStatus('Generating Q/A pairs from collection…');
   try {
     const built = await fetchJson('/ft-datasets/from-rag-collection', {
