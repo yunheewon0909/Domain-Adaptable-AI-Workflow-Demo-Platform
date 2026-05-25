@@ -129,13 +129,19 @@
             <input id="train-max-chunks" type="number" min="1" max="200" value="20" class="w-20 rounded-md border border-border bg-card px-3 py-2" />
           </label>
           <label class="text-sm space-y-1 flex-1 min-w-[200px]">
-            <span class="text-muted-fg">Base model (trains on the same model the chat uses)</span>
+            <span class="text-muted-fg">Q/A generator model (4B+ recommended)</span>
+            <select id="train-qa-model" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
+          </label>
+          <label class="text-sm space-y-1 flex-1 min-w-[200px]">
+            <span class="text-muted-fg">Base model to fine-tune</span>
             <select id="train-base" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
           </label>
           <button id="train-start" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
             Generate Q/A + train
           </button>
         </div>
+
+        <p class="text-xs text-muted-fg mt-1">⚠️ For Q/A generation, use a model with 4B+ parameters (e.g. qwen3.5-4b-mlx). Models under 2B may fail to produce valid training pairs. The base model can be any size.</p>
 
         <ol id="train-stepper" class="flex flex-wrap items-center gap-1 text-xs text-muted-fg hidden">
           <li data-phase="generating" class="step px-2 py-1 rounded border border-border">Q/A pairs</li>

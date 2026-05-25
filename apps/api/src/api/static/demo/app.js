@@ -28,6 +28,7 @@ const dom = {
   trainPairs: $('train-pairs'),
   trainMaxChunks: $('train-max-chunks'),
   trainBase: $('train-base'),
+  trainQaModel: $('train-qa-model'),
   trainStart: $('train-start'),
   trainStatus: $('train-status'),
   trainStepper: $('train-stepper'),
@@ -582,6 +583,8 @@ dom.trainStart.addEventListener('click', async () => {
   const selectedExposedId = dom.trainBase.value.trim() || state.selectedModelId;
   const selectedModel = state.models.find((m) => m.id === selectedExposedId);
   const base = (selectedModel && selectedModel.serving_model_name) || 'qwen3.5-4b-mlx';
+  // Q/A generator model — separate from the base model being fine-tuned.
+  const qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || base;
   dom.trainStart.disabled = true;
   setTrainStep('generating');
   setTrainStatus('Generating Q/A pairs from collection…');
@@ -594,6 +597,7 @@ dom.trainStart.addEventListener('click', async () => {
         dataset_name: `${collection.name} dataset`,
         max_chunks: maxChunks,
         pairs_per_chunk: pairs,
+        chat_model: qaModelId,
       }),
     });
     const versionId = built.dataset_version_id;
@@ -658,6 +662,8 @@ async function refreshModels() {
     dom.chatModel.innerHTML = '<option value="">— no LM Studio models —</option>';
     if (dom.trainBase)
       dom.trainBase.innerHTML = '<option value="">— no LM Studio models —</option>';
+    if (dom.trainQaModel)
+      dom.trainQaModel.innerHTML = '<option value="">— no LM Studio models —</option>';
     state.selectedModelId = null;
     return;
   }
@@ -671,12 +677,21 @@ async function refreshModels() {
     .join('');
   dom.chatModel.innerHTML = optionsHtml;
   if (dom.trainBase) dom.trainBase.innerHTML = optionsHtml;
+  if (dom.trainQaModel) dom.trainQaModel.innerHTML = optionsHtml;
   const firstLoaded = llms.find((m) => m.loaded) || llms[0];
   if (!state.selectedModelId || !llms.some((m) => (m.modelKey || m.path) === state.selectedModelId)) {
     state.selectedModelId = firstLoaded.modelKey || firstLoaded.path;
   }
   dom.chatModel.value = state.selectedModelId;
   if (dom.trainBase) dom.trainBase.value = state.selectedModelId;
+  // Q/A generator: prefer a 4B+ model for structured JSON output.
+  if (dom.trainQaModel) {
+    const qaPreferred = llms.find((m) => {
+      const key = (m.modelKey || '').toLowerCase();
+      return /[4-9]b|1[0-9]b|[2-9][0-9]b/.test(key);
+    }) || firstLoaded;
+    dom.trainQaModel.value = qaPreferred.modelKey || qaPreferred.path || '';
+  }
   renderChatSuggestions();
 }
 
