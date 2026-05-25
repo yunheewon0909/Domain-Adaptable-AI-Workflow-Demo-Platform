@@ -1284,9 +1284,12 @@ def _lms_load_model(candidate_model_name: str) -> bool:
     """Try to load a freshly published model into LM Studio via the lms CLI.
 
     Called after register_fused_model places the model files under LM Studio's
-    models directory. Returns True on success, False when lms is unavailable or
-    the load command fails — the caller handles failure gracefully (model stays
-    in artifact_ready/publish_ready state and the user can load it manually).
+    models directory. Uses ``lms ls --json`` to discover the proper modelKey,
+    then ``lms load <modelKey> --gpu max --exact`` to load it.
+
+    Returns True on success, False when lms is unavailable or the load command
+    fails — the caller handles failure gracefully (model stays in
+    artifact_ready/publish_ready state and the user can load it manually).
     """
     import shutil
     import subprocess
@@ -1302,13 +1305,65 @@ def _lms_load_model(candidate_model_name: str) -> bool:
             candidate_model_name,
         )
         return False
-    logger.info("publish_auto_load: loading %r into LM Studio...", candidate_model_name)
+
+    # Discover the proper modelKey from lms ls rather than guessing.
     try:
+        ls_result = subprocess.run(
+            [lms, "ls", "--json"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("publish_auto_load: lms ls failed: %s", exc)
+        return False
+    if ls_result.returncode != 0:
+        logger.warning("publish_auto_load: lms ls exit %d: %s",
+                       ls_result.returncode, ls_result.stderr.strip()[:300])
+        return False
+
+    import json as _json
+    try:
+        listing = _json.loads(ls_result.stdout)
+    except _json.JSONDecodeError as exc:
+        logger.warning("publish_auto_load: lms ls non-JSON: %s", exc)
+        return False
+    if not isinstance(listing, list):
+        logger.warning("publish_auto_load: lms ls unexpected shape")
+        return False
+
+    # Find an LLM entry whose modelKey or indexedModelIdentifier matches.
+    target = None
+    for entry in listing:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") != "llm":
+            continue
+        key = str(entry.get("modelKey") or "")
+        indexed = str(entry.get("indexedModelIdentifier") or "")
+        if key == candidate_model_name or indexed == candidate_model_name:
+            target = entry
+            break
+    if target is None:
+        logger.warning(
+            "publish_auto_load: %r not found in lms ls; indexed LLMs: %s",
+            candidate_model_name,
+            [e.get("modelKey") for e in listing
+             if isinstance(e, dict) and e.get("type") == "llm"],
+        )
+        return False
+
+    model_key = str(target.get("modelKey") or "")
+    if not model_key:
+        logger.warning("publish_auto_load: selected model has no modelKey; aborting")
+        return False
+
+    indexed_id = str(target.get("indexedModelIdentifier") or "")
+    logger.info("publish_auto_load: loading %r into LM Studio...", model_key)
+    try:
+        cmd = [lms, "load", model_key, "--gpu", "max", "--exact"]
+        if indexed_id:
+            cmd.extend(["--identifier", indexed_id])
         result = subprocess.run(
-            [lms, "load", candidate_model_name, "--gpu", "max"],
-            capture_output=True,
-            text=True,
-            timeout=300,
+            cmd, capture_output=True, text=True, timeout=300,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("publish_auto_load: lms load failed: %s", exc)
@@ -1320,7 +1375,7 @@ def _lms_load_model(candidate_model_name: str) -> bool:
             result.stderr.strip()[:300],
         )
         return False
-    logger.info("publish_auto_load: %r loaded successfully", candidate_model_name)
+    logger.info("publish_auto_load: %r loaded successfully", model_key)
     return True
 
 
