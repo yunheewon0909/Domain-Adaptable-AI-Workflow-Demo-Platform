@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any
 import uuid
+
+logger = logging.getLogger("api.model_registry.service")
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -1233,6 +1236,11 @@ def publish_training_job_artifacts(
     )
     publish_metadata["lmstudio_register"] = register_summary
 
+    # Auto-load the fused model into LM Studio so it becomes immediately
+    # selectable without requiring the user to manually click "Load" in the UI.
+    if register_summary.get("registered") and candidate_model_name:
+        _lms_load_model(candidate_model_name)
+
     lmstudio_loaded = _probe_lmstudio(
         base_url=settings.lmstudio_base_url, model_id=candidate_model_name
     )
@@ -1270,6 +1278,50 @@ def publish_training_job_artifacts(
     return _serialize_model(
         model, session.get(FTModelArtifactRecord, model.artifact_id)
     )
+
+
+def _lms_load_model(candidate_model_name: str) -> bool:
+    """Try to load a freshly published model into LM Studio via the lms CLI.
+
+    Called after register_fused_model places the model files under LM Studio's
+    models directory. Returns True on success, False when lms is unavailable or
+    the load command fails — the caller handles failure gracefully (model stays
+    in artifact_ready/publish_ready state and the user can load it manually).
+    """
+    import shutil
+    import subprocess
+    from pathlib import Path as _Path
+
+    lms: str | None = shutil.which("lms")
+    if lms is None:
+        candidate = _Path.home() / ".lmstudio" / "bin" / "lms"
+        lms = str(candidate) if candidate.is_file() else None
+    if lms is None:
+        logger.warning(
+            "publish_auto_load: lms CLI not found; skipping auto-load of %r",
+            candidate_model_name,
+        )
+        return False
+    logger.info("publish_auto_load: loading %r into LM Studio...", candidate_model_name)
+    try:
+        result = subprocess.run(
+            [lms, "load", candidate_model_name, "--gpu", "max"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("publish_auto_load: lms load failed: %s", exc)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "publish_auto_load: lms load exit %d: %s",
+            result.returncode,
+            result.stderr.strip()[:300],
+        )
+        return False
+    logger.info("publish_auto_load: %r loaded successfully", candidate_model_name)
+    return True
 
 
 def _register_with_lmstudio(
