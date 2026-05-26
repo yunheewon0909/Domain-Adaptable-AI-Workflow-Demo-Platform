@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from api.config import get_settings
 from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.llm import LLMClient
@@ -229,6 +230,27 @@ def post_ft_dataset_from_rag(
     existing `/ft-dataset-versions/{id}/status` flow before enqueueing
     training.
     """
+    chat_model = request.chat_model
+    if not chat_model:
+        # Resolve a sensible default: the first model loaded in LM Studio.
+        from api.services.model_registry.lmstudio_register import (
+            loaded_lmstudio_models,
+        )
+
+        loaded = loaded_lmstudio_models(
+            base_url=get_settings().lmstudio_base_url
+        )
+        # Prefer non-reasoning models (LFM 1.2B) for fast Q/A generation.
+        # Qwen 4B's reasoning phase consumes all tokens before emitting output.
+        preferred = [m for m in loaded if 'lfm' in m.lower()] or list(loaded)
+        chat_model = preferred[0] if preferred else ""
+        if chat_model:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "from-rag-collection: chat_model unset, using loaded model %r", chat_model
+            )
+
     with Session(get_engine()) as session:
         try:
             generation = generate_pairs_from_collection(
@@ -238,7 +260,7 @@ def post_ft_dataset_from_rag(
                 max_chunks=request.max_chunks,
                 pairs_per_chunk=request.pairs_per_chunk,
                 chunk_chars=request.chunk_chars,
-                chat_model=request.chat_model,
+                chat_model=chat_model,
             )
         except KeyError as exc:
             raise HTTPException(

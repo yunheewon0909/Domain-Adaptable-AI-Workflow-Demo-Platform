@@ -707,7 +707,11 @@ if (dom.generateQaBtn) {
     }
     const pairs = Math.max(1, Math.min(10, Number(dom.trainPairs.value) || 3));
     const maxChunks = Math.max(1, Math.min(200, Number(dom.trainMaxChunks.value) || 20));
-    const qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || '';
+    let qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || '';
+    // Fallback: if QA model dropdown is empty, use the base model or any available model
+    if (!qaModelId && state.models.length > 0) {
+      qaModelId = state.models[0].modelKey || state.models[0].path || '';
+    }
     dom.generateQaBtn.disabled = true;
     await ensureModelLoaded(qaModelId);
     setGenerateQaStatus('Generating Q/A pairs from collection…');
