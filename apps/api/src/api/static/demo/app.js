@@ -38,6 +38,7 @@ const dom = {
   qaReviewSection: $('qa-review-section'),
   qaPairsList: $('qa-pairs-list'),
   qaPairCount: $('qa-pair-count'),
+  addPairBtn: $('add-pair-btn'),
   proceedToTrainBtn: $('proceed-to-train-btn'),
   finetuneSection: $('finetune-section'),
   trainStart: $('train-start'),
@@ -587,7 +588,7 @@ function renderQAPairs() {
     dom.qaPairCount.textContent = `${pairs.length} pair${pairs.length === 1 ? '' : 's'}`;
   }
   if (!pairs.length) {
-    dom.qaPairsList.innerHTML = '<p class="text-sm text-muted-fg">No Q/A pairs to review.</p>';
+    dom.qaPairsList.innerHTML = '<p class="text-sm text-muted-fg">No Q/A pairs yet. Generate them in Step 2 or add pairs manually above.</p>';
     return;
   }
   dom.qaPairsList.innerHTML = pairs
@@ -708,7 +709,6 @@ if (dom.generateQaBtn) {
     const maxChunks = Math.max(1, Math.min(200, Number(dom.trainMaxChunks.value) || 20));
     const qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || '';
     dom.generateQaBtn.disabled = true;
-    setGenerateQaStatus(`Loading Q/A model ${qaModelId}…`);
     await ensureModelLoaded(qaModelId);
     setGenerateQaStatus('Generating Q/A pairs from collection…');
     try {
@@ -733,11 +733,7 @@ if (dom.generateQaBtn) {
       setGenerateQaStatus(
         `Generated ${state.qa.pairs.length} Q/A pairs. Review them in Step 3 below.`,
       );
-      if (dom.qaReviewSection) dom.qaReviewSection.classList.remove('hidden');
       renderQAPairs();
-      if (dom.qaReviewSection) {
-        dom.qaReviewSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
     } catch (error) {
       setGenerateQaStatus(error.message);
     } finally {
@@ -749,12 +745,61 @@ if (dom.generateQaBtn) {
 if (dom.proceedToTrainBtn) {
   dom.proceedToTrainBtn.addEventListener('click', () => {
     if (!state.qa.versionId) {
-      window.alert('No Q/A pairs generated yet. Please complete Step 2 first.');
-      return;
+      window.alert('No Q/A pairs yet. Generate them in Step 2 or add pairs manually in Step 3 first.');
     }
-    if (dom.finetuneSection) {
-      dom.finetuneSection.classList.remove('hidden');
-      dom.finetuneSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+// ---- manual Q/A pair creation (Step 3) ----------------------------------------
+
+if (dom.addPairBtn) {
+  dom.addPairBtn.addEventListener('click', async () => {
+    dom.addPairBtn.disabled = true;
+    try {
+      // If no version exists yet, create a dataset + version first
+      if (!state.qa.versionId) {
+        const dataset = await fetchJson('/ft-datasets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'Manual training data',
+            task_type: 'instruction_sft',
+            schema_type: 'json',
+          }),
+        });
+        const version = await fetchJson(`/ft-datasets/${encodeURIComponent(dataset.id)}/versions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version_label: 'v1' }),
+        });
+        state.qa.versionId = version.id;
+      }
+      // Add an empty pair row to the current version
+      const pair = await fetchJson(
+        `/ft-dataset-versions/${encodeURIComponent(state.qa.versionId)}/qa-pairs`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: '', answer: '' }),
+        },
+      );
+      state.qa.pairs.push(pair);
+      renderQAPairs();
+      // Auto-open the new card for editing
+      const newCard = dom.qaPairsList.querySelector(`.qa-card[data-row-id="${pair.row_id}"]`);
+      if (newCard) {
+        const body = newCard.querySelector('.qa-card-body');
+        const icon = newCard.querySelector('.qa-toggle-icon');
+        if (body) body.classList.remove('hidden');
+        if (icon) icon.textContent = '▲';
+        const qInput = newCard.querySelector('.qa-question-input');
+        if (qInput) { qInput.focus(); }
+        newCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    } catch (error) {
+      window.alert(`Failed to add pair: ${error.message}`);
+    } finally {
+      dom.addPairBtn.disabled = false;
     }
   });
 }
@@ -883,22 +928,20 @@ async function refreshModels() {
 
 async function ensureModelLoaded(modelId) {
   const entry = state.models.find((m) => (m.modelKey || m.path) === modelId);
-  if (!entry) return false;
+  if (!entry) return true; // not in list; let generation handle availability
   if (entry.loaded) return true;
-  setKbHint(`Loading ${modelId} in LM Studio…`);
+  // Model listed as idle — attempt to load but proceed regardless of outcome
   try {
     await fetchJson('/lmstudio/models/load', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model_id: modelId, identifier: modelId }),
     });
-    setKbHint(`Loaded ${modelId}.`);
     await refreshModels();
-    return true;
-  } catch (error) {
-    setKbHint(`Failed to load ${modelId}: ${error.message}`);
-    return false;
+  } catch {
+    // Load failed or model already active — generation will proceed anyway
   }
+  return true;
 }
 
 dom.chatModel.addEventListener('change', async (event) => {

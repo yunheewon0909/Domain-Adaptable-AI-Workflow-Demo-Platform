@@ -13,6 +13,7 @@ from api.services.fine_tuning import (
     add_dataset_rows,
     create_dataset,
     create_dataset_version,
+    create_qa_pair,
     delete_dataset_row,
     get_dataset,
     get_dataset_version,
@@ -67,6 +68,13 @@ class UpdateFTDatasetVersionStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = Field(pattern="^(draft|validated|locked)$")
+
+
+class CreateQAPairRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(default="")
+    answer: str = Field(default="")
 
 
 class UpdateQAPairRequest(BaseModel):
@@ -298,6 +306,23 @@ def post_ft_dataset_from_rag(
             ],
             "version_status": add_result.get("status", version.get("status")),
         }
+
+
+@router.post("/ft-dataset-versions/{version_id}/qa-pairs", status_code=201)
+def post_ft_qa_pair(version_id: str, request: CreateQAPairRequest) -> dict[str, Any]:
+    """Add a new Q/A pair to a dataset version."""
+    with Session(get_engine()) as session:
+        try:
+            return create_qa_pair(
+                session,
+                version_id=version_id,
+                question=request.question,
+                answer=request.answer,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/ft-dataset-versions/{version_id}/qa-pairs")

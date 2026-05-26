@@ -380,6 +380,48 @@ def update_dataset_row(
     return _serialize_row(row)
 
 
+def create_qa_pair(
+    session: Session,
+    *,
+    version_id: str,
+    question: str = "",
+    answer: str = "",
+) -> dict[str, Any]:
+    """Add a new (possibly empty) Q/A pair to a dataset version."""
+    version = session.get(FTDatasetVersionRecord, version_id)
+    if version is None:
+        raise KeyError(version_id)
+    if version.status == "locked":
+        raise ValueError("locked dataset versions cannot be modified")
+    q = question.strip()
+    a = answer.strip()
+    input_json: dict[str, Any] = {"instruction": q, "input": ""}
+    target_json: dict[str, Any] = {"output": a}
+    if q and a:
+        validation_status, validation_error = _validate_row("instruction_sft", input_json, target_json)
+    else:
+        validation_status, validation_error = "invalid", "question and answer are required"
+    row = FTDatasetRowRecord(
+        dataset_version_id=version_id,
+        split="train",
+        input_json=input_json,
+        target_json=target_json,
+        metadata_json={},
+        validation_status=validation_status,
+        validation_error=validation_error,
+    )
+    session.add(row)
+    session.flush()
+    remaining = session.scalars(
+        select(FTDatasetRowRecord).where(
+            FTDatasetRowRecord.dataset_version_id == version_id
+        )
+    ).all()
+    version.row_count = len(remaining)
+    session.commit()
+    return {"row_id": row.id, "question": q, "answer": a}
+
+
 def delete_dataset_row(session: Session, *, version_id: str, row_id: int) -> None:
     version = session.get(FTDatasetVersionRecord, version_id)
     if version is None:

@@ -147,7 +147,7 @@
       </section>
 
       <!-- Step 3: Review & Edit Q&A -->
-      <section id="qa-review-section" class="rounded-xl border border-border bg-card p-6 space-y-4 hidden">
+      <section id="qa-review-section" class="rounded-xl border border-border bg-card p-6 space-y-4">
         <div class="space-y-1">
           <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 3 · optional</p>
           <h2 class="text-xl font-semibold">Review &amp; edit Q&amp;A pairs</h2>
@@ -158,16 +158,21 @@
 
         <div class="flex items-center justify-between flex-wrap gap-3">
           <span id="qa-pair-count" class="text-sm text-muted-fg">0 pairs</span>
-          <button id="proceed-to-train-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-            Proceed to Fine-tuning →
-          </button>
+          <div class="flex gap-2">
+            <button id="add-pair-btn" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">
+              + Add pair manually
+            </button>
+            <button id="proceed-to-train-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+              Proceed to Fine-tuning →
+            </button>
+          </div>
         </div>
 
         <div id="qa-pairs-list" class="space-y-2"></div>
       </section>
 
       <!-- Step 4: Fine-tune -->
-      <section id="finetune-section" class="rounded-xl border border-border bg-card p-6 space-y-4 hidden">
+      <section id="finetune-section" class="rounded-xl border border-border bg-card p-6 space-y-4">
         <div class="space-y-1">
           <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 4 · optional</p>
           <h2 class="text-xl font-semibold">Fine-tune</h2>
