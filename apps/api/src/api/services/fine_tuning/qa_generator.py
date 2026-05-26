@@ -228,6 +228,7 @@ def _request_pairs(
                 context=context,
                 model=chat_model,
                 temperature=0,
+                max_tokens=4096,  # Qwen reasoning models need headroom for think+answer
             )
         except LLMClientError as exc:
             return [], f"llm call failed: {exc}"

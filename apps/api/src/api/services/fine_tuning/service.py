@@ -321,8 +321,80 @@ def set_dataset_version_status(
         row.validation_status != "valid" for row in rows
     ):
         raise ValueError("all rows must be valid before a version can be validated")
-    if normalized_status == "locked" and version.status != "validated":
+    if normalized_status == "locked" and version.status not in ("validated", "locked"):
         raise ValueError("dataset version must be validated before it can be locked")
     version.status = normalized_status
     session.commit()
     return get_dataset_version(session, version_id) or {"id": version_id}
+
+
+def get_qa_pairs(session: Session, version_id: str) -> list[dict[str, Any]]:
+    """Return rows as user-readable Q/A dicts for frontend review."""
+    rows = session.scalars(
+        select(FTDatasetRowRecord)
+        .where(FTDatasetRowRecord.dataset_version_id == version_id)
+        .order_by(FTDatasetRowRecord.id.asc())
+    ).all()
+    results = []
+    for row in rows:
+        inp = row.input_json or {}
+        tgt = row.target_json or {}
+        question: str = ""
+        answer: str = ""
+        if isinstance(inp, dict):
+            question = str(inp.get("instruction") or inp.get("question") or "")
+        elif isinstance(inp, str):
+            question = inp
+        if isinstance(tgt, dict):
+            answer = str(tgt.get("output") or tgt.get("answer") or "")
+        elif isinstance(tgt, str):
+            answer = tgt
+        results.append({"row_id": row.id, "question": question, "answer": answer})
+    return results
+
+
+def update_dataset_row(
+    session: Session,
+    *,
+    version_id: str,
+    row_id: int,
+    question: str,
+    answer: str,
+) -> dict[str, Any]:
+    version = session.get(FTDatasetVersionRecord, version_id)
+    if version is None:
+        raise KeyError(version_id)
+    if version.status == "locked":
+        raise ValueError("locked dataset versions cannot be modified")
+    row = session.get(FTDatasetRowRecord, row_id)
+    if row is None or row.dataset_version_id != version_id:
+        raise KeyError(row_id)
+    row.input_json = {"instruction": question.strip(), "input": ""}
+    row.target_json = {"output": answer.strip()}
+    validation_status, validation_error = _validate_row(
+        "instruction_sft", row.input_json, row.target_json
+    )
+    row.validation_status = validation_status
+    row.validation_error = validation_error
+    session.commit()
+    return _serialize_row(row)
+
+
+def delete_dataset_row(session: Session, *, version_id: str, row_id: int) -> None:
+    version = session.get(FTDatasetVersionRecord, version_id)
+    if version is None:
+        raise KeyError(version_id)
+    if version.status == "locked":
+        raise ValueError("locked dataset versions cannot be modified")
+    row = session.get(FTDatasetRowRecord, row_id)
+    if row is None or row.dataset_version_id != version_id:
+        raise KeyError(row_id)
+    session.delete(row)
+    session.flush()
+    remaining = session.scalars(
+        select(FTDatasetRowRecord).where(
+            FTDatasetRowRecord.dataset_version_id == version_id
+        )
+    ).all()
+    version.row_count = len(remaining)
+    session.commit()

@@ -6,6 +6,7 @@ const state = {
   models: [],
   selectedModelId: null,
   training: { jobId: null, datasetVersionId: null, polling: false },
+  qa: { pairs: [], versionId: null },
   chat: { messages: [] },
 };
 
@@ -20,15 +21,25 @@ const dom = {
   kbDeleteCollection: $('kb-delete-collection'),
   kbFile: $('kb-file'),
   kbUploadButton: $('kb-upload-button'),
+  kbNewDocButton: $('kb-new-doc-button'),
+  kbNewDocForm: $('kb-new-doc-form'),
   kbTextName: $('kb-text-name'),
   kbTextContent: $('kb-text-content'),
   kbTextSave: $('kb-text-save'),
+  kbTextCancel: $('kb-text-cancel'),
   kbDocs: $('kb-docs'),
   kbHint: $('kb-hint'),
   trainPairs: $('train-pairs'),
   trainMaxChunks: $('train-max-chunks'),
   trainBase: $('train-base'),
   trainQaModel: $('train-qa-model'),
+  generateQaBtn: $('generate-qa-btn'),
+  generateQaStatus: $('generate-qa-status'),
+  qaReviewSection: $('qa-review-section'),
+  qaPairsList: $('qa-pairs-list'),
+  qaPairCount: $('qa-pair-count'),
+  proceedToTrainBtn: $('proceed-to-train-btn'),
+  finetuneSection: $('finetune-section'),
   trainStart: $('train-start'),
   trainStatus: $('train-status'),
   trainStepper: $('train-stepper'),
@@ -45,7 +56,13 @@ const dom = {
 };
 
 async function fetchJson(path, options = {}) {
-  const response = await fetch(path, options);
+  const { timeoutMs = 0, ...fetchOpts } = options;
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  if (controller) {
+    fetchOpts.signal = controller.signal;
+    setTimeout(() => controller.abort(), timeoutMs);
+  }
+  const response = await fetch(path, fetchOpts);
   const text = await response.text();
   let body = null;
   try {
@@ -90,7 +107,6 @@ function setKbHint(msg) {
 }
 
 const TRAIN_PHASE_ORDER = [
-  'generating',
   'preparing_data',
   'training',
   'packaging',
@@ -131,6 +147,8 @@ function selectedCollection() {
 
 // ---- knowledge base ---------------------------------------------------------
 
+const loadedDocContent = new Set();
+
 async function refreshCollections({ preferredId = null } = {}) {
   state.collections = await fetchJson('/rag-collections');
   const next =
@@ -162,6 +180,7 @@ function renderKbSelect() {
 }
 
 async function renderKbDocs() {
+  loadedDocContent.clear();
   const collection = selectedCollection();
   if (!collection) {
     dom.kbDocs.textContent = 'No collection selected.';
@@ -181,20 +200,20 @@ async function renderKbDocs() {
       docs
         .map(
           (d) => `
-            <li class="rounded-lg border-2 border-border bg-muted/30 p-3 space-y-2">
-              <div class="font-medium text-sm break-all">${escapeHtml(d.filename || d.id)} <span class="text-xs text-muted-fg font-normal">(${d.preview_length || 0}b)</span></div>
-              <div class="flex flex-wrap gap-2">
-                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-view rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted hover:border-accent transition-colors min-h-[40px]">👁 View</button>
-                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-rename rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted hover:border-accent transition-colors min-h-[40px]">✏️ Rename</button>
-                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-edit rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted hover:border-accent transition-colors min-h-[40px]">📝 Edit</button>
-                <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-delete rounded-md border border-destructive/40 bg-card px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 hover:border-destructive transition-colors min-h-[40px]">🗑 Delete</button>
+            <li class="rounded-lg border border-border bg-muted/20 p-3">
+              <div class="flex items-center gap-2 cursor-pointer" data-doc-toggle="${escapeHtml(d.id)}">
+                <span class="font-medium text-sm break-all flex-1">${escapeHtml(d.filename || d.id)}</span>
+                <span class="text-xs text-muted-fg">(${d.preview_length || 0}b)</span>
               </div>
-              <pre data-doc-body="${escapeHtml(d.id)}" class="hidden mt-1 max-h-48 overflow-auto rounded-md border border-border bg-muted p-2 text-xs whitespace-pre-wrap"></pre>
-              <div data-doc-edit-wrap="${escapeHtml(d.id)}" class="hidden mt-1 space-y-1">
-                <textarea data-doc-edit-area="${escapeHtml(d.id)}" rows="8" class="w-full rounded-md border border-border bg-card px-2 py-1 text-xs font-mono resize-y"></textarea>
-                <div class="flex gap-2 items-center">
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-save-edit rounded-md bg-accent text-accent-fg px-3 py-1 text-xs font-medium hover:opacity-90">Save</button>
-                  <button data-doc-id="${escapeHtml(d.id)}" class="kb-doc-cancel-edit rounded-md border border-border px-2 py-1 text-xs hover:bg-muted">Cancel</button>
+              <div class="kb-doc-expand hidden mt-3 space-y-2" data-doc-expand="${escapeHtml(d.id)}">
+                <input class="kb-doc-name-input w-full rounded-md border border-border bg-card px-3 py-2 text-sm" value="${escapeHtml(d.filename || d.id)}" data-doc-id="${escapeHtml(d.id)}" />
+                <textarea class="kb-doc-content-textarea w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono resize-y" rows="8" data-doc-id="${escapeHtml(d.id)}">...loading...</textarea>
+                <div class="flex justify-between items-center">
+                  <button class="kb-doc-delete-btn rounded-md border border-destructive/40 bg-card px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 hover:border-destructive transition-colors min-h-[40px]" data-doc-id="${escapeHtml(d.id)}">🗑 Delete</button>
+                  <div class="flex gap-2">
+                    <button class="kb-doc-save-btn rounded-md bg-accent text-accent-fg px-3 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]" data-doc-id="${escapeHtml(d.id)}">💾 Save</button>
+                    <button class="kb-doc-cancel-btn rounded-md border border-border px-3 py-2 text-sm hover:bg-muted min-h-[40px]" data-doc-id="${escapeHtml(d.id)}">✖ Cancel</button>
+                  </div>
                 </div>
               </div>
             </li>`,
@@ -202,89 +221,55 @@ async function renderKbDocs() {
         .join('') +
       '</ul>';
 
-    dom.kbDocs.querySelectorAll('.kb-doc-view').forEach((btn) => {
-      btn.addEventListener('click', async (event) => {
-        const id = event.currentTarget.getAttribute('data-doc-id');
+    dom.kbDocs.querySelectorAll('[data-doc-toggle]').forEach((row) => {
+      row.addEventListener('click', async () => {
+        const id = row.getAttribute('data-doc-toggle');
         if (!id) return;
-        const body = dom.kbDocs.querySelector(`pre[data-doc-body="${CSS.escape(id)}"]`);
-        if (!body) return;
-        if (!body.classList.contains('hidden')) {
-          body.classList.add('hidden');
-          return;
-        }
-        body.classList.remove('hidden');
-        body.textContent = '…loading…';
-        try {
-          const payload = await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`);
-          const tail = payload.truncated ? '\n\n…[truncated]' : '';
-          body.textContent = (payload.encoding === 'base64'
-            ? `[binary ${payload.byte_length}b — base64]\n${payload.content.slice(0, 2000)}…`
-            : payload.content) + tail;
-        } catch (error) {
-          body.textContent = `Failed to load content: ${error.message}`;
+        const expand = dom.kbDocs.querySelector(`[data-doc-expand="${CSS.escape(id)}"]`);
+        if (!expand) return;
+        const isHidden = expand.classList.contains('hidden');
+        expand.classList.toggle('hidden', !isHidden);
+        if (isHidden && !loadedDocContent.has(id)) {
+          const textarea = expand.querySelector('.kb-doc-content-textarea');
+          if (textarea) {
+            try {
+              const payload = await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`);
+              textarea.value = payload.encoding === 'base64'
+                ? '[binary content — cannot edit inline]'
+                : (payload.content || '');
+              loadedDocContent.add(id);
+            } catch (error) {
+              textarea.value = `Failed to load content: ${error.message}`;
+            }
+          }
         }
       });
     });
 
-    dom.kbDocs.querySelectorAll('.kb-doc-rename').forEach((btn) => {
-      btn.addEventListener('click', async (event) => {
-        const id = event.currentTarget.getAttribute('data-doc-id');
+    dom.kbDocs.querySelectorAll('.kb-doc-save-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-doc-id');
         if (!id) return;
-        const doc = docs.find((d) => d.id === id);
-        const newName = window.prompt('Rename document to:', doc ? doc.filename : '');
-        if (!newName || !newName.trim()) return;
-        try {
-          await fetchJson(`/rag-documents/${encodeURIComponent(id)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: newName.trim() }),
-          });
-          setKbHint(`Renamed to "${newName.trim()}".`);
-          await renderKbDocs();
-        } catch (error) {
-          setKbHint(error.message);
-        }
-      });
-    });
-
-    dom.kbDocs.querySelectorAll('.kb-doc-edit').forEach((btn) => {
-      btn.addEventListener('click', async (event) => {
-        const id = event.currentTarget.getAttribute('data-doc-id');
-        if (!id) return;
-        const editWrap = dom.kbDocs.querySelector(`div[data-doc-edit-wrap="${CSS.escape(id)}"]`);
-        const editArea = dom.kbDocs.querySelector(`textarea[data-doc-edit-area="${CSS.escape(id)}"]`);
-        if (!editWrap || !editArea) return;
-        if (!editWrap.classList.contains('hidden')) {
-          editWrap.classList.add('hidden');
-          return;
-        }
-        editArea.value = '…loading…';
-        editWrap.classList.remove('hidden');
-        try {
-          const payload = await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`);
-          editArea.value = payload.encoding === 'base64'
-            ? '[binary content — cannot edit inline]'
-            : (payload.content || '');
-        } catch (error) {
-          editArea.value = `Failed to load content: ${error.message}`;
-        }
-      });
-    });
-
-    dom.kbDocs.querySelectorAll('.kb-doc-save-edit').forEach((btn) => {
-      btn.addEventListener('click', async (event) => {
-        const id = event.currentTarget.getAttribute('data-doc-id');
-        if (!id) return;
-        const editArea = dom.kbDocs.querySelector(`textarea[data-doc-edit-area="${CSS.escape(id)}"]`);
-        if (!editArea) return;
+        if (!window.confirm('Save changes to this document?')) return;
+        const expand = dom.kbDocs.querySelector(`[data-doc-expand="${CSS.escape(id)}"]`);
+        if (!expand) return;
+        const nameInput = expand.querySelector('.kb-doc-name-input');
+        const textarea = expand.querySelector('.kb-doc-content-textarea');
         btn.disabled = true;
         try {
           await fetchJson(`/rag-documents/${encodeURIComponent(id)}/content`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: editArea.value }),
+            body: JSON.stringify({ content: textarea ? textarea.value : '' }),
           });
-          setKbHint('Document updated.');
+          if (nameInput && nameInput.value.trim()) {
+            await fetchJson(`/rag-documents/${encodeURIComponent(id)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ filename: nameInput.value.trim() }),
+            });
+          }
+          setKbHint('Document saved.');
           await renderKbDocs();
         } catch (error) {
           setKbHint(error.message);
@@ -293,26 +278,26 @@ async function renderKbDocs() {
       });
     });
 
-    dom.kbDocs.querySelectorAll('.kb-doc-cancel-edit').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        const id = event.currentTarget.getAttribute('data-doc-id');
+    dom.kbDocs.querySelectorAll('.kb-doc-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-doc-id');
         if (!id) return;
-        const editWrap = dom.kbDocs.querySelector(`div[data-doc-edit-wrap="${CSS.escape(id)}"]`);
-        if (editWrap) editWrap.classList.add('hidden');
-      });
-    });
-
-    dom.kbDocs.querySelectorAll('.kb-doc-delete').forEach((btn) => {
-      btn.addEventListener('click', async (event) => {
-        const id = event.currentTarget.getAttribute('data-doc-id');
-        if (!id) return;
+        if (!window.confirm('Permanently delete this document? This cannot be undone.')) return;
         try {
           await fetchJson(`/rag-documents/${encodeURIComponent(id)}`, { method: 'DELETE' });
-          setKbHint(`Deleted document ${id}.`);
+          setKbHint('Document deleted.');
           await renderKbDocs();
         } catch (error) {
           setKbHint(error.message);
         }
+      });
+    });
+
+    dom.kbDocs.querySelectorAll('.kb-doc-cancel-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-doc-id');
+        if (!id) return;
+        await renderKbDocs();
       });
     });
   } catch (error) {
@@ -385,6 +370,17 @@ dom.kbRenameCollection.addEventListener('click', async () => {
   }
 });
 
+dom.kbNewDocButton.addEventListener('click', () => {
+  dom.kbNewDocForm.classList.toggle('hidden');
+  if (!dom.kbNewDocForm.classList.contains('hidden')) {
+    dom.kbTextName.focus();
+  }
+});
+
+dom.kbTextCancel.addEventListener('click', () => {
+  dom.kbNewDocForm.classList.add('hidden');
+});
+
 dom.kbTextSave.addEventListener('click', async () => {
   const collection = selectedCollection();
   if (!collection) {
@@ -399,7 +395,7 @@ dom.kbTextSave.addEventListener('click', async () => {
   }
   dom.kbTextSave.disabled = true;
   try {
-    await fetchJson(`/rag-collections/${encodeURIComponent(collection.id)}/documents/text`, {
+    const created = await fetchJson(`/rag-collections/${encodeURIComponent(collection.id)}/documents/text`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename, content }),
@@ -407,7 +403,19 @@ dom.kbTextSave.addEventListener('click', async () => {
     setKbHint(`Saved "${filename}" to ${collection.name}.`);
     dom.kbTextName.value = '';
     dom.kbTextContent.value = '';
+    dom.kbNewDocForm.classList.add('hidden');
     await renderKbDocs();
+    if (created && created.id) {
+      const expand = dom.kbDocs.querySelector(`[data-doc-expand="${CSS.escape(created.id)}"]`);
+      if (expand) {
+        expand.classList.remove('hidden');
+        const textarea = expand.querySelector('.kb-doc-content-textarea');
+        if (textarea) {
+          textarea.value = content;
+          loadedDocContent.add(created.id);
+        }
+      }
+    }
   } catch (error) {
     setKbHint(error.message);
   } finally {
@@ -563,49 +571,212 @@ async function pollTrainingJob() {
     await new Promise((r) => setTimeout(r, 3000));
   }
   state.training.polling = false;
+  if (dom.trainStart) dom.trainStart.disabled = false;
 }
 
+// ---- Q/A generation (Step 2) ------------------------------------------------
+
+function setGenerateQaStatus(msg) {
+  if (dom.generateQaStatus) dom.generateQaStatus.textContent = msg || 'Idle.';
+}
+
+function renderQAPairs() {
+  if (!dom.qaPairsList) return;
+  const pairs = state.qa.pairs;
+  if (dom.qaPairCount) {
+    dom.qaPairCount.textContent = `${pairs.length} pair${pairs.length === 1 ? '' : 's'}`;
+  }
+  if (!pairs.length) {
+    dom.qaPairsList.innerHTML = '<p class="text-sm text-muted-fg">No Q/A pairs to review.</p>';
+    return;
+  }
+  dom.qaPairsList.innerHTML = pairs
+    .map(
+      (pair, idx) => `
+      <div class="qa-card rounded-lg border border-border bg-muted/20 p-3 space-y-2" data-row-id="${pair.row_id}">
+        <div class="flex items-center gap-2">
+          <button type="button" class="qa-toggle-btn flex-1 text-left flex items-center gap-2 min-w-0" data-row-id="${pair.row_id}">
+            <span class="text-xs text-muted-fg shrink-0">#${idx + 1}</span>
+            <span class="font-medium text-sm truncate qa-preview">${escapeHtml(pair.question.slice(0, 80))}${pair.question.length > 80 ? '…' : ''}</span>
+            <span class="text-xs text-muted-fg shrink-0 qa-toggle-icon">▼</span>
+          </button>
+          <button type="button" class="qa-delete-btn rounded-md border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 shrink-0" data-row-id="${pair.row_id}">Delete</button>
+        </div>
+        <div class="qa-card-body hidden space-y-2" data-row-id="${pair.row_id}">
+          <label class="block text-xs text-muted-fg">Question</label>
+          <input type="text" class="qa-question-input w-full rounded-md border border-border bg-card px-3 py-2 text-sm" data-row-id="${pair.row_id}" />
+          <label class="block text-xs text-muted-fg">Answer</label>
+          <textarea class="qa-answer-textarea w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono resize-y" rows="3" data-row-id="${pair.row_id}"></textarea>
+          <div class="flex justify-end">
+            <button type="button" class="qa-save-btn rounded-md bg-accent text-accent-fg px-3 py-1 text-xs font-medium hover:opacity-90" data-row-id="${pair.row_id}">Save changes</button>
+          </div>
+        </div>
+      </div>`,
+    )
+    .join('');
+
+  // Populate inputs/textareas via DOM to avoid quote-escaping issues
+  pairs.forEach((pair) => {
+    const card = dom.qaPairsList.querySelector(`.qa-card[data-row-id="${pair.row_id}"]`);
+    if (!card) return;
+    const qInput = card.querySelector('.qa-question-input');
+    const aTextarea = card.querySelector('.qa-answer-textarea');
+    if (qInput) qInput.value = pair.question;
+    if (aTextarea) aTextarea.value = pair.answer;
+  });
+
+  dom.qaPairsList.querySelectorAll('.qa-toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const rowId = btn.getAttribute('data-row-id');
+      const body = dom.qaPairsList.querySelector(`.qa-card-body[data-row-id="${rowId}"]`);
+      const icon = btn.querySelector('.qa-toggle-icon');
+      if (!body) return;
+      const opening = body.classList.contains('hidden');
+      body.classList.toggle('hidden', !opening);
+      if (icon) icon.textContent = opening ? '▲' : '▼';
+    });
+  });
+
+  dom.qaPairsList.querySelectorAll('.qa-save-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const rowId = parseInt(btn.getAttribute('data-row-id'), 10);
+      const card = dom.qaPairsList.querySelector(`.qa-card[data-row-id="${rowId}"]`);
+      if (!card) return;
+      const qInput = card.querySelector('.qa-question-input');
+      const aTextarea = card.querySelector('.qa-answer-textarea');
+      if (!qInput || !aTextarea) return;
+      btn.disabled = true;
+      try {
+        await fetchJson(
+          `/ft-dataset-versions/${encodeURIComponent(state.qa.versionId)}/qa-pairs/${rowId}`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: qInput.value, answer: aTextarea.value }),
+          },
+        );
+        const pair = state.qa.pairs.find((p) => p.row_id === rowId);
+        if (pair) {
+          pair.question = qInput.value;
+          pair.answer = aTextarea.value;
+          const preview = card.querySelector('.qa-preview');
+          if (preview) {
+            const q = pair.question;
+            preview.textContent = q.slice(0, 80) + (q.length > 80 ? '…' : '');
+          }
+        }
+      } catch (error) {
+        window.alert(`Failed to save: ${error.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  dom.qaPairsList.querySelectorAll('.qa-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const rowId = parseInt(btn.getAttribute('data-row-id'), 10);
+      if (!window.confirm('Delete this Q/A pair?')) return;
+      btn.disabled = true;
+      try {
+        await fetch(
+          `/ft-dataset-versions/${encodeURIComponent(state.qa.versionId)}/qa-pairs/${rowId}`,
+          { method: 'DELETE' },
+        );
+        state.qa.pairs = state.qa.pairs.filter((p) => p.row_id !== rowId);
+        renderQAPairs();
+      } catch (error) {
+        window.alert(`Failed to delete: ${error.message}`);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+if (dom.generateQaBtn) {
+  dom.generateQaBtn.addEventListener('click', async () => {
+    const collection = selectedCollection();
+    if (!collection) {
+      setGenerateQaStatus('Pick a collection in Step 1 first.');
+      return;
+    }
+    if (!collection.document_count) {
+      setGenerateQaStatus(`Collection "${collection.name}" has no documents. Upload at least one.`);
+      return;
+    }
+    const pairs = Math.max(1, Math.min(10, Number(dom.trainPairs.value) || 3));
+    const maxChunks = Math.max(1, Math.min(200, Number(dom.trainMaxChunks.value) || 20));
+    const qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || '';
+    dom.generateQaBtn.disabled = true;
+    setGenerateQaStatus(`Loading Q/A model ${qaModelId}…`);
+    await ensureModelLoaded(qaModelId);
+    setGenerateQaStatus('Generating Q/A pairs from collection…');
+    try {
+      const built = await fetchJson('/ft-datasets/from-rag-collection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rag_collection_id: collection.id,
+          dataset_name: `${collection.name} dataset`,
+          max_chunks: maxChunks,
+          pairs_per_chunk: pairs,
+          chat_model: qaModelId,
+        }),
+        timeoutMs: 600_000,  // 10 min — Qwen 4B needs ~3-5 min on M2
+      });
+      state.qa.versionId = built.dataset_version_id;
+      setGenerateQaStatus(`Generated ${built.row_count} Q/A pairs. Fetching for review…`);
+      const qaPairs = await fetchJson(
+        `/ft-dataset-versions/${encodeURIComponent(state.qa.versionId)}/qa-pairs`,
+      );
+      state.qa.pairs = qaPairs;
+      setGenerateQaStatus(
+        `Generated ${state.qa.pairs.length} Q/A pairs. Review them in Step 3 below.`,
+      );
+      if (dom.qaReviewSection) dom.qaReviewSection.classList.remove('hidden');
+      renderQAPairs();
+      if (dom.qaReviewSection) {
+        dom.qaReviewSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    } catch (error) {
+      setGenerateQaStatus(error.message);
+    } finally {
+      dom.generateQaBtn.disabled = false;
+    }
+  });
+}
+
+if (dom.proceedToTrainBtn) {
+  dom.proceedToTrainBtn.addEventListener('click', () => {
+    if (!state.qa.versionId) {
+      window.alert('No Q/A pairs generated yet. Please complete Step 2 first.');
+      return;
+    }
+    if (dom.finetuneSection) {
+      dom.finetuneSection.classList.remove('hidden');
+      dom.finetuneSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+}
+
+// ---- fine-tune (Step 4) -----------------------------------------------------
+
 dom.trainStart.addEventListener('click', async () => {
-  const collection = selectedCollection();
-  if (!collection) {
-    setTrainStatus('Pick a collection in step 1 first.');
+  if (!state.qa.versionId) {
+    setTrainStatus('Generate Q/A pairs in Step 2 first.');
     return;
   }
-  if (!collection.document_count) {
-    setTrainStatus(`Collection "${collection.name}" has no documents. Upload at least one before training.`);
-    return;
-  }
-  const pairs = Math.max(1, Math.min(10, Number(dom.trainPairs.value) || 3));
-  const maxChunks = Math.max(1, Math.min(200, Number(dom.trainMaxChunks.value) || 20));
-  // train-base select carries the same exposed_id the chat picker uses.
-  // Resolve back to the serving_model_name so the trainer can find the
-  // local LM Studio model dir (or HF id).
   const selectedExposedId = dom.trainBase.value.trim() || state.selectedModelId;
   const selectedModel = state.models.find((m) => m.id === selectedExposedId);
-  const base = (selectedModel && selectedModel.serving_model_name) || 'qwen3.5-4b-mlx';
-  // Q/A generator model — separate from the base model being fine-tuned.
-  const qaModelId = (dom.trainQaModel && dom.trainQaModel.value.trim()) || base;
+  const base =
+    (selectedModel && selectedModel.serving_model_name) ||
+    selectedExposedId ||
+    'liquid/lfm2.5-1.2b';
   dom.trainStart.disabled = true;
-  setTrainStep('generating');
-  setTrainStatus(`Loading Q/A model ${qaModelId}…`);
-  await ensureModelLoaded(qaModelId);
-  setTrainStatus('Generating Q/A pairs from collection…');
+  setTrainStep('preparing_data');
+  setTrainStatus('Locking dataset version…');
   try {
-    const built = await fetchJson('/ft-datasets/from-rag-collection', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rag_collection_id: collection.id,
-        dataset_name: `${collection.name} dataset`,
-        max_chunks: maxChunks,
-        pairs_per_chunk: pairs,
-        chat_model: qaModelId,
-      }),
-    });
-    const versionId = built.dataset_version_id;
-    state.training.datasetVersionId = versionId;
-    setTrainStatus(`Generated ${built.row_count} Q/A rows. Locking dataset version…`);
-
+    const versionId = state.qa.versionId;
     await fetchJson(`/ft-dataset-versions/${encodeURIComponent(versionId)}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -617,7 +788,6 @@ dom.trainStart.addEventListener('click', async () => {
       body: JSON.stringify({ status: 'locked' }),
     });
     setTrainStatus('Dataset locked. Enqueueing training job…');
-
     const job = await fetchJson('/ft-training-jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -628,11 +798,11 @@ dom.trainStart.addEventListener('click', async () => {
       }),
     });
     state.training.jobId = job.id;
+    state.training.datasetVersionId = versionId;
     setTrainStatus(`Training job ${job.id} queued. Polling…`);
     pollTrainingJob();
   } catch (error) {
     setTrainStatus(error.message);
-  } finally {
     dom.trainStart.disabled = false;
   }
 });
@@ -685,14 +855,28 @@ async function refreshModels() {
     state.selectedModelId = firstLoaded.modelKey || firstLoaded.path;
   }
   dom.chatModel.value = state.selectedModelId;
-  if (dom.trainBase) dom.trainBase.value = state.selectedModelId;
-  // Q/A generator: prefer a 4B+ model for structured JSON output.
+  // Q/A generator: prefer qwen3.5-4b-mlx, then any 4B+ model.
   if (dom.trainQaModel) {
-    const qaPreferred = llms.find((m) => {
-      const key = (m.modelKey || '').toLowerCase();
-      return /[4-9]b|1[0-9]b|[2-9][0-9]b/.test(key);
-    }) || firstLoaded;
+    const qaPreferred =
+      llms.find((m) => {
+        const key = (m.modelKey || '').toLowerCase();
+        return key.includes('qwen3.5-4b') || key.includes('qwen3-4b');
+      }) ||
+      llms.find((m) => {
+        const key = (m.modelKey || '').toLowerCase();
+        return /[4-9]b|1[0-9]b|[2-9][0-9]b/.test(key);
+      }) ||
+      firstLoaded;
     dom.trainQaModel.value = qaPreferred.modelKey || qaPreferred.path || '';
+  }
+  // Base model: prefer liquid/lfm2.5-1.2b.
+  if (dom.trainBase) {
+    const basePreferred =
+      llms.find((m) => {
+        const key = (m.modelKey || '').toLowerCase();
+        return key.includes('lfm2.5') || key.includes('lfm2');
+      }) || firstLoaded;
+    dom.trainBase.value = basePreferred.modelKey || basePreferred.path || '';
   }
   renderChatSuggestions();
 }

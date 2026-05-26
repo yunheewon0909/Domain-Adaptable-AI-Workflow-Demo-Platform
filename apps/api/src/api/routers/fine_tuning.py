@@ -13,11 +13,14 @@ from api.services.fine_tuning import (
     add_dataset_rows,
     create_dataset,
     create_dataset_version,
+    delete_dataset_row,
     get_dataset,
     get_dataset_version,
+    get_qa_pairs,
     list_dataset_rows,
     list_datasets,
     set_dataset_version_status,
+    update_dataset_row,
 )
 from api.services.fine_tuning.qa_generator import (
     build_dataset_rows,
@@ -64,6 +67,13 @@ class UpdateFTDatasetVersionStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = Field(pattern="^(draft|validated|locked)$")
+
+
+class UpdateQAPairRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
 
 
 class CreateFTDatasetFromRAGRequest(BaseModel):
@@ -288,3 +298,46 @@ def post_ft_dataset_from_rag(
             ],
             "version_status": add_result.get("status", version.get("status")),
         }
+
+
+@router.get("/ft-dataset-versions/{version_id}/qa-pairs")
+def get_ft_qa_pairs(version_id: str) -> list[dict[str, Any]]:
+    """Return Q/A pairs in a user-readable format for frontend review and editing."""
+    with Session(get_engine()) as session:
+        if get_dataset_version(session, version_id) is None:
+            raise HTTPException(
+                status_code=404, detail="fine-tuning dataset version not found"
+            )
+        return get_qa_pairs(session, version_id)
+
+
+@router.put("/ft-dataset-versions/{version_id}/qa-pairs/{row_id}")
+def put_ft_qa_pair(
+    version_id: str, row_id: int, request: UpdateQAPairRequest
+) -> dict[str, Any]:
+    """Update a single Q/A pair's question and answer."""
+    with Session(get_engine()) as session:
+        try:
+            return update_dataset_row(
+                session,
+                version_id=version_id,
+                row_id=row_id,
+                question=request.question,
+                answer=request.answer,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/ft-dataset-versions/{version_id}/qa-pairs/{row_id}", status_code=204)
+def delete_ft_qa_pair(version_id: str, row_id: int) -> None:
+    """Delete a single Q/A pair from a dataset version."""
+    with Session(get_engine()) as session:
+        try:
+            delete_dataset_row(session, version_id=version_id, row_id=row_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc

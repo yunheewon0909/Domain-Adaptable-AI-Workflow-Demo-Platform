@@ -122,9 +122,42 @@ def post_lmstudio_load(request: LoadModelRequest) -> dict[str, Any]:
     lms = _resolve_lms_exe()
     if lms is None:
         raise HTTPException(status_code=503, detail="lms CLI not found")
-    cmd = [lms, "load", request.model_id, "--gpu", "max", "--exact"]
-    if request.identifier:
-        cmd.extend(["--identifier", request.identifier])
+
+    # Resolve short modelKey → full indexedModelIdentifier that lms load
+    # --exact requires. LM Studio's lms load --exact rejects bare keys.
+    load_target = request.model_id
+    try:
+        listing_result = subprocess.run(
+            [lms, "ls", "--json"], capture_output=True, text=True, timeout=10
+        )
+        if listing_result.returncode == 0:
+            try:
+                listing = json.loads(listing_result.stdout)
+            except json.JSONDecodeError:
+                listing = []
+            if isinstance(listing, list):
+                for entry in listing:
+                    if not isinstance(entry, dict):
+                        continue
+                    candidates = {
+                        str(entry.get(field) or "")
+                        for field in ("modelKey", "indexedModelIdentifier", "path")
+                    }
+                    if request.model_id in candidates:
+                        load_target = (
+                            str(entry.get("indexedModelIdentifier") or "")
+                            or str(entry.get("path") or "")
+                            or request.model_id
+                        )
+                        break
+    except (subprocess.TimeoutExpired, OSError):
+        pass  # keep original model_id as fallback
+
+    cmd = [lms, "load", load_target, "--gpu", "max", "--exact"]
+    resolved_identifier = request.identifier
+    if not resolved_identifier:
+        resolved_identifier = load_target
+    cmd.extend(["--identifier", resolved_identifier])
     try:
         completed = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300
@@ -147,12 +180,12 @@ def post_lmstudio_load(request: LoadModelRequest) -> dict[str, Any]:
     # this, reviewers can load a model from the demo dropdown but the
     # platform shim still rejects chat requests with "model not found in
     # registry".
-    serving_name = request.identifier or request.model_id
+    serving_name = resolved_identifier or load_target
     _ensure_base_model_registered(serving_name)
 
     return {
         "model_id": request.model_id,
-        "identifier": request.identifier,
+        "identifier": resolved_identifier,
         "serving_model_name": serving_name,
         "loaded": True,
         "stdout_tail": completed.stdout.strip()[-300:],

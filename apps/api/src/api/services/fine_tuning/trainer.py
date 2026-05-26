@@ -81,6 +81,78 @@ def _parse_model_map(raw_value: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in parsed.items() if str(value).strip()}
 
 
+def _is_mlx_model_dir(path: Path) -> bool:
+    """Return True if path looks like a loadable MLX model directory."""
+    return (path / "config.json").is_file() and (
+        (path / "model.safetensors").is_file()
+        or (path / "model.npz").is_file()
+    )
+
+
+def _normalize_for_matching(s: str) -> str:
+    return "".join(c for c in s.lower() if c.isalnum())
+
+
+def _config_id_matches(model_dir: Path, norm_model_base: str) -> bool:
+    """Return True if config.json in model_dir identifies the model by norm_model_base."""
+    try:
+        config = json.loads(
+            (model_dir / "config.json").read_text(encoding="utf-8", errors="replace")
+        )
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(config, dict):
+        return False
+    for field in ("_name_or_path", "_hf_model_id", "model_name", "name"):
+        value = str(config.get(field) or "")
+        if value and norm_model_base in _normalize_for_matching(value):
+            return True
+    return False
+
+
+def _scan_lmstudio_models_for_key(model_key: str) -> str | None:
+    """Walk ~/.lmstudio/models to find an MLX directory matching model_key.
+
+    Called when lms ls reports a path that doesn't exist on disk, which happens
+    when LM Studio's index uses a different naming convention than the actual
+    directory (e.g. modelKey=liquid/lfm2.5-1.2b but the real dir is
+    lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit).
+
+    Two-pass strategy:
+    1. Parse config.json identity fields (_name_or_path, _hf_model_id, …)
+    2. Fuzzy directory name match — model's base name (normalized) is a
+       substring of the candidate dir name (normalized).
+    """
+    models_root = Path.home() / ".lmstudio" / "models"
+    if not models_root.is_dir():
+        return None
+
+    # Strip publisher prefix: "liquid/lfm2.5-1.2b" → "lfm2.5-1.2b"
+    base_name = model_key.rsplit("/", 1)[-1]
+    norm_base = _normalize_for_matching(base_name)
+    if not norm_base:
+        return None
+
+    # Collect valid MLX dirs at 1 and 2 levels deep (covers publisher/model layout)
+    valid_dirs: list[Path] = []
+    for glob_pattern in ("*/", "*/*/"):
+        for subdir in sorted(models_root.glob(glob_pattern)):
+            if subdir.is_dir() and _is_mlx_model_dir(subdir):
+                valid_dirs.append(subdir)
+
+    # Pass 1: config.json identity fields
+    for candidate in valid_dirs:
+        if _config_id_matches(candidate, norm_base):
+            return str(candidate)
+
+    # Pass 2: directory name substring match
+    for candidate in valid_dirs:
+        if norm_base in _normalize_for_matching(candidate.name):
+            return str(candidate)
+
+    return None
+
+
 def _resolve_lmstudio_model_path(model_key: str) -> str | None:
     """Resolve an LM Studio modelKey (e.g. `qwen3.5-4b-mlx`) to the
     absolute on-disk path of its MLX repo directory.
@@ -138,13 +210,18 @@ def _resolve_lmstudio_model_path(model_key: str) -> str | None:
         if not rel_path:
             continue
         absolute = Path.home() / ".lmstudio" / "models" / rel_path
-        if (absolute / "config.json").is_file() and (
-            (absolute / "model.safetensors").is_file()
-            or (absolute / "model.npz").is_file()
-        ):
+        if _is_mlx_model_dir(absolute):
             return str(absolute)
-        return None
-    return None
+        # lms ls matched model_key but the path field is stale/wrong.
+        # Fall through to filesystem scan below.
+        break
+    else:
+        return None  # model_key not found in lms ls listing
+
+    # The lms ls listing matched model_key but the reported path doesn't exist
+    # on disk (LM Studio's index can use a different naming convention than the
+    # actual directory). Walk ~/.lmstudio/models to find the real location.
+    return _scan_lmstudio_models_for_key(model_key)
 
 
 def resolve_trainer_model_name(

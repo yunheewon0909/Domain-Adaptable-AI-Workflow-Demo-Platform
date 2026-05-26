@@ -82,40 +82,40 @@
           </button>
         </div>
 
-        <details class="text-sm">
-          <summary class="cursor-pointer text-muted-fg select-none">+ Add text document</summary>
-          <div class="mt-2 space-y-2">
-            <input
-              id="kb-text-name"
-              type="text"
-              placeholder="Filename (e.g. notes.txt)"
-              class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
-            />
-            <textarea
-              id="kb-text-content"
-              rows="5"
-              placeholder="Paste or type document content…"
-              class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono resize-y"
-            ></textarea>
-            <button id="kb-text-save" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-              Save as document
-            </button>
+        <button id="kb-new-doc-button" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]">
+          📄 New Document
+        </button>
+        <div id="kb-new-doc-form" class="hidden mt-2 space-y-2">
+          <input
+            id="kb-text-name"
+            type="text"
+            placeholder="Filename (e.g. notes.txt)"
+            class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+          />
+          <textarea
+            id="kb-text-content"
+            rows="5"
+            placeholder="Paste or type document content…"
+            class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono resize-y"
+          ></textarea>
+          <div class="flex justify-end gap-2">
+            <button id="kb-text-cancel" type="button" class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted min-h-[40px]">✖ Cancel</button>
+            <button id="kb-text-save" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]">💾 Save</button>
           </div>
-        </details>
+        </div>
 
         <div id="kb-docs" class="text-sm text-muted-fg">No collection selected.</div>
         <p id="kb-hint" class="text-xs text-muted-fg"></p>
       </section>
 
-      <!-- Step 2: Train (optional) -->
+      <!-- Step 2: Generate Q&A (optional) -->
       <section class="rounded-xl border border-border bg-card p-6 space-y-4">
         <div class="space-y-1">
           <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 2 · optional</p>
-          <h2 class="text-xl font-semibold">Train a model from this collection</h2>
+          <h2 class="text-xl font-semibold">Generate Q&amp;A pairs</h2>
           <p class="text-sm text-muted-fg">
-            Skip this step to chat using the base model + retrieval. To fine-tune, the platform
-            asks LM Studio to generate Q/A pairs from your collection, then runs MLX QLoRA on
-            them. Result is auto-staged for LM Studio; you load it and it becomes selectable.
+            Skip this step to chat using the base model + retrieval. To fine-tune, generate Q/A
+            pairs from your collection, review them in Step 3, then train in Step 4.
           </p>
         </div>
 
@@ -136,16 +136,51 @@
             <span class="text-muted-fg">Base model to fine-tune</span>
             <select id="train-base" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
           </label>
-          <button id="train-start" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-            Generate Q/A + train
+          <button id="generate-qa-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+            Generate Q/A pairs
           </button>
         </div>
 
         <p class="text-xs text-muted-fg mt-1">⚠️ For Q/A generation, use a model with 4B+ parameters (e.g. qwen3.5-4b-mlx). Models under 2B may fail to produce valid training pairs. The base model can be any size.</p>
 
+        <div id="generate-qa-status" class="text-sm text-muted-fg">Idle.</div>
+      </section>
+
+      <!-- Step 3: Review & Edit Q&A -->
+      <section id="qa-review-section" class="rounded-xl border border-border bg-card p-6 space-y-4 hidden">
+        <div class="space-y-1">
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 3 · optional</p>
+          <h2 class="text-xl font-semibold">Review &amp; edit Q&amp;A pairs</h2>
+          <p class="text-sm text-muted-fg">
+            Review the generated pairs. Edit questions or answers inline, delete unwanted pairs, then proceed to fine-tuning.
+          </p>
+        </div>
+
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <span id="qa-pair-count" class="text-sm text-muted-fg">0 pairs</span>
+          <button id="proceed-to-train-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+            Proceed to Fine-tuning →
+          </button>
+        </div>
+
+        <div id="qa-pairs-list" class="space-y-2"></div>
+      </section>
+
+      <!-- Step 4: Fine-tune -->
+      <section id="finetune-section" class="rounded-xl border border-border bg-card p-6 space-y-4 hidden">
+        <div class="space-y-1">
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 4 · optional</p>
+          <h2 class="text-xl font-semibold">Fine-tune</h2>
+          <p class="text-sm text-muted-fg">
+            Train on the reviewed Q/A pairs using MLX QLoRA. The result is auto-staged for LM Studio; load it there to make it selectable in chat.
+          </p>
+        </div>
+
+        <button id="train-start" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
+          Start Training
+        </button>
+
         <ol id="train-stepper" class="flex flex-wrap items-center gap-1 text-xs text-muted-fg hidden">
-          <li data-phase="generating" class="step px-2 py-1 rounded border border-border">Q/A pairs</li>
-          <li class="opacity-40">→</li>
           <li data-phase="preparing_data" class="step px-2 py-1 rounded border border-border">Prepare data</li>
           <li class="opacity-40">→</li>
           <li data-phase="training" class="step px-2 py-1 rounded border border-border">Train</li>
@@ -164,10 +199,10 @@
         </details>
       </section>
 
-      <!-- Step 3: Chat -->
+      <!-- Chat -->
       <section class="rounded-xl border border-border bg-card p-6 space-y-4">
         <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 3</p>
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Chat</p>
           <h2 class="text-xl font-semibold">Chat</h2>
           <p class="text-sm text-muted-fg">
             Pick a model and (optionally) ground the answer in the active knowledge base.
@@ -186,10 +221,6 @@
           </label>
         </div>
 
-        <div id="chat-log" class="space-y-3 min-h-[160px] rounded-md border border-border bg-bg p-4 text-sm"></div>
-
-        <div id="chat-suggestions" class="flex flex-wrap gap-2 text-xs"></div>
-
         <form id="chat-form" class="flex flex-wrap items-end gap-3">
           <input
             id="chat-input"
@@ -205,6 +236,10 @@
             Clear
           </button>
         </form>
+
+        <div id="chat-suggestions" class="flex flex-wrap gap-2 text-xs"></div>
+
+        <div id="chat-log" class="space-y-3 min-h-[160px] rounded-md border border-border bg-bg p-4 text-sm"></div>
       </section>
 
       <!-- Settings (collapsed) -->
@@ -227,6 +262,6 @@
       </section>
     </main>
 
-    <script src="/demo/assets/app.js"></script>
+    <script src="/demo/assets/app.js?v=7"></script>
   </body>
 </html>
