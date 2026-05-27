@@ -715,11 +715,13 @@ if (dom.generateQaBtn) {
     setGenerateQaStatus('Generating Q/A pairs from collection…');
     try {
       await ensureModelLoaded(qaModelId);
-      // Build dataset name: BaseModel_Collection_Date
-      const today = new Date().toISOString().slice(0, 10);
+      // Build dataset name: BaseModel_Collection_YYYY-MM-DD_HH-MM
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      const time = now.toTimeString().slice(0, 5).replace(':', '-');
       const baseShort = qaModelId.split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '');
       const collSafe = collection.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 30);
-      const datasetName = `${baseShort}_${collSafe}_${today}`;
+      const datasetName = `${baseShort}_${collSafe}_${today}_${time}`;
       const built = await fetchJson('/ft-datasets/from-rag-collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
