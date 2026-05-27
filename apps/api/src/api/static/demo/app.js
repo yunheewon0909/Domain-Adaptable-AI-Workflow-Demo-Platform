@@ -715,12 +715,17 @@ if (dom.generateQaBtn) {
     setGenerateQaStatus('Generating Q/A pairs from collection…');
     try {
       await ensureModelLoaded(qaModelId);
+      // Build dataset name: BaseModel_Collection_Date
+      const today = new Date().toISOString().slice(0, 10);
+      const baseShort = qaModelId.split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '');
+      const collSafe = collection.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 30);
+      const datasetName = `${baseShort}_${collSafe}_${today}`;
       const built = await fetchJson('/ft-datasets/from-rag-collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rag_collection_id: collection.id,
-          dataset_name: `${collection.name} dataset`,
+          dataset_name: datasetName,
           max_chunks: maxChunks,
           pairs_per_chunk: pairs,
           chat_model: qaModelId,
