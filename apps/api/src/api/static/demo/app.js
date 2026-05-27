@@ -39,7 +39,6 @@ const dom = {
   qaPairsList: $('qa-pairs-list'),
   qaPairCount: $('qa-pair-count'),
   addPairBtn: $('add-pair-btn'),
-  proceedToTrainBtn: $('proceed-to-train-btn'),
   finetuneSection: $('finetune-section'),
   trainStart: $('train-start'),
   trainStatus: $('train-status'),
@@ -713,9 +712,9 @@ if (dom.generateQaBtn) {
       qaModelId = state.models[0].modelKey || state.models[0].path || '';
     }
     dom.generateQaBtn.disabled = true;
-    await ensureModelLoaded(qaModelId);
     setGenerateQaStatus('Generating Q/A pairs from collection…');
     try {
+      await ensureModelLoaded(qaModelId);
       const built = await fetchJson('/ft-datasets/from-rag-collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -739,17 +738,18 @@ if (dom.generateQaBtn) {
       );
       renderQAPairs();
     } catch (error) {
-      setGenerateQaStatus(error.message);
+      // Try to extract a readable message from server JSON errors
+      let msg = error.message || 'Unknown error';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed && parsed.message) msg = parsed.message;
+        if (parsed && parsed.errors && parsed.errors.length) {
+          msg += ' (' + parsed.errors[0].reason + ')';
+        }
+      } catch {}
+      setGenerateQaStatus(msg);
     } finally {
       dom.generateQaBtn.disabled = false;
-    }
-  });
-}
-
-if (dom.proceedToTrainBtn) {
-  dom.proceedToTrainBtn.addEventListener('click', () => {
-    if (!state.qa.versionId) {
-      window.alert('No Q/A pairs yet. Generate them in Step 2 or add pairs manually in Step 3 first.');
     }
   });
 }
