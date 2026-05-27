@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from api.config import get_settings
 from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.llm import LLMClient, LLMClientError
@@ -219,4 +223,179 @@ def post_inference_run(
             "max_tokens": request.max_tokens,
         },
         "retrieval_preview": retrieval_preview,
+    }
+
+
+class VerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verifier_model: str = Field(min_length=1)
+    fine_tuned_model: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    base_model: str = Field(min_length=1)
+    rag_collection_id: str | None = None
+
+
+def _lmstudio_chat(
+    base_url: str, model: str, messages: list[dict[str, Any]], timeout: float = 120.0
+) -> str:
+    """Direct LM Studio chat call bypassing the registry."""
+    response = httpx.post(
+        f"{base_url}/chat/completions",
+        json={"model": model, "messages": messages, "temperature": 0},
+        timeout=httpx.Timeout(connect=5.0, read=timeout, write=timeout, pool=5.0),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("no choices in LM Studio response")
+    msg = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+    content = str(msg.get("content") or "").strip()
+    if not content:
+        reasoning = msg.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            raise ValueError("model ran out of tokens during reasoning pass — increase max_tokens")
+        raise ValueError("empty content in LM Studio response")
+    return content
+
+
+def _inference_messages(question: str, rag_context: str) -> list[dict[str, Any]]:
+    user_content = (
+        f"Context:\n{rag_context}\n\nQuestion: {question}" if rag_context else question
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Answer the user's question concisely. "
+                "If the Context block contains relevant evidence, ground your answer in it."
+            ),
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+
+_GRADING_TEMPLATE = """\
+You are an objective LLM-as-Judge. Score 4 AI answers to the same question from 0 to 10.
+
+Question: {question}
+{ground_truth_section}
+Answers to evaluate:
+
+[ft_rag] Fine-tuned model WITH knowledge base:
+{ft_rag}
+
+[ft_only] Fine-tuned model WITHOUT knowledge base:
+{ft_only}
+
+[base_rag] Base model WITH knowledge base:
+{base_rag}
+
+[base_only] Base model WITHOUT knowledge base:
+{base_only}
+
+Scoring rubric (0-10 per answer):
+- 9-10: Factually accurate, directly answers the question, complete, no hallucinations
+- 7-8: Mostly accurate, minor gaps or slight imprecision
+- 5-6: Partially correct, some inaccuracies or missing key details
+- 3-4: Tangential or significant errors
+- 1-2: Mostly wrong or irrelevant
+- 0: No attempt or entirely wrong
+
+Return ONLY valid JSON with no markdown fences and no text outside the JSON object:
+{{"scores": {{"ft_rag": <0-10>, "ft_only": <0-10>, "base_rag": <0-10>, "base_only": <0-10>}}, "comments": {{"ft_rag": "<1-2 sentence judgment>", "ft_only": "<1-2 sentence judgment>", "base_rag": "<1-2 sentence judgment>", "base_only": "<1-2 sentence judgment>"}}}}"""
+
+
+@router.post("/inference/verify")
+def post_inference_verify(request: VerifyRequest) -> dict[str, Any]:
+    settings = get_settings()
+    base_url = settings.lmstudio_base_url
+
+    rag_context = ""
+    if request.rag_collection_id:
+        with Session(get_engine()) as session:
+            try:
+                retrieval = preview_collection_retrieval(
+                    session,
+                    collection_id=request.rag_collection_id,
+                    query=request.question,
+                    top_k=5,
+                )
+                rag_context = (
+                    "\n\n".join(
+                        f"[{item['filename']}]\n{item['excerpt']}"
+                        for item in retrieval.get("results", [])
+                    )
+                    or ""
+                )
+            except KeyError:
+                pass
+
+    def run_one(model: str, use_rag: bool) -> str:
+        ctx = rag_context if use_rag else ""
+        try:
+            return _lmstudio_chat(base_url, model, _inference_messages(request.question, ctx))
+        except Exception as exc:
+            return f"[Inference error: {exc}]"
+
+    ft_rag = run_one(request.fine_tuned_model, True)
+    ft_only = run_one(request.fine_tuned_model, False)
+    base_rag = run_one(request.base_model, True)
+    base_only = run_one(request.base_model, False)
+
+    ground_truth_section = (
+        f"\nGround truth (knowledge base):\n{rag_context}\n"
+        if rag_context
+        else "\n(No knowledge base context available.)\n"
+    )
+    grading_prompt = _GRADING_TEMPLATE.format(
+        question=request.question,
+        ground_truth_section=ground_truth_section,
+        ft_rag=ft_rag,
+        ft_only=ft_only,
+        base_rag=base_rag,
+        base_only=base_only,
+    )
+
+    default_scores: dict[str, Any] = {"ft_rag": 0, "ft_only": 0, "base_rag": 0, "base_only": 0}
+    default_comments: dict[str, Any] = {"ft_rag": "", "ft_only": "", "base_rag": "", "base_only": ""}
+    grading_error: str | None = None
+
+    try:
+        raw_grade = _lmstudio_chat(
+            base_url,
+            request.verifier_model,
+            [{"role": "user", "content": grading_prompt}],
+            timeout=300.0,
+        )
+        raw_grade = raw_grade.strip()
+        if raw_grade.startswith("```"):
+            raw_grade = re.sub(r"^```[a-zA-Z]*\n?", "", raw_grade)
+            raw_grade = re.sub(r"\n?```$", "", raw_grade.strip())
+        grade_data = json.loads(raw_grade)
+        for key in ("ft_rag", "ft_only", "base_rag", "base_only"):
+            raw_score = grade_data.get("scores", {}).get(key, 0)
+            default_scores[key] = max(0, min(10, int(float(raw_score))))
+            default_comments[key] = str(grade_data.get("comments", {}).get(key, ""))
+    except Exception as exc:
+        grading_error = str(exc)
+
+    return {
+        "question": request.question,
+        "rag_context": rag_context,
+        "answers": {
+            "ft_rag": ft_rag,
+            "ft_only": ft_only,
+            "base_rag": base_rag,
+            "base_only": base_only,
+        },
+        "scores": default_scores,
+        "comments": default_comments,
+        "grading_error": grading_error,
+        "models": {
+            "fine_tuned": request.fine_tuned_model,
+            "base": request.base_model,
+            "verifier": request.verifier_model,
+        },
     }

@@ -1013,6 +1013,7 @@ def complete_training_job(
             base_model_name=training_job.base_model_name,
             trainer_model_name=training_output.trainer_model_name,
             settings=settings,
+            dataset_name=dataset.name,
         )
         publish_validation = validate_publish_artifacts(
             manifest_path=publish_manifest_path,

@@ -203,6 +203,69 @@
         </details>
       </section>
 
+      <!-- Step 5: Verify (LLM-as-Judge) -->
+      <section id="verify-section" class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <div class="space-y-1">
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 5 · optional</p>
+          <h2 class="text-xl font-semibold">Verify fine-tuned model</h2>
+          <p class="text-sm text-muted-fg">
+            Compare your fine-tuned model against the base model using an LLM-as-Judge.
+            The judge scores four answer variants (FT+RAG, FT only, Base+RAG, Base only) out of 10.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="flex-1 min-w-[200px] text-sm space-y-1">
+            <span class="text-muted-fg">Verifier model (judge)</span>
+            <select id="verify-judge-model" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
+          </label>
+          <label class="flex-1 min-w-[200px] text-sm space-y-1">
+            <span class="text-muted-fg">Fine-tuned model to test</span>
+            <select id="verify-ft-model" class="w-full rounded-md border border-border bg-card px-3 py-2">
+              <option value="">— no fine-tuned models —</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="text-sm space-y-1">
+          <span class="text-muted-fg">Auto-detected base model</span>
+          <div id="verify-base-model" class="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-fg">
+            — select a fine-tuned model above —
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="flex-1 min-w-[200px] text-sm space-y-1">
+            <span class="text-muted-fg">Test question</span>
+            <input
+              id="verify-question"
+              type="text"
+              placeholder="Ask a question to test both models…"
+              class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+            />
+          </label>
+          <button id="verify-run-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]">
+            Run Verification
+          </button>
+        </div>
+
+        <div id="verify-status" class="text-sm text-muted-fg">Idle.</div>
+
+        <div id="verify-results" class="hidden overflow-x-auto">
+          <table class="w-full text-sm border-collapse">
+            <thead>
+              <tr class="text-left text-xs text-muted-fg uppercase tracking-wider">
+                <th class="px-3 py-2 border border-border bg-muted">Variant</th>
+                <th class="px-3 py-2 border border-border bg-muted">Answer</th>
+                <th class="px-3 py-2 border border-border bg-muted w-16 text-center">Score</th>
+                <th class="px-3 py-2 border border-border bg-muted">Judge comment</th>
+              </tr>
+            </thead>
+            <tbody id="verify-results-body"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Chat -->
       <section class="rounded-xl border border-border bg-card p-6 space-y-4">
         <div class="space-y-1">
@@ -266,6 +329,6 @@
       </section>
     </main>
 
-    <script src="/demo/assets/app.js?v=12"></script>
+    <script src="/demo/assets/app.js?v=13"></script>
   </body>
 </html>

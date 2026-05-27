@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -169,6 +170,7 @@ def build_publish_manifest(
     base_model_name: str,
     trainer_model_name: str,
     settings: Settings,
+    dataset_name: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     manifest_dir.mkdir(parents=True, exist_ok=True)
     modelfile_path = manifest_dir / "Modelfile.template"
@@ -181,7 +183,11 @@ def build_publish_manifest(
     # `register_fused_model`.
     model_name = None
     if settings.mlx_model_namespace:
-        model_name = manifest_dir.parent.name
+        if dataset_name:
+            safe = re.sub(r"[^a-zA-Z0-9._-]", "_", dataset_name).strip("_")
+            model_name = safe or manifest_dir.parent.name
+        else:
+            model_name = manifest_dir.parent.name
 
     modelfile_contents = "\n".join(
         [

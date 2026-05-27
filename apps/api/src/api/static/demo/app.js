@@ -8,6 +8,7 @@ const state = {
   training: { jobId: null, datasetVersionId: null, polling: false },
   qa: { pairs: [], versionId: null },
   chat: { messages: [] },
+  ftModels: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -53,6 +54,14 @@ const dom = {
   chatClear: $('chat-clear'),
   chatSuggestions: $('chat-suggestions'),
   settingsStatus: $('settings-status'),
+  verifyJudgeModel: $('verify-judge-model'),
+  verifyFtModel: $('verify-ft-model'),
+  verifyBaseModel: $('verify-base-model'),
+  verifyQuestion: $('verify-question'),
+  verifyRunBtn: $('verify-run-btn'),
+  verifyStatus: $('verify-status'),
+  verifyResults: $('verify-results'),
+  verifyResultsBody: $('verify-results-body'),
 };
 
 async function fetchJson(path, options = {}) {
@@ -562,6 +571,7 @@ async function pollTrainingJob() {
           setTrainStatus(`Job ${job.id} ${status}. ${(job.error_json && job.error_json.user_message) || job.error || ''}`);
         }
         await refreshModels();
+        await refreshFtModels();
         break;
       }
     } catch (error) {
@@ -906,6 +916,7 @@ async function refreshModels() {
   dom.chatModel.innerHTML = optionsHtml;
   if (dom.trainBase) dom.trainBase.innerHTML = optionsHtml;
   if (dom.trainQaModel) dom.trainQaModel.innerHTML = optionsHtml;
+  if (dom.verifyJudgeModel) dom.verifyJudgeModel.innerHTML = optionsHtml;
   const firstLoaded = llms.find((m) => m.loaded) || llms[0];
   if (!state.selectedModelId || !llms.some((m) => (m.modelKey || m.path) === state.selectedModelId)) {
     state.selectedModelId = firstLoaded.modelKey || firstLoaded.path;
@@ -1115,6 +1126,121 @@ dom.chatForm.addEventListener('submit', async (event) => {
   renderChat();
 });
 
+// ---- Step 5: verify (LLM-as-Judge) ------------------------------------------
+
+async function refreshFtModels() {
+  if (!dom.verifyFtModel) return;
+  try {
+    const allModels = await fetchJson('/models');
+    state.ftModels = (allModels || []).filter(
+      (m) => m.source_type === 'fine_tuned' && m.status === 'active' && m.serving_model_name,
+    );
+  } catch {
+    state.ftModels = [];
+  }
+  if (!state.ftModels.length) {
+    dom.verifyFtModel.innerHTML = '<option value="">— no published fine-tuned models —</option>';
+    return;
+  }
+  dom.verifyFtModel.innerHTML = state.ftModels
+    .map((m) => {
+      const label = m.display_name || m.serving_model_name || m.id;
+      const val = m.serving_model_name || m.id;
+      return `<option value="${escapeHtml(val)}">${escapeHtml(label)}</option>`;
+    })
+    .join('');
+  updateVerifyBaseModel();
+}
+
+function updateVerifyBaseModel() {
+  if (!dom.verifyFtModel || !dom.verifyBaseModel) return;
+  const selectedVal = dom.verifyFtModel.value;
+  const ftModel = state.ftModels.find((m) => (m.serving_model_name || m.id) === selectedVal);
+  const baseModelName = (ftModel && ftModel.base_model_name) || '';
+  dom.verifyBaseModel.textContent = baseModelName || '— select a fine-tuned model above —';
+}
+
+if (dom.verifyFtModel) {
+  dom.verifyFtModel.addEventListener('change', updateVerifyBaseModel);
+}
+
+function setVerifyStatus(msg) {
+  if (dom.verifyStatus) dom.verifyStatus.textContent = msg || 'Idle.';
+}
+
+const VERIFY_VARIANT_LABELS = {
+  ft_rag: 'FT + RAG',
+  ft_only: 'FT only',
+  base_rag: 'Base + RAG',
+  base_only: 'Base only',
+};
+
+function renderVerifyResults(data) {
+  if (!dom.verifyResultsBody || !dom.verifyResults) return;
+  const variants = ['ft_rag', 'ft_only', 'base_rag', 'base_only'];
+  dom.verifyResultsBody.innerHTML = variants
+    .map((key) => {
+      const score = data.scores[key] ?? '—';
+      const comment = data.comments[key] || '';
+      const answer = (data.answers && data.answers[key]) || '';
+      const scoreColor =
+        score >= 8 ? 'text-green-400' : score >= 5 ? 'text-yellow-400' : 'text-red-400';
+      return `<tr class="align-top">
+        <td class="px-3 py-2 border border-border font-medium whitespace-nowrap">${escapeHtml(VERIFY_VARIANT_LABELS[key] || key)}</td>
+        <td class="px-3 py-2 border border-border max-w-xs whitespace-pre-wrap text-xs leading-relaxed">${escapeHtml(answer)}</td>
+        <td class="px-3 py-2 border border-border text-center font-bold ${scoreColor}">${escapeHtml(String(score))}/10</td>
+        <td class="px-3 py-2 border border-border text-xs text-muted-fg">${escapeHtml(comment)}</td>
+      </tr>`;
+    })
+    .join('');
+  dom.verifyResults.classList.remove('hidden');
+}
+
+if (dom.verifyRunBtn) {
+  dom.verifyRunBtn.addEventListener('click', async () => {
+    const judgeModel = dom.verifyJudgeModel && dom.verifyJudgeModel.value.trim();
+    const ftModel = dom.verifyFtModel && dom.verifyFtModel.value.trim();
+    const question = dom.verifyQuestion && dom.verifyQuestion.value.trim();
+    const baseModel = dom.verifyBaseModel && dom.verifyBaseModel.textContent.trim();
+
+    if (!judgeModel) { setVerifyStatus('Select a verifier model first.'); return; }
+    if (!ftModel) { setVerifyStatus('Select a fine-tuned model first.'); return; }
+    if (!baseModel || baseModel.startsWith('—')) { setVerifyStatus('No base model detected for the selected fine-tuned model.'); return; }
+    if (!question) { setVerifyStatus('Enter a test question first.'); return; }
+
+    const collection = selectedCollection();
+    dom.verifyRunBtn.disabled = true;
+    setVerifyStatus('Running 4 inferences and grading… this may take 1-3 minutes.');
+    if (dom.verifyResults) dom.verifyResults.classList.add('hidden');
+
+    try {
+      const result = await fetchJson('/inference/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          verifier_model: judgeModel,
+          fine_tuned_model: ftModel,
+          question,
+          base_model: baseModel,
+          rag_collection_id: collection ? collection.id : null,
+        }),
+        timeoutMs: 600_000,
+      });
+
+      if (result.grading_error) {
+        setVerifyStatus(`Grading failed: ${result.grading_error} — raw answers are shown below.`);
+      } else {
+        setVerifyStatus('Verification complete.');
+      }
+      renderVerifyResults(result);
+    } catch (error) {
+      setVerifyStatus(`Error: ${error.message}`);
+    } finally {
+      dom.verifyRunBtn.disabled = false;
+    }
+  });
+}
+
 // ---- settings ---------------------------------------------------------------
 
 async function refreshStatus() {
@@ -1141,6 +1267,7 @@ async function boot() {
   renderChat();
   await refreshCollections();
   await refreshModels();
+  await refreshFtModels();
   await refreshStatus();
 }
 
