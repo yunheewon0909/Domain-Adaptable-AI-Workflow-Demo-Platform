@@ -430,8 +430,12 @@ def test_training_job_model_registry_and_inference_flow(
             training_detail.json()["registered_models"][0]["publish_status"]
             == "publish_ready"
         )
+        # The candidate serving name is derived from the dataset name and is
+        # surfaced even before publish/load so the UI can show the intended
+        # LM Studio model id; it is not yet selectable.
         assert (
-            training_detail.json()["registered_models"][0]["serving_model_name"] is None
+            training_detail.json()["registered_models"][0]["serving_model_name"]
+            == "Chat_tuning_demo"
         )
         assert (
             training_detail.json()["registered_models"][0]["readiness"]["selectable"]
@@ -454,11 +458,11 @@ def test_training_job_model_registry_and_inference_flow(
         publish_response = client.post(f"/ft-training-jobs/{training_job_id}/publish")
         assert publish_response.status_code == 200
         assert publish_response.json()["publish_status"] == "publish_ready"
-        assert publish_response.json()["serving_model_name"] is None
+        assert publish_response.json()["serving_model_name"] == "Chat_tuning_demo"
         assert publish_response.json()["readiness"]["selectable"] is False
         assert (
             publish_response.json()["candidate_published_model_name"]
-            == training_job_id
+            == "Chat_tuning_demo"
         )
         assert publish_response.json()["readiness"]["runtime_ready"] is False
         assert any(
@@ -477,7 +481,7 @@ def test_training_job_model_registry_and_inference_flow(
         )
         assert (
             lineage_response.json()["candidate_published_model_name"]
-            == training_job_id
+            == "Chat_tuning_demo"
         )
 
         artifact_id = training_detail.json()["artifacts"][0]["id"]
@@ -572,7 +576,7 @@ def test_publish_disabled_returns_truthful_artifact_ready_status(
     assert publish_response.json()["readiness"]["selectable"] is False
     assert (
         publish_response.json()["candidate_published_model_name"]
-        == training_job_id
+        == "Publish_disabled_demo"
     )
 
 
@@ -637,7 +641,7 @@ def test_hf_resolution_failure_uses_smoke_fallback_and_keeps_model_review_only(
     assert registered_model["trainer_backend"] == "mlx_qlora+smoke_fallback"
     assert registered_model["trainer_model_name"] == DETERMINISTIC_SMOKE_TRAINER_MODEL_NAME
     assert registered_model["readiness"]["selectable"] is False
-    assert registered_model["serving_model_name"] is None
+    assert registered_model["serving_model_name"] == "Smoke_fallback_success_demo"
 
 
 def test_hf_resolution_failure_stays_classified_when_smoke_fallback_is_disabled(

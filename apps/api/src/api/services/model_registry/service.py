@@ -35,7 +35,7 @@ from api.services.fine_tuning.trainer import (
     run_training_backend,
 )
 
-BASE_MODEL_READY_STATUSES = {"active"}
+BASE_MODEL_READY_STATUSES = {"active", "registered"}
 ALLOWED_TRAINING_STATUSES = {
     "queued",
     "preparing_data",
@@ -54,6 +54,12 @@ ARTIFACT_ONLY_MODEL_STATUSES = {"artifact_ready"}
 # reporting "artifact-ready only" even after LM Studio loaded them.
 READY_MODEL_STATUSES = {"published", "active"}
 ALLOWED_PUBLISH_STATUSES = {"not_requested", "publish_ready", "published", "failed"}
+
+# `lms ls` can briefly omit a freshly-placed model directory until LM Studio's
+# indexer notices it, so publish auto-load retries discovery a few times before
+# giving up (worst case ~6s of waiting on a publish action).
+_LMS_LOAD_DISCOVERY_ATTEMPTS = 5
+_LMS_LOAD_DISCOVERY_DELAY_SECONDS = 1.5
 
 
 def _next_prefixed_id(prefix: str) -> str:
@@ -87,7 +93,19 @@ def _serialize_readiness(
                 else "base model is not in a ready status"
             )
         else:
-            serving_loaded = bool(serving_name) and serving_name in loaded_serving_names
+            # Match case-insensitively.  Also try the basename after the last
+            # "/" so that namespaced identifiers stored as e.g. "demo/model-name"
+            # still match when LM Studio exposes the model by modelKey alone
+            # ("model-name").  This mirrors the fallback in probe_lmstudio_for_model.
+            serving_lower = serving_name.lower()
+            loaded_lower = {n.lower() for n in loaded_serving_names}
+            serving_loaded = bool(serving_name) and (
+                serving_lower in loaded_lower
+                or (
+                    "/" in serving_lower
+                    and serving_lower.rsplit("/", 1)[-1] in loaded_lower
+                )
+            )
             selectable = status_ok and serving_loaded
             if selectable:
                 selectable_reason = (
@@ -108,24 +126,45 @@ def _serialize_readiness(
             and model.publish_status == "published"
             and bool(model.published_model_name)
         )
+        # A fine-tuned row is publishable once a manifest exists.  The real
+        # LM Studio model name lives in `published_model_name` after publish,
+        # but while still `publish_ready` it is only the candidate name in
+        # lineage (`serving_model_name` holds the `artifact::` placeholder).
+        artifacts_ready = model.publish_status in {"published", "publish_ready"}
+        serving_name = (
+            model.published_model_name
+            or _lineage_value(model, "candidate_published_model_name")
+            or ""
+        )
         if loaded_serving_names is None:
+            # No probe available — status-only check (unit tests / offline).
             selectable = published_ok
         else:
-            serving_name = model.published_model_name or ""
-            selectable = published_ok and bool(serving_name) and serving_name in loaded_serving_names
+            loaded_lower = {n.lower() for n in loaded_serving_names}
+            serving_lower = serving_name.lower()
+            serving_loaded = bool(serving_name) and (
+                serving_lower in loaded_lower
+                or (
+                    "/" in serving_lower
+                    and serving_lower.rsplit("/", 1)[-1] in loaded_lower
+                )
+            )
+            # Self-healing: any fine-tuned row whose serving target is actually
+            # loaded in LM Studio is selectable, even if an earlier publish
+            # probe raced the load and left the row at `publish_ready`.
+            # `list_models` promotes such rows to "published" so the persisted
+            # state converges to what LM Studio is already serving.
+            selectable = artifacts_ready and serving_loaded
         runtime_ready = selectable
         if selectable:
             selectable_reason = "fine-tuned model has a published serving target loaded in LM Studio"
             runtime_ready_reason = selectable_reason
-        elif published_ok and loaded_serving_names is not None:
-            selectable_reason = (
-                "Fine-tuned model is staged in LM Studio's models dir but not yet loaded. "
-                "Click Load in LM Studio."
-            )
-            runtime_ready_reason = selectable_reason
-        elif model.publish_status == "publish_ready":
+        elif artifacts_ready and loaded_serving_names is not None:
             selectable_reason = "Adapter artifacts and a publish manifest are ready, but no LM Studio serving model has been loaded yet."
-            runtime_ready_reason = "Automatic LM Studio import is not implemented, so this fine-tuned model remains artifact-only until a real serving model exists."
+            runtime_ready_reason = (
+                "Load the fused model in LM Studio (publish auto-loads it); the "
+                "platform marks the row selectable once LM Studio reports it loaded."
+            )
         elif model.publish_status == "failed":
             selectable_reason = "fine-tuned model publish preparation failed"
             runtime_ready_reason = (
@@ -362,7 +401,7 @@ def _serialize_model(
 ) -> dict[str, Any]:
     effective_serving_name = model.serving_model_name
     if model.source_type == "fine_tuned":
-        effective_serving_name = model.published_model_name
+        effective_serving_name = model.published_model_name or _lineage_value(model, "candidate_published_model_name")
     readiness = _serialize_readiness(model, loaded_serving_names=loaded_serving_names)
     artifact_metadata = (
         dict(artifact.metadata_json or {}) if artifact is not None else {}
@@ -493,7 +532,42 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
     settings = get_settings()
     configured_default_name = (settings.lmstudio_chat_model or "").strip()
     if not configured_default_name:
-        # No LM Studio chat model configured yet; nothing to seed.
+        # No LM Studio chat model configured yet — clean up any stale
+        # "Default LM Studio model" row left over from a previous run.
+        # Without this, a prior auto-load that wrote an unrelated model
+        # name (including a now-deleted FT model name) into the default
+        # row would survive forever, colliding with real FT rows in the
+        # /v1/models shim.
+        stale_defaults = session.scalars(
+            select(ModelRegistryRecord).where(
+                ModelRegistryRecord.source_type == "base",
+                ModelRegistryRecord.display_name == "Default LM Studio model",
+            )
+        ).all()
+        # Also remove any base row whose serving_model_name happens to
+        # match a registered fine-tuned model's serving/published name —
+        # this is always corruption since base and FT rows must never
+        # share a serving target.
+        ft_names: set[str] = set()
+        for ft_row in session.scalars(
+            select(ModelRegistryRecord).where(
+                ModelRegistryRecord.source_type == "fine_tuned"
+            )
+        ):
+            for _n in (ft_row.serving_model_name, ft_row.published_model_name):
+                if _n:
+                    ft_names.add(_n.lower())
+        for row in stale_defaults:
+            session.delete(row)
+        for row in session.scalars(
+            select(ModelRegistryRecord).where(
+                ModelRegistryRecord.source_type == "base"
+            )
+        ):
+            sname = (row.serving_model_name or "").lower()
+            if sname and sname in ft_names:
+                session.delete(row)
+        session.commit()
         return []
 
     defaults = [
@@ -577,6 +651,56 @@ def ensure_default_models(session: Session) -> list[dict[str, Any]]:
     return [_serialize_model(model, None) for model in models]
 
 
+def _autopromote_loaded_fine_tuned(
+    session: Session,
+    models: list[ModelRegistryRecord],
+    loaded: frozenset[str],
+) -> None:
+    """Promote `publish_ready` fine-tuned rows that LM Studio already serves.
+
+    A publish probe can race ahead of the LM Studio load (or the reviewer can
+    load the model manually after the fact), stranding the row at
+    `publish_ready` even though its fused model is loaded. When we see such a
+    row whose candidate name is in the loaded set, promote it to `published`
+    so the persisted state matches what LM Studio is serving — the same
+    transition `publish_training_job_artifacts` makes on a successful probe.
+    """
+    if not loaded:
+        return
+    loaded_lower = {n.lower() for n in loaded}
+    promoted = False
+    for model in models:
+        if model.source_type != "fine_tuned":
+            continue
+        if model.publish_status != "publish_ready":
+            continue
+        candidate = _lineage_value(model, "candidate_published_model_name") or ""
+        if not candidate:
+            continue
+        candidate_lower = candidate.lower()
+        if not (
+            candidate_lower in loaded_lower
+            or (
+                "/" in candidate_lower
+                and candidate_lower.rsplit("/", 1)[-1] in loaded_lower
+            )
+        ):
+            continue
+        model.publish_status = "published"
+        model.status = "active"
+        model.published_model_name = candidate
+        model.serving_model_name = candidate
+        promoted = True
+        logger.info(
+            "self-heal: promoted fine-tuned model %s to published "
+            "(LM Studio already serves %r)",
+            model.id,
+            candidate,
+        )
+    if promoted:
+        session.commit()
+
+
 def list_models(session: Session) -> list[dict[str, Any]]:
     from api.services.model_registry.lmstudio_register import loaded_lmstudio_models
 
@@ -588,6 +712,7 @@ def list_models(session: Session) -> list[dict[str, Any]]:
             ModelRegistryRecord.created_at.desc(), ModelRegistryRecord.id.desc()
         )
     ).all()
+    _autopromote_loaded_fine_tuned(session, list(models), loaded)
     artifact_ids = [
         model.artifact_id for model in models if model.artifact_id is not None
     ]
@@ -614,6 +739,8 @@ def list_models(session: Session) -> list[dict[str, Any]]:
 
 
 def get_model(session: Session, model_id: str) -> dict[str, Any] | None:
+    from api.services.model_registry.lmstudio_register import loaded_lmstudio_models
+
     model = session.get(ModelRegistryRecord, model_id)
     if model is None:
         return None
@@ -622,7 +749,9 @@ def get_model(session: Session, model_id: str) -> dict[str, Any] | None:
         if model.artifact_id
         else None
     )
-    return _serialize_model(model, artifact)
+    loaded = loaded_lmstudio_models(base_url=get_settings().lmstudio_base_url)
+    _autopromote_loaded_fine_tuned(session, [model], loaded)
+    return _serialize_model(model, artifact, loaded_serving_names=loaded)
 
 
 def create_training_job(
@@ -1307,62 +1436,84 @@ def _lms_load_model(candidate_model_name: str) -> bool:
         )
         return False
 
-    # Discover the proper modelKey from lms ls rather than guessing.
-    try:
-        ls_result = subprocess.run(
-            [lms, "ls", "--json"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("publish_auto_load: lms ls failed: %s", exc)
-        return False
-    if ls_result.returncode != 0:
-        logger.warning("publish_auto_load: lms ls exit %d: %s",
-                       ls_result.returncode, ls_result.stderr.strip()[:300])
-        return False
-
     import json as _json
-    try:
-        listing = _json.loads(ls_result.stdout)
-    except _json.JSONDecodeError as exc:
-        logger.warning("publish_auto_load: lms ls non-JSON: %s", exc)
-        return False
-    if not isinstance(listing, list):
-        logger.warning("publish_auto_load: lms ls unexpected shape")
-        return False
+    import time as _time
 
-    # Find an LLM entry whose modelKey or indexedModelIdentifier matches.
-    target = None
-    for entry in listing:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("type") != "llm":
-            continue
-        key = str(entry.get("modelKey") or "")
-        indexed = str(entry.get("indexedModelIdentifier") or "")
-        if key == candidate_model_name or indexed == candidate_model_name:
-            target = entry
+    # Normalise candidate: strip optional namespace, lowercase for matching.
+    candidate_lower = candidate_model_name.lower()
+    candidate_basename = candidate_lower.rsplit("/", 1)[-1]
+
+    def _discover_target() -> dict[str, Any] | None:
+        """Return the matching `lms ls` entry, or None if not listed yet."""
+        try:
+            ls_result = subprocess.run(
+                [lms, "ls", "--json"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.warning("publish_auto_load: lms ls failed: %s", exc)
+            return None
+        if ls_result.returncode != 0:
+            logger.warning("publish_auto_load: lms ls exit %d: %s",
+                           ls_result.returncode, ls_result.stderr.strip()[:300])
+            return None
+        try:
+            listing = _json.loads(ls_result.stdout)
+        except _json.JSONDecodeError as exc:
+            logger.warning("publish_auto_load: lms ls non-JSON: %s", exc)
+            return None
+        if not isinstance(listing, list):
+            logger.warning("publish_auto_load: lms ls unexpected shape")
+            return None
+        # Find an LLM entry whose modelKey or indexedModelIdentifier matches
+        # (case-insensitive, with or without namespace).
+        for entry in listing:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") != "llm":
+                continue
+            key = str(entry.get("modelKey") or "").lower()
+            indexed = str(entry.get("indexedModelIdentifier") or "").lower()
+            indexed_basename = indexed.rsplit("/", 1)[-1]
+            if (
+                key == candidate_lower
+                or key == candidate_basename
+                or indexed == candidate_lower
+                or indexed_basename == candidate_basename
+            ):
+                return entry
+        return None
+
+    # LM Studio's model indexer may not have registered the freshly-placed
+    # directory yet, so `lms ls` can briefly omit it right after publish.
+    # Retry discovery a few times before giving up, so the first publish
+    # auto-loads reliably instead of stranding the row at publish_ready.
+    target: dict[str, Any] | None = None
+    for attempt in range(_LMS_LOAD_DISCOVERY_ATTEMPTS):
+        target = _discover_target()
+        if target is not None:
             break
+        if attempt < _LMS_LOAD_DISCOVERY_ATTEMPTS - 1:
+            _time.sleep(_LMS_LOAD_DISCOVERY_DELAY_SECONDS)
     if target is None:
         logger.warning(
-            "publish_auto_load: %r not found in lms ls; indexed LLMs: %s",
+            "publish_auto_load: %r not found in lms ls after %d attempt(s); "
+            "load it manually in LM Studio — the row self-heals on the next "
+            "model listing once LM Studio reports it loaded",
             candidate_model_name,
-            [e.get("modelKey") for e in listing
-             if isinstance(e, dict) and e.get("type") == "llm"],
+            _LMS_LOAD_DISCOVERY_ATTEMPTS,
         )
         return False
 
-    model_key = str(target.get("modelKey") or "")
-    if not model_key:
-        logger.warning("publish_auto_load: selected model has no modelKey; aborting")
+    # Use indexedModelIdentifier (full path) for lms load --exact.
+    model_path = str(target.get("indexedModelIdentifier") or target.get("modelKey") or "")
+    if not model_path:
+        logger.warning("publish_auto_load: selected model has no path; aborting")
         return False
 
-    indexed_id = str(target.get("indexedModelIdentifier") or "")
-    logger.info("publish_auto_load: loading %r into LM Studio...", model_key)
+    logger.info("publish_auto_load: loading %r into LM Studio...", model_path)
     try:
-        cmd = [lms, "load", model_key, "--gpu", "max", "--exact"]
-        if indexed_id:
-            cmd.extend(["--identifier", indexed_id])
+        cmd = [lms, "load", model_path, "--gpu", "max", "--exact"]
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300,
         )
@@ -1376,7 +1527,16 @@ def _lms_load_model(candidate_model_name: str) -> bool:
             result.stderr.strip()[:300],
         )
         return False
-    logger.info("publish_auto_load: %r loaded successfully", model_key)
+    logger.info("publish_auto_load: %r loaded successfully", model_path)
+    # Invalidate caches so the freshly-loaded FT model is immediately
+    # visible to readiness/chat resolution instead of waiting 30s.
+    from api.services.model_registry.lmstudio_register import invalidate_loaded_cache
+    invalidate_loaded_cache()
+    try:
+        from api.routers.models import invalidate_resolve_cache
+        invalidate_resolve_cache()
+    except Exception:
+        pass  # routers may not be importable in some test contexts
     return True
 
 

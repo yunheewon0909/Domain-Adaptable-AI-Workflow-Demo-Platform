@@ -83,6 +83,72 @@ def _add_artifact_only_fine_tuned_model() -> str:
         return record.id
 
 
+def _add_loaded_publish_ready_fine_tuned_model() -> str:
+    """A publish_ready fine-tuned row whose candidate is loaded in LM Studio.
+
+    Mirrors the production race where a publish probe ran before LM Studio
+    finished loading the fused model, stranding the row at publish_ready even
+    though LM Studio is now serving it. The conftest fake reports
+    ``qwen3.5-4b-mlx`` as loaded, so this row should self-heal to selectable.
+    """
+    with Session(get_engine()) as session:
+        record = ModelRegistryRecord(
+            id="model-ft-loaded-publish-ready",
+            display_name="Loaded publish-ready fine-tuned",
+            source_type="fine_tuned",
+            base_model_name="qwen3.5:4b",
+            serving_model_name="artifact::ft-job-loaded",
+            published_model_name=None,
+            status="artifact_ready",
+            publish_status="publish_ready",
+            tags_json=["fine_tuned", "test"],
+            lineage_json={"candidate_published_model_name": "qwen3.5-4b-mlx"},
+            description="publish_ready row that LM Studio already serves.",
+        )
+        session.add(record)
+        session.commit()
+        return record.id
+
+
+def test_loaded_publish_ready_fine_tuned_self_heals_to_selectable(
+    client: TestClient,
+) -> None:
+    model_id = _add_loaded_publish_ready_fine_tuned_model()
+
+    # Listing the registry should both report the row selectable and persist
+    # the promotion to published (so state converges to what LM Studio serves).
+    listing = client.get("/models").json()
+    healed = next(item for item in listing if item["id"] == model_id)
+    assert healed["readiness"]["selectable"] is True
+    assert healed["publish_status"] == "published"
+    assert healed["published_model_name"] == "qwen3.5-4b-mlx"
+
+    with Session(get_engine()) as session:
+        row = session.get(ModelRegistryRecord, model_id)
+        assert row is not None
+        assert row.publish_status == "published"
+        assert row.status == "active"
+        assert row.published_model_name == "qwen3.5-4b-mlx"
+
+
+def test_chat_completion_works_against_self_healed_fine_tuned(
+    client_with_llm: TestClient,
+) -> None:
+    _add_loaded_publish_ready_fine_tuned_model()
+
+    exposed = next(
+        item
+        for item in client_with_llm.get("/v1/models").json()["data"]
+        if item["serving_model_name"] == "qwen3.5-4b-mlx"
+    )
+    response = client_with_llm.post(
+        "/v1/chat/completions",
+        json={"model": exposed["id"], "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert response.status_code == 200
+    assert response.json()["x_domain_platform"]["serving_model_name"] == "qwen3.5-4b-mlx"
+
+
 def test_v1_models_exposes_only_selectable_rows(client: TestClient) -> None:
     response = client.get("/v1/models")
 
