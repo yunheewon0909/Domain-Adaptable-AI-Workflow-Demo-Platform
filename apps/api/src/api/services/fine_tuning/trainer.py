@@ -112,13 +112,38 @@ def _config_id_matches(model_dir: Path, norm_model_base: str) -> bool:
     return False
 
 
-def _scan_lmstudio_models_for_key(model_key: str) -> str | None:
+def _is_under_namespace(path: Path, models_root: Path, namespace: str | None) -> bool:
+    """Return True if `path` lives directly under `models_root/<namespace>/`.
+
+    Used to skip the platform's own published fine-tuned models when resolving
+    a *base* model to train on.  Publishing places fused FT models under
+    `<models_root>/<namespace>/<name>` (namespace defaults to "demo"), and
+    those dirs fuzzy-match the base name they were derived from — so without
+    this guard a retrain of "liquid/lfm2.5-1.2b" can resolve to the previous
+    fine-tune and train on top of it instead of the clean base.
+    """
+    if not namespace:
+        return False
+    try:
+        rel = path.resolve().relative_to(models_root.resolve())
+    except (ValueError, OSError):
+        return False
+    return len(rel.parts) >= 1 and rel.parts[0] == namespace
+
+
+def _scan_lmstudio_models_for_key(
+    model_key: str, *, exclude_namespace: str | None = None
+) -> str | None:
     """Walk ~/.lmstudio/models to find an MLX directory matching model_key.
 
     Called when lms ls reports a path that doesn't exist on disk, which happens
     when LM Studio's index uses a different naming convention than the actual
     directory (e.g. modelKey=liquid/lfm2.5-1.2b but the real dir is
     lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit).
+
+    `exclude_namespace` (e.g. the platform publish namespace "demo") skips any
+    dir under `<models_root>/<exclude_namespace>/` so we never resolve a base
+    model to one of the platform's own published fine-tunes.
 
     Two-pass strategy:
     1. Parse config.json identity fields (_name_or_path, _hf_model_id, …)
@@ -139,8 +164,11 @@ def _scan_lmstudio_models_for_key(model_key: str) -> str | None:
     valid_dirs: list[Path] = []
     for glob_pattern in ("*/", "*/*/"):
         for subdir in sorted(models_root.glob(glob_pattern)):
-            if subdir.is_dir() and _is_mlx_model_dir(subdir):
-                valid_dirs.append(subdir)
+            if not (subdir.is_dir() and _is_mlx_model_dir(subdir)):
+                continue
+            if _is_under_namespace(subdir, models_root, exclude_namespace):
+                continue
+            valid_dirs.append(subdir)
 
     # Pass 1: config.json identity fields
     for candidate in valid_dirs:
@@ -155,7 +183,9 @@ def _scan_lmstudio_models_for_key(model_key: str) -> str | None:
     return None
 
 
-def _resolve_lmstudio_model_path(model_key: str) -> str | None:
+def _resolve_lmstudio_model_path(
+    model_key: str, *, exclude_namespace: str | None = None
+) -> str | None:
     """Resolve an LM Studio modelKey (e.g. `qwen3.5-4b-mlx`) to the
     absolute on-disk path of its MLX repo directory.
 
@@ -211,7 +241,12 @@ def _resolve_lmstudio_model_path(model_key: str) -> str | None:
         rel_path = str(entry.get("path") or "").strip()
         if not rel_path:
             continue
-        absolute = Path.home() / ".lmstudio" / "models" / rel_path
+        models_root = Path.home() / ".lmstudio" / "models"
+        absolute = models_root / rel_path
+        # Never resolve a base model to one of the platform's own published
+        # fine-tunes (placed under <models_root>/<exclude_namespace>/).
+        if _is_under_namespace(absolute, models_root, exclude_namespace):
+            break
         if _is_mlx_model_dir(absolute):
             return str(absolute)
         # lms ls matched model_key but the path field is stale/wrong.
@@ -223,7 +258,9 @@ def _resolve_lmstudio_model_path(model_key: str) -> str | None:
     # The lms ls listing matched model_key but the reported path doesn't exist
     # on disk (LM Studio's index can use a different naming convention than the
     # actual directory). Walk ~/.lmstudio/models to find the real location.
-    return _scan_lmstudio_models_for_key(model_key)
+    return _scan_lmstudio_models_for_key(
+        model_key, exclude_namespace=exclude_namespace
+    )
 
 
 def resolve_trainer_model_name(
@@ -237,7 +274,14 @@ def resolve_trainer_model_name(
     # If the user picked a base model that LM Studio already has on disk,
     # train on that exact local copy. Avoids silently swapping a 4B
     # picker selection for a 0.5B HF checkpoint via the env map.
-    local_path = _resolve_lmstudio_model_path(base_model_name)
+    #
+    # Exclude the platform's own publish namespace so a retrain of an
+    # already-published base never resolves to the previous fine-tune (which
+    # lives under <models_dir>/<mlx_model_namespace>/ and fuzzy-matches the
+    # base name it was derived from) and trains on top of it.
+    local_path = _resolve_lmstudio_model_path(
+        base_model_name, exclude_namespace=settings.mlx_model_namespace
+    )
     if local_path:
         return local_path
     model_map = _parse_model_map(settings.ft_trainer_model_map_json)

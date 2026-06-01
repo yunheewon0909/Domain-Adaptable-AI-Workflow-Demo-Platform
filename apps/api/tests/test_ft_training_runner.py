@@ -209,3 +209,49 @@ def test_small_dataset_autoscale_iters_and_lr() -> None:
     )
     assert override.mlx_iters == 200
     assert override.learning_rate == 2e-4
+
+
+def _make_mlx_dir(path: Path, name_or_path: str) -> None:
+    """Create a minimal directory that _is_mlx_model_dir() accepts."""
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "config.json").write_text(
+        '{"_name_or_path": "%s"}' % name_or_path, encoding="utf-8"
+    )
+    (path / "model.safetensors").write_text("stub", encoding="utf-8")
+
+
+def test_scan_skips_publish_namespace_when_resolving_base(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Resolving a base model must never pick the platform's own published
+    fine-tune.
+
+    Regression for: retraining `liquid/lfm2.5-1.2b` resolved to the previously
+    published FT under `~/.lmstudio/models/demo/...` (it fuzzy-matches the base
+    name and sorts before `lmstudio-community/`), so the retrain trained on top
+    of the old fine-tune instead of the clean base.
+    """
+    from api.services.fine_tuning import trainer
+
+    models_root = tmp_path / ".lmstudio" / "models"
+    # Clean base (the correct target) and a published FT derived from it.
+    _make_mlx_dir(
+        models_root / "lmstudio-community" / "LFM2.5-1.2B-Instruct-MLX-4bit",
+        "lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit",
+    )
+    _make_mlx_dir(
+        models_root / "demo" / "lfm2.5-1.2b_Heewon_Platform_-_Final",
+        "demo/lfm2.5-1.2b_Heewon_Platform_-_Final",
+    )
+    monkeypatch.setattr(trainer.Path, "home", classmethod(lambda cls: tmp_path))
+
+    # Without the guard, "demo/" sorts first and would win the fuzzy match.
+    leaked = trainer._scan_lmstudio_models_for_key("liquid/lfm2.5-1.2b")
+    assert leaked is not None and "demo" in leaked  # documents the old behavior
+
+    resolved = trainer._scan_lmstudio_models_for_key(
+        "liquid/lfm2.5-1.2b", exclude_namespace="demo"
+    )
+    assert resolved is not None
+    assert "demo" not in resolved
+    assert resolved.endswith("lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit")
