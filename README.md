@@ -67,7 +67,7 @@ uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 To launch in the background and capture logs:
 
 ```bash
-... uvicorn api.main:app --host 0.0.0.0 --port 8000 > /tmp/uvicorn.log 2>&1 &
+uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000 > /tmp/uvicorn.log 2>&1 &
 ```
 
 > **Restart after editing Python.** The server runs without `--reload`. Static `/demo` assets are read from disk per request (cache-busted via `?v=N` in `index.html`), but changes to trainer/services/routers only take effect after restarting uvicorn. A stale server silently running old code is the #1 source of "my fix didn't work".
