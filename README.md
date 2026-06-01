@@ -6,50 +6,86 @@ Mac-native FastAPI monolith for **MLX QLoRA fine-tuning with reviewer-curated RA
 2. Ask LM Studio to generate **Q/A pairs** grounded in that collection (`POST /ft-datasets/from-rag-collection`).
 3. Lock the dataset version and enqueue a real **MLX QLoRA** training job.
 4. The trainer shells out to brew-installed `mlx_lm.lora` + `mlx_lm.fuse` and writes a fused MLX model under `data/model_artifacts/<job_id>/trainer_output/fused_model/`.
-5. The publish flow symlinks the fused model into `~/.lmstudio/models/<namespace>/<name>/` and probes LM Studio. Once you load it in LM Studio, the platform flips the registry row from `artifact_ready` to selectable, and the new model becomes available through the OpenAI-compatible shim at `/v1/chat/completions`.
+5. The publish flow symlinks the fused model into `~/.lmstudio/models/<namespace>/<name>/` and attempts to auto-load it via the `lms` CLI. Once LM Studio reports the model loaded, the platform flips the registry row to selectable and the new model is reachable through the OpenAI-compatible shim at `/v1/chat/completions`. If auto-load can't find it yet, load it manually in LM Studio — the registry row self-heals on the next model listing.
+6. Optionally **verify** the result: an LLM-as-Judge scores the fine-tuned model against its base, with and without RAG (Step 5).
 
-A static `/demo` console walks reviewers through a **3-step wizard**: Knowledge base → Train (optional) → Chat. Same screen, plain-language explainers, embedded chat. Power users can point [lobe-chat](https://github.com/lobehub/lobe-chat) or [Open WebUI](https://github.com/open-webui/open-webui) at `/v1/*` for a richer chat surface.
+A static `/demo` console walks reviewers through a wizard: **Knowledge base → Generate Q&A pairs → Review & edit → Fine-tune → Verify → Chat** (steps 2–5 are optional). Same screen, plain-language explainers, embedded chat. Power users can point [lobe-chat](https://github.com/lobehub/lobe-chat) or [Open WebUI](https://github.com/open-webui/open-webui) at `/v1/*` for a richer chat surface.
 
 ## Runtime shape (Mac-native)
 
-- **Python 3.14** (`.python-version`).
+- **Python 3.14** (`.python-version`), managed by **uv** (workspace root `pyproject.toml`; the app package is `apps/api/`).
 - **Postgres** runs locally via `brew services start postgresql@16`. No `compose.yml`.
-- **LM Studio** serves chat + embedding models locally at `http://127.0.0.1:1234/v1`. Load the chat model + (optional) embedding model in LM Studio's Local Server tab before starting the API.
+- **LM Studio** serves chat + embedding models locally at `http://127.0.0.1:1234/v1`, and provides the `lms` CLI the platform uses to load/unload models. It is the only supported serving runtime.
 - **brew `mlx-lm`** provides the `mlx_lm.lora` and `mlx_lm.fuse` CLIs the trainer shells out to.
-- Single FastAPI app under `apps/api/` (uv workspace). No separate worker process — runner modules are dispatched in-process. Long-running MLX subprocesses stream their stdout/stderr directly to `data/model_artifacts/<job_id>/trainer_output/training.log`.
+- Single FastAPI app under `apps/api/` (uv workspace). No separate worker process: an in-process **background dispatcher** (started in the app lifespan, on by default) polls the queue and runs training jobs. Long-running MLX subprocesses stream their stdout/stderr directly to `data/model_artifacts/<job_id>/trainer_output/training.log`.
 
-## Prerequisites
+## Starting the service (runbook for humans and agents)
+
+Follow these steps in order. Each step is independently checkable.
+
+### 1. Install host dependencies (one time)
 
 ```bash
 brew install postgresql@16 mlx mlx-lm uv
 brew services start postgresql@16
-createdb industrial_ai
+createdb industrial_ai          # ok if it already exists
+uv sync --dev                   # run from the repo root
 ```
 
-Install [LM Studio](https://lmstudio.ai/) and load:
+Install [LM Studio](https://lmstudio.ai/), then in its UI download + load:
 
-- a chat model (e.g. `lmstudio-community/Qwen2.5-7B-Instruct-MLX-4bit`)
-- an embedding model (e.g. `mxbai-embed-large-mlx`) for collection retrieval previews
+- a **chat model** (e.g. `liquid/lfm2.5-1.2b` or `lmstudio-community/Qwen2.5-7B-Instruct-MLX-4bit`)
+- an **embedding model** (e.g. `text-embedding-nomic-embed-text-v1.5`) for RAG retrieval previews
 
-## Quick start
+Confirm LM Studio's local server is up and lists your models:
 
 ```bash
-uv sync --dev
+curl -s http://127.0.0.1:1234/v1/models | jq -r '.data[].id'
+```
 
+### 2. Set environment variables
+
+**The app does not read `.env` automatically** — you must export these in the shell that launches uvicorn (or wrap them inline on the command). `.env.example` documents every knob; the essentials:
+
+```bash
 export API_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/industrial_ai
 export LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-export LMSTUDIO_CHAT_MODEL=lmstudio-community/Qwen2.5-7B-Instruct-MLX-4bit
-export LMSTUDIO_EMBED_MODEL=mxbai-embed-large-mlx
+export LMSTUDIO_CHAT_MODEL=liquid/lfm2.5-1.2b              # must match an id loaded in LM Studio
+export LMSTUDIO_EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
+export LMSTUDIO_TIMEOUT_SECONDS=1200                       # MLX generations can be slow
+```
 
+`LMSTUDIO_CHAT_MODEL` must exactly match an id from step 1's `curl` (case included) so it becomes the default selectable model on startup. `MLX_MODEL_NAMESPACE` defaults to `demo` (where published fine-tunes are placed under `~/.lmstudio/models/demo/`).
+
+### 3. Apply migrations + launch the API
+
+```bash
 uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head
 uv run --project apps/api uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/demo`, or hit the API directly:
+To launch in the background and capture logs:
 
 ```bash
-curl -s http://127.0.0.1:8000/health
-curl -s http://127.0.0.1:8000/v1/models
+... uvicorn api.main:app --host 0.0.0.0 --port 8000 > /tmp/uvicorn.log 2>&1 &
+```
+
+> **Restart after editing Python.** The server runs without `--reload`. Static `/demo` assets are read from disk per request (cache-busted via `?v=N` in `index.html`), but changes to trainer/services/routers only take effect after restarting uvicorn. A stale server silently running old code is the #1 source of "my fix didn't work".
+
+### 4. Verify it's up
+
+```bash
+curl -s http://127.0.0.1:8000/health                       # {"status":"ok"}
+curl -s http://127.0.0.1:8000/v1/models | jq               # selectable models only
+```
+
+Then open the wizard at `http://127.0.0.1:8000/demo`.
+
+### Stopping / restarting
+
+```bash
+pkill -f "uvicorn api.main:app"     # stop
+# then re-run the launch command from step 3
 ```
 
 ## The headline flow: QLoRA on a curated RAG collection
@@ -83,9 +119,16 @@ JOB=$(curl -s -X POST http://127.0.0.1:8000/ft-training-jobs \
 curl -s http://127.0.0.1:8000/ft-training-jobs/$(echo "$JOB" | jq -r .id)
 
 # 5. After training, publish — the platform symlinks the fused model into
-# ~/.lmstudio/models/ and probes LM Studio's /v1/models. Load the model in
-# LM Studio (UI) and the registry row flips to selectable.
+# ~/.lmstudio/models/ and tries to auto-load it via the lms CLI. If auto-load
+# can't find it yet, load it in LM Studio (UI); the registry row self-heals to
+# selectable on the next model listing.
 curl -s -X POST http://127.0.0.1:8000/ft-training-jobs/$(echo "$JOB" | jq -r .id)/publish
+
+# 6. (optional) Verify FT vs base with an LLM-as-Judge — poll for the result
+VJOB=$(curl -s -X POST http://127.0.0.1:8000/inference/verify-job \
+  -H 'Content-Type: application/json' \
+  -d "{\"verifier_model\":\"$LMSTUDIO_CHAT_MODEL\",\"fine_tuned_model\":\"<published_name>\",\"base_model\":\"$LMSTUDIO_CHAT_MODEL\",\"question\":\"<an in-domain question>\"}" | jq -r .job_id)
+curl -s http://127.0.0.1:8000/inference/verify-job/$VJOB | jq
 ```
 
 ## Fine-tuning smoke test (tiny, artifact-only)
@@ -105,6 +148,8 @@ ls data/model_artifacts/<job_id>/trainer_output/
 The smoke flow validates the **artifact pipeline**, not model quality. Smoke jobs use `hf-internal/testing-tiny-random-gpt2` as the trainer model and stay in `artifact_ready` until LM Studio actually loads the fused model.
 
 ## OpenAI-compatible shim (`/v1/*`)
+
+The `model` values below (`Qwen2.5 7B - default platform model`) are illustrative — the exposed id is derived from whatever you loaded as `LMSTUDIO_CHAT_MODEL`. Always read the real id from `GET /v1/models` first; with the runbook's `liquid/lfm2.5-1.2b` it surfaces as `liquid/lfm2.5-1.2b - default platform model`.
 
 ```bash
 curl -s http://127.0.0.1:8000/v1/models | jq
@@ -150,22 +195,33 @@ Limits: usage token counts are placeholders, only `readiness.selectable == true`
 
 ### Queue
 
-The `jobs` table is the queue and lifecycle source of truth (`queued → running → succeeded/failed`). `ft_training_jobs` has a richer phase model (`queued → preparing_data → training → packaging → registering → succeeded/failed`). There is no separate worker process; runner modules are dispatched in-process. Long MLX subprocesses stream stdout/stderr directly to `training.log` to keep memory bounded.
+The `jobs` table is the queue and lifecycle source of truth (`queued → running → succeeded/failed`). `ft_training_jobs` has a richer phase model (`queued → preparing_data → training → packaging → registering → succeeded/failed`) and a `backing_job_id` pointing at its `jobs` row. There is no separate worker process: an in-process **background dispatcher** (started in the app lifespan, on by default, set `FT_BACKGROUND_DISPATCH=false` to disable — tests do) polls the queue and runs jobs. Long MLX subprocesses stream stdout/stderr directly to `training.log` to keep memory bounded.
 
 ### Readiness gating
 
-`artifact_ready` (reviewable, not selectable) → `publish_ready` (manifest exists) → `selectable` (LM Studio reports the fused model loaded). The platform places the fused model under `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` (defaults to `demo/<job_id>` when `MLX_MODEL_NAMESPACE` is unset) but does not auto-load — you click "Load" in LM Studio's UI, then the platform's probe (which drops its 30s cache before each publish call) flips the registry row to `published`/`selectable`.
+`artifact_ready` (reviewable, not selectable) → `publish_ready` (fused model + manifest on disk) → `published`/`selectable` (LM Studio reports the fused model loaded). The platform places the fused model under `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` (namespace defaults to `demo`) and **attempts to auto-load it via the `lms` CLI** during publish, retrying discovery a few times in case LM Studio hasn't indexed the new directory yet. If auto-load can't find it, load it manually in LM Studio — `list_models`/`get_model` probe the loaded set and **self-heal** a `publish_ready` row to `published` once its name shows up loaded (the chat path rejects non-selectable rows with the row's `selectable_reason`).
 
-`base_model_name` (user-facing serving lineage), `trainer_model_name` (the actual MLX/HF checkpoint used by `mlx_lm.lora`), and `display_name` are intentionally distinct.
+`base_model_name` (user-facing serving lineage), `trainer_model_name` (the actual MLX/HF checkpoint used by `mlx_lm.lora`), and `published_model_name`/`serving_model_name` (what LM Studio serves it as) are intentionally distinct — don't conflate them. When resolving a base model to train from, the platform excludes the publish namespace so a retrain never trains on top of a previously published fine-tune.
+
+### Step 5 verification (LLM-as-Judge)
+
+`POST /inference/verify-job` runs four inferences — fine-tuned and base, each with and without RAG — then has a judge model score them 0–10 (`GET /inference/verify-job/{id}` to poll). It also reports FT-vs-base answer similarity and warns when they're near-identical. On a small base model, out-of-domain questions produce identical greedy output (expected, not a routing bug), so the demo suggests in-domain questions drawn from the fine-tune's training data.
 
 ## Commands
 
 ```bash
+# Type check (basic mode; pyright is the only configured linter)
 uv run pyright -p pyrightconfig.json
-uv run --project apps/api pytest -q apps/api/tests
-uv run --project apps/api pytest -q apps/api/tests/test_ft_training_runner.py
-uv run --project apps/api pytest -q apps/api/tests/test_ft_dataset_from_rag.py
-./scripts/e2e_run_all.sh   # requires API + LM Studio running
+
+# Tests — sqlite-backed and LM-Studio-faked, so no Postgres/LM Studio needed
+uv run --project apps/api pytest -q apps/api/tests                     # all
+uv run --project apps/api pytest -q apps/api/tests/test_ft_training_runner.py   # one file
+uv run --project apps/api pytest -q "apps/api/tests/test_openai_compat.py::test_v1_models_exposes_only_selectable_rows"  # one test
+
+# Smoke + E2E — these require the API + LM Studio actually running
+./scripts/ft_smoke_preflight.sh   # checks mlx-lm CLIs, Metal, LM Studio, artifact dir
+./scripts/ft_smoke_test.sh        # tiny artifact-only training run
+./scripts/e2e_run_all.sh
 ```
 
 ## Open WebUI integration
@@ -199,7 +255,7 @@ Authorized exception: `ml-explore/mlx-lm` (~7k stars). Apple's official MLX QLoR
 │  │  │  ├─ model_registry/    # CRUD + job_runner + lmstudio_register (auto-place fused model)
 │  │  │  └─ rag/               # collections.py (only RAG path)
 │  │  └─ static/
-│  │     ├─ demo/              # vanilla JS reviewer UI (Fine-tuning is the landing mode)
+│  │     ├─ demo/              # vanilla JS reviewer UI (wizard: KB → Q&A → review → fine-tune → verify → chat)
 │  │     └─ openwebui/         # importable Open WebUI tool artifact
 │  └─ tests/
 ├─ scripts/                    # smoke + E2E entrypoints
@@ -221,13 +277,14 @@ Authorized exception: `ml-explore/mlx-lm` (~7k stars). Apple's official MLX QLoR
 ## Limitations
 
 - no auth / multi-user
-- LM Studio model loading is manual (platform symlinks the fused model + probes; LM Studio UI loads it)
+- LM Studio model loading is best-effort: publish auto-loads the fused model via the `lms` CLI when it can discover it, otherwise you load it manually in LM Studio and the registry row self-heals on the next listing
 - collection-managed RAG previews use extracted text, not a full per-collection embedding/index lifecycle
-- async background job runner is deferred — `complete_training_job` currently runs synchronously when invoked
+- verify-job state is in-memory (`_verify_jobs`), so an in-flight Step 5 run is lost on server restart — the UI surfaces this and stops polling rather than hanging
 - markitdown for richer doc parsing is deferred until Python 3.14 onnxruntime wheels exist
 
 ## Versioning
 
+- **Unreleased** (2026-06): publish auto-loads the fused model via the `lms` CLI and `publish_ready` rows self-heal to selectable once LM Studio reports them loaded; Step 5 LLM-as-Judge verification (`/inference/verify-job`); human-readable model naming; small-dataset training auto-scales iters/LR; base-model resolution excludes the publish namespace so retrains don't train on a prior fine-tune.
 - **v0.9.0** (2026-05-23): drop PLC slice + legacy `rag.db` workflow source; rename `ollama_model_name` DB column → `serving_model_name`; add dataset-from-RAG-collection endpoint; LM Studio auto-register fused model; real LM Studio SSE passthrough.
 - **v0.8.0** (2026-05-23): Mac-native transition (drop Docker, drop separate worker process, drop Ollama clients, switch serving to LM Studio, MLX QLoRA via brew `mlx-lm`).
 - See `CHANGELOG.md` for prior milestones.
