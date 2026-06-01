@@ -146,7 +146,23 @@ def invalidate_loaded_cache() -> None:
 
 
 def probe_lmstudio_for_model(*, base_url: str, model_id: str, timeout: float = 5.0) -> bool:
-    """Return True if LM Studio's /v1/models endpoint lists `model_id`."""
+    """Return True if LM Studio's /v1/models endpoint lists `model_id`.
+
+    LM Studio normalises model identifiers to lowercase in its API responses,
+    but publish manifests preserve the original casing from dataset names.
+    Case-insensitive exact match is tried first; if that fails and the id
+    contains a namespace prefix (e.g. "demo/foo"), the bare name is also
+    tried so that locally-placed models (which LM Studio exposes without
+    their directory namespace) are still found.
+    """
     if not model_id:
         return False
-    return model_id in loaded_lmstudio_models(base_url=base_url, timeout=timeout)
+    loaded = loaded_lmstudio_models(base_url=base_url, timeout=timeout)
+    model_id_lower = model_id.lower()
+    if any(model_id_lower == loaded_id.lower() for loaded_id in loaded):
+        return True
+    # Fallback: strip namespace prefix (e.g. "demo/name" → "name")
+    if "/" in model_id_lower:
+        basename = model_id_lower.rsplit("/", 1)[-1]
+        return any(basename == loaded_id.lower() for loaded_id in loaded)
+    return False

@@ -251,6 +251,15 @@
 
         <div id="verify-status" class="text-sm text-muted-fg">Idle.</div>
 
+        <progress id="verify-progress" class="hidden w-full accent-accent h-2" max="5" value="0"></progress>
+
+        <details id="verify-log-wrap" class="hidden text-xs text-muted-fg">
+          <summary class="cursor-pointer select-none">Show inference log</summary>
+          <div id="verify-log" class="mt-2 max-h-48 overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-relaxed space-y-1 font-mono"></div>
+        </details>
+
+        <div id="verify-ft-banner" class="hidden"></div>
+
         <div id="verify-results" class="hidden overflow-x-auto">
           <table class="w-full text-sm border-collapse">
             <thead>
@@ -307,6 +316,18 @@
         <div id="chat-suggestions" class="flex flex-wrap gap-2 text-xs"></div>
 
         <div id="chat-log" class="space-y-3 min-h-[160px] rounded-md border border-border bg-bg p-4 text-sm"></div>
+
+        <!-- Manage fine-tuned models -->
+        <details class="group" id="ft-manage-section">
+          <summary class="cursor-pointer text-xs font-medium text-muted-fg list-none flex items-center justify-between">
+            <span>Manage fine-tuned models</span>
+            <span class="text-xs text-muted-fg group-open:hidden">show</span>
+            <span class="text-xs text-muted-fg hidden group-open:inline">hide</span>
+          </summary>
+          <div id="ft-manage-list" class="mt-2 space-y-1 text-xs text-muted-fg">
+            — no fine-tuned models —
+          </div>
+        </details>
       </section>
 
       <!-- Settings (collapsed) -->
@@ -329,6 +350,6 @@
       </section>
     </main>
 
-    <script src="/demo/assets/app.js?v=13"></script>
+    <script src="/demo/assets/app.js?v=25"></script>
   </body>
 </html>

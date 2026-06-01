@@ -155,8 +155,15 @@ def _auto_load_lmstudio_chat_model() -> None:
         logger.warning("auto_load: no LLM models indexed in LM Studio; skipping")
         return
 
-    # Pick model: prefer configured if indexed, else smallest by sizeBytes
+    # Pick model: prefer configured if indexed, else smallest by sizeBytes.
+    # Track whether the configured model was actually found so we don't
+    # overwrite the registry default row with an unrelated fallback model.
+    # Fine-tuned (published) models must never be selected as the fallback
+    # base model — they share the LM Studio namespace but represent
+    # registry-owned FT artifacts, and writing them into the "Default LM
+    # Studio model" base row creates a collision with the actual FT row.
     target: dict | None = None
+    used_configured = False
     if configured_chat:
         cfg_lower = configured_chat.lower()
         for entry in indexed_llms:
@@ -166,9 +173,43 @@ def _auto_load_lmstudio_chat_model() -> None:
             }
             if cfg_lower in candidates:
                 target = entry
+                used_configured = True
                 break
+
     if target is None:
-        target = min(indexed_llms, key=lambda e: e.get("sizeBytes") or float("inf"))
+        # Collect every FT serving/published name from the registry so we can
+        # filter them out of the smallest-model fallback.  Without this, an
+        # FT model can be the smallest LLM and get picked as the platform
+        # default — overwriting the "Default LM Studio model" row with an FT
+        # name that then collides with the actual FT row in /v1/models.
+        ft_blocklist: set[str] = set()
+        try:
+            with _Session(get_engine()) as _db:
+                for _row in _db.scalars(
+                    select(ModelRegistryRecord).where(
+                        ModelRegistryRecord.source_type == "fine_tuned"
+                    )
+                ):
+                    for _name in (_row.serving_model_name, _row.published_model_name):
+                        if _name:
+                            ft_blocklist.add(_name.lower())
+                            base = _name.lower().rsplit("/", 1)[-1]
+                            ft_blocklist.add(base)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("auto_load: could not load FT blocklist: %s", exc)
+
+        eligible_base = [
+            e for e in indexed_llms
+            if (e.get("modelKey") or "").lower() not in ft_blocklist
+            and (e.get("indexedModelIdentifier") or "").lower() not in ft_blocklist
+            and (e.get("modelKey") or "").lower().rsplit("/", 1)[-1] not in ft_blocklist
+        ]
+        if not eligible_base:
+            logger.warning(
+                "auto_load: no non-FT base models indexed in LM Studio; skipping fallback"
+            )
+            return
+        target = min(eligible_base, key=lambda e: e.get("sizeBytes") or float("inf"))
         logger.info(
             "auto_load: configured model %r not indexed; falling back to %r",
             configured_chat or "(unset)",
@@ -177,21 +218,25 @@ def _auto_load_lmstudio_chat_model() -> None:
 
     model_key = str(target.get("modelKey") or "")
     indexed_id = str(target.get("indexedModelIdentifier") or model_key)
-    serving_name = indexed_id or model_key
+    # Use modelKey (not indexedModelIdentifier) as the serving name because
+    # LM Studio's /v1/models endpoint exposes loaded models by their modelKey,
+    # not by their namespaced indexedModelIdentifier.  Using indexed_id would
+    # produce serving_model_name values like "demo/foo" that the readiness
+    # probe can't match against the /v1/models response.
+    serving_name = model_key
     if not model_key:
         logger.warning("auto_load: selected model has no modelKey; aborting")
         return
 
     # Skip loading if the model is already live in LM Studio
     currently_loaded = loaded_lmstudio_models(base_url=base_url)
-    candidate_ids = {s for s in (model_key, indexed_id) if s}
-    if candidate_ids & set(currently_loaded):
+    candidate_ids = {s.lower() for s in (model_key, indexed_id) if s}
+    loaded_lower = {s.lower() for s in currently_loaded}
+    if candidate_ids & loaded_lower:
         logger.info("auto_load: %r already loaded in LM Studio", serving_name)
     else:
         logger.info("auto_load: loading %r into LM Studio...", model_key)
         cmd = [lms, "load", model_key, "--gpu", "max", "--exact"]
-        if indexed_id and indexed_id != model_key:
-            cmd.extend(["--identifier", indexed_id])
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         except (subprocess.TimeoutExpired, OSError) as exc:
@@ -207,7 +252,27 @@ def _auto_load_lmstudio_chat_model() -> None:
         logger.info("auto_load: %r loaded successfully", serving_name)
         invalidate_loaded_cache()
 
-    # Update "Default LM Studio model" registry row to the actual serving name
+    # Only update the registry's "Default LM Studio model" row when the
+    # OPERATOR-CONFIGURED LMSTUDIO_CHAT_MODEL was indexed and we just loaded
+    # it.  In every other case — model was unset, or the configured one
+    # wasn't found and we fell back to the smallest LLM — leave the registry
+    # untouched.  The fallback is a runtime convenience (so the API has *a*
+    # model usable through the shim), not a config change.  Writing the
+    # fallback name into the registry can corrupt the default row (e.g. by
+    # pointing it at an FT model name) and conflict with real FT rows.
+    if not used_configured:
+        if configured_chat:
+            logger.info(
+                "auto_load: skipping registry update (fallback %r ≠ configured %r)",
+                serving_name,
+                configured_chat,
+            )
+        else:
+            logger.info(
+                "auto_load: skipping registry update (no LMSTUDIO_CHAT_MODEL configured)"
+            )
+        return
+
     with _Session(get_engine()) as db:
         default_row = db.scalar(
             select(ModelRegistryRecord).where(
@@ -257,12 +322,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "marked %d stale training jobs (mid-flight phase, no running backing job) as failed",
                 stale_training,
             )
-    await asyncio.to_thread(_auto_load_lmstudio_chat_model)
-    await asyncio.to_thread(probe_lmstudio_health)
+    # Run LM Studio setup in the background so the API becomes ready
+    # immediately. `lms load` can take minutes; we don't want the server
+    # to be unreachable during that time. The probe + auto-load only
+    # log warnings / mutate the registry — they are safe to defer.
+    async def _bg_lmstudio_setup() -> None:
+        try:
+            await asyncio.to_thread(_auto_load_lmstudio_chat_model)
+        except Exception as exc:  # noqa: BLE001 — best-effort startup task
+            logger.warning("auto_load: background task crashed: %s", exc)
+        try:
+            await asyncio.to_thread(probe_lmstudio_health)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("probe_lmstudio_health: background task crashed: %s", exc)
+
+    bg_setup_task = asyncio.create_task(_bg_lmstudio_setup())
     dispatcher_task, dispatcher_stop = start_dispatcher_task()
     try:
         yield
     finally:
+        if not bg_setup_task.done():
+            bg_setup_task.cancel()
+            try:
+                await bg_setup_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         await stop_dispatcher_task(dispatcher_task, dispatcher_stop)
 
 

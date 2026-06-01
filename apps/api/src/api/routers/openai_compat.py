@@ -6,11 +6,15 @@ import uuid
 from collections.abc import Iterator
 from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from pathlib import Path
+
+from api.config import get_settings
 from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.llm import LLMClient, LLMClientError, LMStudioChatClient
@@ -156,6 +160,77 @@ def _build_prompt(messages: list[ChatMessage]) -> tuple[str, str]:
     return question, context
 
 
+def _resolve_loaded_lmstudio_id(model_name: str) -> str:
+    """Resolve registry casing/namespaced aliases to the actual loaded LM Studio id.
+
+    Fine-tuned model rows preserve display casing, while LM Studio commonly
+    exposes loaded MLX models as lowercase IDs. Sending the registry-cased name
+    directly to LM Studio produces HTTP 400. Prefer the exact /v1/models id.
+    When the model is not loaded, attempt to load it via lms CLI before
+    re-resolving, so the chat path is self-healing after a service restart.
+
+    Uses ``loaded_lmstudio_models`` (the shared, test-mockable loaded-set
+    helper) so tests don't accidentally trigger real LM Studio loads when
+    a chat request targets a model that the mock claims is loaded.
+    """
+    import subprocess
+    import shutil
+
+    from api.services.model_registry.lmstudio_register import (
+        invalidate_loaded_cache,
+        loaded_lmstudio_models,
+    )
+
+    requested = str(model_name or "").strip()
+    if not requested:
+        return requested
+
+    base_url = get_settings().lmstudio_base_url.rstrip("/")
+
+    def _loaded_ids() -> list[str]:
+        try:
+            return list(loaded_lmstudio_models(base_url=base_url))
+        except Exception:
+            return []
+
+    def _match(ids: list[str], target: str) -> str | None:
+        target_l = target.lower()
+        target_base_l = target_l.rsplit("/", 1)[-1]
+        for mid in ids:
+            if mid.lower() == target_l or mid.lower() == target_base_l:
+                return mid
+        for mid in ids:
+            mid_base_l = mid.lower().rsplit("/", 1)[-1]
+            if mid_base_l == target_l or mid_base_l == target_base_l:
+                return mid
+        return None
+
+    ids = _loaded_ids()
+    resolved = _match(ids, requested)
+    if resolved is not None:
+        return resolved
+
+    # Not loaded — try loading via lms CLI using the lowercase modelKey,
+    # which avoids interactive selectors on this Mac.  This best-effort
+    # auto-load is only useful in production; in tests, the mock returns
+    # the model id immediately so we never reach this branch.
+    lms_exe = shutil.which("lms") or str(Path.home() / ".lmstudio" / "bin" / "lms")
+    load_target = requested.lower()
+    try:
+        subprocess.run(
+            [lms_exe, "load", load_target, "--gpu", "max"],
+            capture_output=True, text=True, timeout=300,
+            stdin=subprocess.DEVNULL,
+        )
+        invalidate_loaded_cache()
+    except Exception:
+        pass  # load attempt best-effort; fall back to original name
+
+    ids = _loaded_ids()
+    resolved = _match(ids, requested)
+    return resolved if resolved is not None else requested
+
+
 def _resolve_selectable_model(session: Session, requested_model: str) -> dict[str, Any]:
     requested = requested_model.strip()
     if not requested:
@@ -208,8 +283,8 @@ def _resolve_selectable_model(session: Session, requested_model: str) -> dict[st
     matches_by_serving = [
         model
         for model in models
-        if model.get("serving_model_name") == requested
-        or model.get("published_model_name") == requested
+        if str(model.get("serving_model_name") or "").lower() == requested.lower()
+        or str(model.get("published_model_name") or "").lower() == requested.lower()
     ]
     if not matches_by_serving:
         raise HTTPException(
@@ -285,12 +360,13 @@ def _run_chat_completion(
                 "models can be used through the OpenAI-compatible shim"
             ),
         )
+    lmstudio_model_id = _resolve_loaded_lmstudio_id(str(serving_model_name))
 
     try:
         result = llm_client.generate_answer(
             question=question,
             context=context,
-            model=str(serving_model_name),
+            model=lmstudio_model_id,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
@@ -324,6 +400,7 @@ def _run_chat_completion(
         "x_domain_platform": {
             "registry_model_id": model.get("id"),
             "serving_model_name": serving_model_name,
+            "lmstudio_model_id": lmstudio_model_id,
             "used_fallback": result.used_fallback,
             "actual_model": result.model,
             "source_type": model.get("source_type"),
@@ -523,6 +600,7 @@ def post_v1_chat_completion(
                     "models can be used through the OpenAI-compatible shim"
                 ),
             )
+        lmstudio_model_id = _resolve_loaded_lmstudio_id(str(serving_model_name))
 
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
@@ -532,6 +610,7 @@ def post_v1_chat_completion(
         platform_meta = {
             "registry_model_id": model.get("id"),
             "serving_model_name": serving_model_name,
+            "lmstudio_model_id": lmstudio_model_id,
             "source_type": model.get("source_type"),
             "readiness": model.get("readiness"),
             "rag_collection_id": request.rag_collection_id,
@@ -546,7 +625,7 @@ def post_v1_chat_completion(
                 llm_client=llm_client,
                 question=question,
                 context=context,
-                serving_model_name=str(serving_model_name),
+                serving_model_name=lmstudio_model_id,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 completion_id=completion_id,

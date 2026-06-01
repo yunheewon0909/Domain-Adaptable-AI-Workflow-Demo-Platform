@@ -113,12 +113,15 @@ def test_generate_answer_uses_split_timeout_budget(
     assert timeout.pool == 5.0
 
 
-def test_generate_answer_sends_chat_template_kwargs(
+def test_generate_answer_omits_chat_template_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The LMStudio body must include `chat_template_kwargs.enable_thinking
-    = false` so reasoning-mode models that honor the kwarg (Qwen3, R1) skip
-    the thinking pass. Other models silently ignore the unknown kwarg.
+    """The LMStudio body must NOT include `chat_template_kwargs`.
+
+    It was originally added to disable the thinking pass on reasoning-mode
+    models (Qwen3, R1), but it makes LM Studio return HTTP 400 for non-Qwen
+    models such as `liquid/lfm`, so it was removed (commit 4dabece). This
+    guards against it being reintroduced.
     """
     client = LMStudioChatClient(
         base_url="http://127.0.0.1:1234/v1",
@@ -140,7 +143,7 @@ def test_generate_answer_sends_chat_template_kwargs(
 
     payload = captured["payload"]
     assert isinstance(payload, dict)
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "chat_template_kwargs" not in payload
 
 
 def test_generate_answer_system_prompt_allows_own_knowledge_fallback(

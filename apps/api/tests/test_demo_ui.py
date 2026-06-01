@@ -6,9 +6,9 @@ def test_demo_surface_shows_wizard_steps(client: TestClient) -> None:
 
     assert response.status_code == 200
     text = response.text
-    # 3 wizard steps + settings advanced
+    # Wizard steps (knowledge base → fine-tune → chat) + advanced settings
     assert "Knowledge base" in text
-    assert "Train a model from this collection" in text
+    assert "Fine-tune" in text
     assert "Chat" in text
     assert "Advanced" in text
     # Plain language explainers exist for each step (smoke check)

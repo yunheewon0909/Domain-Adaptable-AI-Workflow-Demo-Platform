@@ -60,8 +60,12 @@ const dom = {
   verifyQuestion: $('verify-question'),
   verifyRunBtn: $('verify-run-btn'),
   verifyStatus: $('verify-status'),
+  verifyProgress: $('verify-progress'),
+  verifyLogWrap: $('verify-log-wrap'),
+  verifyLog: $('verify-log'),
   verifyResults: $('verify-results'),
   verifyResultsBody: $('verify-results-body'),
+  ftManageList: $('ft-manage-list'),
 };
 
 async function fetchJson(path, options = {}) {
@@ -572,6 +576,10 @@ async function pollTrainingJob() {
         }
         await refreshModels();
         await refreshFtModels();
+        // The newly trained model also needs to appear in the Manage
+        // Fine-Tuned Models list so the user can delete it.  Without this
+        // refresh, the list only updates on full page reload.
+        await refreshFtManageList();
         break;
       }
     } catch (error) {
@@ -878,11 +886,33 @@ dom.trainStart.addEventListener('click', async () => {
 async function refreshModels() {
   // Pull all LM Studio LLMs (loaded + idle) so reviewers can pick + auto
   // load any local model. Fall back to `/v1/models` (selectable only) if
-  // the LM Studio surface isn't available.
+  // the LM Studio surface isn't available. Fine-tuned models that no longer
+  // exist in the platform registry are filtered out so a deleted model does
+  // not remain selectable from a stale LM Studio index entry.
   let llms = [];
+  let registeredFtKeys = new Set();
+  try {
+    const allModels = await fetchJson('/models');
+    registeredFtKeys = new Set(
+      (allModels || [])
+        .filter((m) => m.source_type === 'fine_tuned')
+        .flatMap((m) => [m.serving_model_name, m.published_model_name, m.display_name, m.id])
+        .filter(Boolean)
+        .map((v) => String(v).toLowerCase()),
+    );
+  } catch {
+    registeredFtKeys = new Set();
+  }
   try {
     const reply = await fetchJson('/lmstudio/models');
     llms = ((reply && reply.models) || []).filter((m) => m.type === 'llm');
+    llms = llms.filter((m) => {
+      const keys = [m.modelKey, m.indexedModelIdentifier, m.path, m.displayName]
+        .filter(Boolean)
+        .map((v) => String(v).toLowerCase());
+      const looksLikeFt = keys.some((k) => /_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(k) || k.includes('heewon_platform'));
+      return !looksLikeFt || keys.some((k) => registeredFtKeys.has(k) || registeredFtKeys.has(k.split('/').pop()));
+    });
   } catch {
     try {
       const fallback = await fetchJson('/v1/models');
@@ -905,44 +935,70 @@ async function refreshModels() {
     state.selectedModelId = null;
     return;
   }
-  const optionsHtml = llms
-    .map((m) => {
-      const id = m.modelKey || m.indexedModelIdentifier || m.path;
-      const badge = m.loaded ? '[loaded]' : '[idle]';
-      const label = `${id} ${badge}`;
-      return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
-    })
-    .join('');
-  dom.chatModel.innerHTML = optionsHtml;
-  if (dom.trainBase) dom.trainBase.innerHTML = optionsHtml;
-  if (dom.trainQaModel) dom.trainQaModel.innerHTML = optionsHtml;
-  if (dom.verifyJudgeModel) dom.verifyJudgeModel.innerHTML = optionsHtml;
+  // Identify FT-like models (so we can keep them out of trainBase/trainQaModel,
+  // which are not meaningful targets for re-fine-tuning).
+  const isFt = (m) => {
+    const keys = [m.modelKey, m.indexedModelIdentifier, m.path, m.displayName]
+      .filter(Boolean)
+      .map((v) => String(v).toLowerCase());
+    if (keys.some((k) => registeredFtKeys.has(k) || registeredFtKeys.has(k.split('/').pop()))) {
+      return true;
+    }
+    return keys.some((k) => /_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(k) || k.includes('heewon_platform'));
+  };
+  const baseOnlyLlms = llms.filter((m) => !isFt(m));
+
+  const renderOptions = (entries) =>
+    entries
+      .map((m) => {
+        const id = m.modelKey || m.indexedModelIdentifier || m.path;
+        const badge = m.loaded ? '[loaded]' : '[idle]';
+        const label = `${id} ${badge}`;
+        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+      })
+      .join('');
+  const allOptionsHtml = renderOptions(llms);
+  const baseOptionsHtml = renderOptions(baseOnlyLlms) || '<option value="">— no base models —</option>';
+
+  dom.chatModel.innerHTML = allOptionsHtml;
+  if (dom.trainBase) dom.trainBase.innerHTML = baseOptionsHtml;
+  if (dom.trainQaModel) dom.trainQaModel.innerHTML = baseOptionsHtml;
+  if (dom.verifyJudgeModel) dom.verifyJudgeModel.innerHTML = allOptionsHtml;
   const firstLoaded = llms.find((m) => m.loaded) || llms[0];
   if (!state.selectedModelId || !llms.some((m) => (m.modelKey || m.path) === state.selectedModelId)) {
     state.selectedModelId = firstLoaded.modelKey || firstLoaded.path;
   }
   dom.chatModel.value = state.selectedModelId;
-  // Q/A generator: prefer qwen3.5-4b-mlx, then any 4B+ model.
-  if (dom.trainQaModel) {
+  // Q/A generator: prefer exact qwen3.5-4b-mlx, then qwen3-4b/qwen3.5-4b
+  // variants, then any 4B+ model. Restricted to baseOnlyLlms so a deleted-
+  // looking FT model never sneaks in as the QA generator default.
+  if (dom.trainQaModel && baseOnlyLlms.length) {
+    const firstBaseLoaded = baseOnlyLlms.find((m) => m.loaded) || baseOnlyLlms[0];
     const qaPreferred =
-      llms.find((m) => {
+      baseOnlyLlms.find((m) => (m.modelKey || '').toLowerCase() === 'qwen3.5-4b-mlx') ||
+      baseOnlyLlms.find((m) => {
         const key = (m.modelKey || '').toLowerCase();
         return key.includes('qwen3.5-4b') || key.includes('qwen3-4b');
       }) ||
-      llms.find((m) => {
+      baseOnlyLlms.find((m) => {
         const key = (m.modelKey || '').toLowerCase();
         return /[4-9]b|1[0-9]b|[2-9][0-9]b/.test(key);
       }) ||
-      firstLoaded;
+      firstBaseLoaded;
     dom.trainQaModel.value = qaPreferred.modelKey || qaPreferred.path || '';
   }
-  // Base model: prefer liquid/lfm2.5-1.2b.
-  if (dom.trainBase) {
+  // Base model to fine-tune: prefer exact liquid/lfm2.5-1.2b, then any lfm.
+  // Restricted to baseOnlyLlms so an FT model whose key contains "lfm2.5"
+  // (e.g. "lfm2.5-1.2b_heewon_platform_…") is never the default.
+  if (dom.trainBase && baseOnlyLlms.length) {
+    const firstBaseLoaded = baseOnlyLlms.find((m) => m.loaded) || baseOnlyLlms[0];
     const basePreferred =
-      llms.find((m) => {
+      baseOnlyLlms.find((m) => (m.modelKey || '').toLowerCase() === 'liquid/lfm2.5-1.2b') ||
+      baseOnlyLlms.find((m) => {
         const key = (m.modelKey || '').toLowerCase();
         return key.includes('lfm2.5') || key.includes('lfm2');
-      }) || firstLoaded;
+      }) ||
+      firstBaseLoaded;
     dom.trainBase.value = basePreferred.modelKey || basePreferred.path || '';
   }
   renderChatSuggestions();
@@ -1132,9 +1188,28 @@ async function refreshFtModels() {
   if (!dom.verifyFtModel) return;
   try {
     const allModels = await fetchJson('/models');
-    state.ftModels = (allModels || []).filter(
-      (m) => m.source_type === 'fine_tuned' && m.status === 'active' && m.serving_model_name,
-    );
+    // Show every FT model whose files have been placed in LM Studio.
+    //
+    // Two publish_status values qualify:
+    //   * 'published'    — publish ran and LM Studio confirmed the model is
+    //                      loaded right now.
+    //   * 'publish_ready'— publish ran and placed the files on disk, but the
+    //                      lms-load step or the post-load probe failed (most
+    //                      commonly because LM Studio TTL-unloaded the model
+    //                      between publish and the next page load).  The
+    //                      files still exist; the verify pipeline calls
+    //                      _lmstudio_ensure_loaded per step, which will hot-
+    //                      load them on demand.
+    //
+    // We deliberately exclude the post-train / pre-publish sentinel form
+    // (`serving_model_name` starts with "artifact::") so we don't list a
+    // model whose files haven't been symlinked into ~/.lmstudio/models yet.
+    state.ftModels = (allModels || []).filter((m) => {
+      if (m.source_type !== 'fine_tuned') return false;
+      const serving = m.serving_model_name || '';
+      if (!serving || serving.startsWith('artifact::')) return false;
+      return m.publish_status === 'published' || m.publish_status === 'publish_ready';
+    });
   } catch {
     state.ftModels = [];
   }
@@ -1145,8 +1220,13 @@ async function refreshFtModels() {
   dom.verifyFtModel.innerHTML = state.ftModels
     .map((m) => {
       const label = m.display_name || m.serving_model_name || m.id;
+      // [loaded] = LM Studio has the model in memory right now.
+      // [idle]   = files are on disk; first verify step will load it
+      //            (a few seconds of extra latency on the first inference).
+      const loaded = m.readiness && m.readiness.selectable === true;
+      const badge = loaded ? '[loaded]' : '[idle]';
       const val = m.serving_model_name || m.id;
-      return `<option value="${escapeHtml(val)}">${escapeHtml(label)}</option>`;
+      return `<option value="${escapeHtml(val)}">${escapeHtml(label)} ${badge}</option>`;
     })
     .join('');
   updateVerifyBaseModel();
@@ -1180,20 +1260,83 @@ function renderVerifyResults(data) {
   const variants = ['ft_rag', 'ft_only', 'base_rag', 'base_only'];
   dom.verifyResultsBody.innerHTML = variants
     .map((key) => {
-      const score = data.scores[key] ?? '—';
-      const comment = data.comments[key] || '';
+      const rawScore = data.scores ? data.scores[key] : undefined;
+      const comment = (data.comments && data.comments[key]) || '';
       const answer = (data.answers && data.answers[key]) || '';
-      const scoreColor =
-        score >= 8 ? 'text-green-400' : score >= 5 ? 'text-yellow-400' : 'text-red-400';
+      // score: null/undefined ⇒ "not graded" (judge timeout / unavailable).
+      // Render "—" with neutral colour so it visually differs from a 0.
+      const hasScore = rawScore !== null && rawScore !== undefined;
+      const score = hasScore ? rawScore : '—';
+      let scoreColor = 'text-muted-fg';
+      if (hasScore) {
+        scoreColor = score >= 8 ? 'text-green-400' : score >= 5 ? 'text-yellow-400' : 'text-red-400';
+      }
+      const scoreDisplay = hasScore ? `${escapeHtml(String(score))}/10` : '—';
       return `<tr class="align-top">
         <td class="px-3 py-2 border border-border font-medium whitespace-nowrap">${escapeHtml(VERIFY_VARIANT_LABELS[key] || key)}</td>
         <td class="px-3 py-2 border border-border max-w-xs whitespace-pre-wrap text-xs leading-relaxed">${escapeHtml(answer)}</td>
-        <td class="px-3 py-2 border border-border text-center font-bold ${scoreColor}">${escapeHtml(String(score))}/10</td>
+        <td class="px-3 py-2 border border-border text-center font-bold ${scoreColor}">${scoreDisplay}</td>
         <td class="px-3 py-2 border border-border text-xs text-muted-fg">${escapeHtml(comment)}</td>
       </tr>`;
     })
     .join('');
+
+  // Three independent banners: ft_health_warning (FT model collapsed),
+  // ft_similarity_warning (FT ≈ base for this question), judge_warning
+  // (judge model timed out / failed). All can fire independently.
+  const banner = document.getElementById('verify-ft-banner');
+  if (banner) {
+    const ftWarning = data.ft_health_warning;
+    const judgeWarning = data.judge_warning;
+    const simWarning = data.ft_similarity_warning;
+    const sim = data.ft_similarity_to_base || {};
+    const blocks = [];
+    if (ftWarning) {
+      const resolved = (data.resolved_model_ids && data.resolved_model_ids.fine_tuned) || '(unknown)';
+      blocks.push(`
+        <div class="rounded-md border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-200 space-y-1">
+          <div class="font-semibold">⚠ Fine-tuned model failed verification</div>
+          <div>${escapeHtml(ftWarning)}</div>
+          <div class="text-red-300/70 font-mono break-all">FT inferenced as: ${escapeHtml(resolved)}</div>
+        </div>`);
+    }
+    if (simWarning) {
+      const resolved = (data.resolved_model_ids && data.resolved_model_ids.fine_tuned) || '(unknown)';
+      const noRag = sim.no_rag !== undefined ? `${Math.round(sim.no_rag * 100)}%` : '—';
+      const withRag = sim.with_rag !== undefined ? `${Math.round(sim.with_rag * 100)}%` : '—';
+      blocks.push(`
+        <div class="rounded-md border border-yellow-800 bg-yellow-950/40 px-3 py-2 text-xs text-yellow-200 space-y-1">
+          <div class="font-semibold">ℹ Fine-tune did not differentiate from base on this question</div>
+          <div>${escapeHtml(simWarning)}</div>
+          <div class="text-yellow-300/70 font-mono break-all">
+            FT inferenced as: ${escapeHtml(resolved)} · Jaccard similarity: no-RAG=${noRag}, with-RAG=${withRag}
+          </div>
+        </div>`);
+    }
+    if (judgeWarning) {
+      blocks.push(`
+        <div class="rounded-md border border-yellow-800 bg-yellow-950/40 px-3 py-2 text-xs text-yellow-200 space-y-1">
+          <div class="font-semibold">⚠ Judge model could not grade</div>
+          <div>${escapeHtml(judgeWarning)}</div>
+        </div>`);
+    }
+    if (blocks.length) {
+      banner.innerHTML = `<div class="space-y-2">${blocks.join('')}</div>`;
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+      banner.innerHTML = '';
+    }
+  }
   dom.verifyResults.classList.remove('hidden');
+}
+
+function appendVerifyLog(text) {
+  if (!dom.verifyLog) return;
+  const line = document.createElement('div');
+  line.className = 'truncate';
+  line.textContent = text;
+  dom.verifyLog.appendChild(line);
 }
 
 if (dom.verifyRunBtn) {
@@ -1210,11 +1353,17 @@ if (dom.verifyRunBtn) {
 
     const collection = selectedCollection();
     dom.verifyRunBtn.disabled = true;
-    setVerifyStatus('Running 4 inferences and grading… this may take 1-3 minutes.');
+    setVerifyStatus('Starting verification…');
     if (dom.verifyResults) dom.verifyResults.classList.add('hidden');
+    if (dom.verifyProgress) { dom.verifyProgress.value = 0; dom.verifyProgress.classList.remove('hidden'); }
+    if (dom.verifyLog) dom.verifyLog.textContent = '';
+    if (dom.verifyLogWrap) { dom.verifyLogWrap.open = false; dom.verifyLogWrap.classList.remove('hidden'); }
+
+    let seenLogCount = 0;
 
     try {
-      const result = await fetchJson('/inference/verify', {
+      // POST starts the job immediately and returns job_id — no streaming needed.
+      const jobResp = await fetchJson('/inference/verify-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1224,19 +1373,57 @@ if (dom.verifyRunBtn) {
           base_model: baseModel,
           rag_collection_id: collection ? collection.id : null,
         }),
-        timeoutMs: 600_000,
       });
+      const jobId = jobResp.job_id;
+      setVerifyStatus('Verification started — polling for progress…');
+      if (dom.verifyLogWrap) dom.verifyLogWrap.open = true;
+      appendVerifyLog(`Job ${jobId} started.`);
 
-      if (result.grading_error) {
-        setVerifyStatus(`Grading failed: ${result.grading_error} — raw answers are shown below.`);
-      } else {
-        setVerifyStatus('Verification complete.');
+      // Poll every 2 s until done or failed.
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2000));
+        let job;
+        try {
+          job = await fetchJson(`/inference/verify-job/${encodeURIComponent(jobId)}`);
+        } catch (pollErr) {
+          appendVerifyLog(`Poll error: ${pollErr.message} — retrying…`);
+          continue;
+        }
+
+        // Append any new log lines produced since last poll.
+        const newEntries = (job.log_entries || []).slice(seenLogCount);
+        for (const entry of newEntries) {
+          appendVerifyLog(entry);
+        }
+        seenLogCount = (job.log_entries || []).length;
+
+        // Update progress bar and status label from job state.
+        if (dom.verifyProgress) dom.verifyProgress.value = job.step || 0;
+        if (job.label) setVerifyStatus(job.label);
+
+        if (job.status === 'done') {
+          if (dom.verifyProgress) dom.verifyProgress.value = 5;
+          const result = job.result;
+          if (result && result.grading_error) {
+            setVerifyStatus(`Grading failed: ${result.grading_error} — raw answers shown below.`);
+          } else {
+            setVerifyStatus('Verification complete.');
+          }
+          if (result) renderVerifyResults(result);
+          break;
+        } else if (job.status === 'failed') {
+          const errMsg = job.error || 'unknown error';
+          setVerifyStatus(`Verification failed: ${errMsg}`);
+          appendVerifyLog(`Failed: ${errMsg}`);
+          break;
+        }
       }
-      renderVerifyResults(result);
     } catch (error) {
       setVerifyStatus(`Error: ${error.message}`);
+      appendVerifyLog(`Error: ${error.message}`);
     } finally {
       dom.verifyRunBtn.disabled = false;
+      if (dom.verifyProgress) dom.verifyProgress.classList.add('hidden');
     }
   });
 }
@@ -1261,6 +1448,82 @@ async function refreshStatus() {
   dom.settingsStatus.innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
 }
 
+// ---- Manage fine-tuned models (delete) ---------------------------------------
+
+async function refreshFtManageList() {
+  if (!dom.ftManageList) return;
+  try {
+    const allModels = await fetchJson('/models');
+    const ftModels = (allModels || []).filter(
+      (m) => m.source_type === 'fine_tuned',
+    );
+    if (!ftModels.length) {
+      dom.ftManageList.innerHTML = '<span class="text-muted-fg">— no fine-tuned models —</span>';
+      return;
+    }
+    dom.ftManageList.innerHTML = ftModels
+      .map((m) => {
+        const label = m.display_name || m.id;
+        const hasServing = !!m.serving_model_name;
+        const statusBadge = m.status === 'active'
+          ? '<span class="text-green-400">● active</span>'
+          : '<span class="text-yellow-400">● ' + escapeHtml(m.status) + '</span>';
+        return `<div class="flex items-center justify-between gap-2 py-1 border-b border-border last:border-0">
+          <div>
+            <span class="font-medium">${escapeHtml(label)}</span>
+            <span class="ml-2">${statusBadge}</span>
+          </div>
+          <button
+            class="ft-delete-btn rounded border border-red-800 px-2 py-0.5 text-red-400 hover:bg-red-900/30 text-xs"
+            data-model-id="${escapeHtml(m.id)}"
+            data-model-name="${escapeHtml(label)}"
+          >Delete</button>
+        </div>`;
+      })
+      .join('');
+
+    // Attach click handlers
+    dom.ftManageList.querySelectorAll('.ft-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const modelId = btn.dataset.modelId;
+        const modelName = btn.dataset.modelName;
+        if (!confirm(`Permanently delete "${modelName}" from disk?\n\nThis will remove the model from LM Studio and delete all associated files. This cannot be undone.`)) {
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Deleting…';
+        try {
+          const deletedModel = ftModels.find((m) => m.id === modelId) || {};
+          const deletedKeys = [
+            deletedModel.id,
+            deletedModel.serving_model_name,
+            deletedModel.published_model_name,
+            deletedModel.display_name,
+          ].filter(Boolean).map((v) => String(v).toLowerCase());
+          await fetchJson(`/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' });
+          if (deletedKeys.includes(String(state.selectedModelId || '').toLowerCase())) {
+            state.selectedModelId = null;
+          }
+          [dom.chatModel, dom.trainBase, dom.trainQaModel, dom.verifyJudgeModel, dom.verifyFtModel].forEach((select) => {
+            if (select && deletedKeys.includes(String(select.value || '').toLowerCase())) {
+              select.value = '';
+            }
+          });
+          await refreshFtManageList();
+          await refreshFtModels();
+          await refreshModels();
+        } catch (error) {
+          alert(`Delete failed: ${error.message}`);
+          btn.disabled = false;
+          btn.textContent = 'Delete';
+        }
+      });
+    });
+  } catch {
+    dom.ftManageList.innerHTML = '<span class="text-red-400">Failed to load models.</span>';
+  }
+}
+
 // ---- boot -------------------------------------------------------------------
 
 async function boot() {
@@ -1268,6 +1531,7 @@ async function boot() {
   await refreshCollections();
   await refreshModels();
   await refreshFtModels();
+  await refreshFtManageList();
   await refreshStatus();
 }
 

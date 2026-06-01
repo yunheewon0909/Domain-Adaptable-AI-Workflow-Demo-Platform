@@ -151,6 +151,14 @@ def _format_row(task_type: str, row: FTDatasetRowRecord) -> FormattedTrainingRow
     if not completion_text:
         raise ValueError(f"row {row.id} is missing completion text after formatting")
 
+    # The `text` field is an Alpaca-style preview used only for human review
+    # and length warnings — it is NOT what mlx_lm.lora trains on.  mlx-lm's
+    # `create_dataset` picks ChatDataset whenever a `messages` field is
+    # present (see mlx_lm/tuner/datasets.py:create_dataset), and ChatDataset
+    # calls `tokenizer.apply_chat_template(messages)` so the model is
+    # trained in its native chat-template format (matching what LM Studio
+    # serves at inference).  Keep `text` here for backwards-compatible
+    # downstream consumers but treat it as metadata, not training input.
     text = f"### Instruction\n{prompt_text}\n\n### Response\n{completion_text}".strip()
     if len(text) > 20000:
         warnings.append(

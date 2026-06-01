@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -267,17 +269,41 @@ def build_training_config(
         raise RuntimeError(
             f"unsupported trainer backend: {trainer_backend}. Supported backends: {sorted(SUPPORTED_TRAINER_BACKENDS)}"
         )
-    # Auto-scale iterations to ~3 effective epochs for small datasets.
-    # Users can override by passing mlx_iters explicitly in hyperparams_json.
-    # With batch_size=1 and no gradient accumulation, one iter = one example.
+    # Auto-scale iterations + LR based on dataset size.
+    #
+    # Empirically (see ft-job-7d819c3a9721 training.log: 9 rows × 27 iters at
+    # LR=2e-4 → train loss 6.5 → 8.8 → 8.0, then degenerate "PDF PDFuser"
+    # output) the default 2e-4 LR is far too aggressive for tiny datasets.
+    # Lower the LR sharply when the dataset is small so the LoRA adapter
+    # doesn't ratchet the model into divergence on the first few passes.
+    #
+    # The brackets below are conservative: any explicit override in
+    # hyperparams_json wins, so power users keep full control.
     _user_iters = hyperparams_json.get("mlx_iters")
     if _user_iters is not None:
         resolved_iters = max(10, int(_user_iters))
     elif train_rows > 0:
         # Target ~3 passes over the data, clamped to [10, 500].
-        resolved_iters = max(10, min(500, train_rows * 3))
+        # For very small datasets, cap iters further so the model doesn't
+        # over-cycle a handful of examples (each iter = 1 example here).
+        if train_rows < 20:
+            resolved_iters = max(10, min(60, train_rows * 2))
+        else:
+            resolved_iters = max(10, min(500, train_rows * 3))
     else:
         resolved_iters = max(10, int(settings.ft_mlx_iters))
+
+    # Resolve learning rate: user override wins; otherwise auto-scale by N.
+    if "learning_rate" in hyperparams_json:
+        resolved_lr = float(hyperparams_json["learning_rate"])
+    elif train_rows and train_rows < 15:
+        resolved_lr = 1e-5  # 9 rows → divergence at 2e-4; drop 20×
+    elif train_rows and train_rows < 30:
+        resolved_lr = 3e-5
+    elif train_rows and train_rows < 100:
+        resolved_lr = 8e-5
+    else:
+        resolved_lr = 2e-4  # original default for healthy-sized datasets
 
     return TrainingConfig(
         trainer_model_name=resolve_trainer_model_name(
@@ -287,7 +313,7 @@ def build_training_config(
         training_method=normalized_method,
         trainer_backend=trainer_backend,
         epochs=float(hyperparams_json.get("epochs", 1)),
-        learning_rate=float(hyperparams_json.get("learning_rate", 2e-4)),
+        learning_rate=resolved_lr,
         batch_size=max(1, int(hyperparams_json.get("batch_size", 1))),
         gradient_accumulation_steps=max(
             1, int(hyperparams_json.get("gradient_accumulation_steps", 1))
@@ -549,6 +575,60 @@ def _tail_text(path: Path, *, max_bytes: int = 2000) -> str:
     return data[-max_bytes:].decode("utf-8", errors="replace").strip()
 
 
+_LOSS_LINE_RE = re.compile(
+    r"Iter\s+\d+\s*:\s*Train loss\s+([0-9]+\.[0-9]+)", re.IGNORECASE
+)
+
+
+def _parse_loss_history(logs_path: Path) -> list[float]:
+    """Extract per-iter train losses from an mlx_lm.lora training log."""
+    try:
+        text = logs_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    losses: list[float] = []
+    for match in _LOSS_LINE_RE.finditer(text):
+        try:
+            losses.append(float(match.group(1)))
+        except ValueError:
+            continue
+    return losses
+
+
+def _detect_loss_divergence(losses: list[float]) -> str | None:
+    """Return a short description if `losses` looks diverged, else None.
+
+    Two signals catch the modes we've actually seen:
+
+    * Last loss is materially worse than the *first* recorded loss
+      (e.g. 6.5 → 8.0 in the ft-job-7d819c3a9721 incident).  We require
+      at least three samples so a one-step blip doesn't trip the check.
+    * Last loss is non-finite / NaN.
+
+    Both checks are intentionally conservative: a healthy run usually
+    shows the loss dropping ≥10% from its starting value, so the
+    threshold here (first × 1.10) only fires on real regressions.
+    """
+    if not losses:
+        return None
+    last = losses[-1]
+    if not math.isfinite(last):
+        return f"final loss is non-finite ({last!r})"
+    if len(losses) < 3:
+        return None
+    first = losses[0]
+    if first <= 0:
+        return None
+    # Allow up to 10% increase before flagging as divergence — anything
+    # beyond that means the LoRA actively made the model worse.
+    if last > first * 1.10:
+        return (
+            f"loss rose from {first:.3f} (iter 1) to {last:.3f} "
+            f"(final), Δ={last - first:+.3f}"
+        )
+    return None
+
+
 def _run_mlx_qlora_training(
     export_result: DatasetExportResult,
     *,
@@ -641,6 +721,24 @@ def _run_mlx_qlora_training(
         raise RuntimeError(
             f"MLX QLoRA training failed (exit={result.returncode}): "
             f"{_tail_text(logs_path, max_bytes=500)}"
+        )
+
+    # Post-training divergence check: parse the per-iter losses mlx_lm.lora
+    # printed and refuse to fuse + publish a model whose loss obviously did
+    # not converge.  Without this, a misconfigured run silently produces a
+    # broken adapter that only fails at /inference/verify time (see the
+    # ft-job-7d819c3a9721 incident: loss 6.5 → 8.8 → 8.0 was accepted and
+    # the fused model degenerated to "PDF PDFuser" output).
+    loss_history = _parse_loss_history(logs_path)
+    divergence = _detect_loss_divergence(loss_history)
+    if divergence is not None:
+        with logs_path.open("a", encoding="utf-8") as log_fh:
+            log_fh.write(f"\nDIVERGENCE DETECTED: {divergence}\n")
+        raise RuntimeError(
+            "MLX QLoRA training appears to have diverged "
+            f"({divergence}). Loss history: {loss_history}. "
+            "Common fixes: lower learning_rate, reduce iters, "
+            "or train on a larger dataset."
         )
 
     adapter_weights = adapter_dir / "adapters.safetensors"

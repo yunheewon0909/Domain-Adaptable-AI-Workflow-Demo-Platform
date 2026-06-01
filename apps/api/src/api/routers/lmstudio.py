@@ -123,12 +123,13 @@ def post_lmstudio_load(request: LoadModelRequest) -> dict[str, Any]:
     if lms is None:
         raise HTTPException(status_code=503, detail="lms CLI not found")
 
-    # Resolve short modelKey → full indexedModelIdentifier that lms load
-    # --exact requires. LM Studio's lms load --exact rejects bare keys.
+    # Resolve aliases to the stable modelKey when possible. On this Mac,
+    # `lms load demo/<IndexedIdentifier> --exact` can open an interactive
+    # selector and hang; the non-interactive path is the lowercase modelKey.
     load_target = request.model_id
     try:
         listing_result = subprocess.run(
-            [lms, "ls", "--json"], capture_output=True, text=True, timeout=10
+            [lms, "ls", "--json"], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL
         )
         if listing_result.returncode == 0:
             try:
@@ -145,7 +146,7 @@ def post_lmstudio_load(request: LoadModelRequest) -> dict[str, Any]:
                     }
                     if request.model_id in candidates:
                         load_target = (
-                            str(entry.get("indexedModelIdentifier") or "")
+                            str(entry.get("modelKey") or "")
                             or str(entry.get("path") or "")
                             or request.model_id
                         )
@@ -153,14 +154,12 @@ def post_lmstudio_load(request: LoadModelRequest) -> dict[str, Any]:
     except (subprocess.TimeoutExpired, OSError):
         pass  # keep original model_id as fallback
 
-    cmd = [lms, "load", load_target, "--gpu", "max", "--exact"]
-    resolved_identifier = request.identifier
-    if not resolved_identifier:
-        resolved_identifier = load_target
+    cmd = [lms, "load", load_target, "--gpu", "max"]
+    resolved_identifier = request.identifier or load_target
     cmd.extend(["--identifier", resolved_identifier])
     try:
         completed = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300
+            cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         raise HTTPException(status_code=504, detail=f"lms load timed out: {exc}") from exc
@@ -170,10 +169,16 @@ def post_lmstudio_load(request: LoadModelRequest) -> dict[str, Any]:
             detail=f"lms load exit {completed.returncode}: {completed.stderr.strip()[:300]}",
         )
     # Drop the LM Studio probe cache so the next /v1/models reflects the
-    # freshly loaded model immediately rather than waiting 30s.
+    # freshly loaded model immediately rather than waiting 30s.  Also clear
+    # the resolve cache in routers.models, otherwise the case-insensitive
+    # lookup that runs inside the chat path could return a stale "not loaded"
+    # result for up to 30 seconds after a fresh load (manifesting as HTTP 400
+    # "Model not found").
     from api.services.model_registry.lmstudio_register import invalidate_loaded_cache
+    from api.routers.models import invalidate_resolve_cache
 
     invalidate_loaded_cache()
+    invalidate_resolve_cache()
 
     # Auto-register the loaded model in the platform registry as a base
     # row so /v1/chat/completions can resolve it via the shim. Without
