@@ -948,21 +948,25 @@ def _verify_sse_stream(request: VerifyRequest) -> Generator[str, None, None]:
         base_only=grading_inputs.get("base_only", ""),
     )
 
-    default_scores: dict[str, Any] = {"ft_rag": 0, "ft_only": 0, "base_rag": 0, "base_only": 0}
+    # None = "not graded" (UI renders "—"), distinct from 0 = explicitly
+    # failed/degenerate. Kept in sync with _run_verify_job / the JSON path.
+    default_scores: dict[str, Any] = {
+        "ft_rag": None, "ft_only": None, "base_rag": None, "base_only": None,
+    }
     default_comments: dict[str, Any] = {"ft_rag": "", "ft_only": "", "base_rag": "", "base_only": ""}
     grading_error: str | None = None
 
     try:
-        raw_grade = _lmstudio_chat(
-            base_url,
-            request.verifier_model,
-            [{"role": "user", "content": grading_prompt}],
-            timeout=300.0,
-            max_tokens=4096,
-        )
+        # Use _judge_chat (not raw _lmstudio_chat): it adds the /no_think
+        # system prompt and sizes the token/timeout budget for thinking-mode
+        # judges (Qwen3, DeepSeek-R1), which otherwise burn the budget on
+        # reasoning_content and force every score to None.
+        raw_grade = _judge_chat(base_url, request.verifier_model, grading_prompt)
         grade_data = _parse_judge_json(raw_grade)
         for key in ("ft_rag", "ft_only", "base_rag", "base_only"):
-            raw_score = grade_data.get("scores", {}).get(key, 0)
+            raw_score = grade_data.get("scores", {}).get(key)
+            if raw_score is None:
+                continue  # leave as None so the UI shows "—"
             default_scores[key] = max(0, min(10, int(float(raw_score))))
             default_comments[key] = str(grade_data.get("comments", {}).get(key, ""))
     except Exception as exc:

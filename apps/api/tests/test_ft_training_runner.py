@@ -211,6 +211,39 @@ def test_small_dataset_autoscale_iters_and_lr() -> None:
     assert override.learning_rate == 2e-4
 
 
+def test_autoscale_iters_is_monotonic_across_boundaries() -> None:
+    """Adding training rows must never *decrease* the iteration count.
+
+    A plain `if rows < 20` split produced a cliff (19 rows -> 114 iters but
+    20 rows -> 60), so a user told to "add more pairs" got fewer passes. The
+    schedule now max()es the small-N and baseline formulas; assert it is
+    non-decreasing across the bracket edges and the LR ladder steps.
+    """
+    from api.config import get_settings
+    from api.services.fine_tuning.trainer import build_training_config
+
+    settings = get_settings()
+
+    def iters_for(rows: int) -> int:
+        return build_training_config(
+            base_model_name="liquid/lfm2.5-1.2b",
+            training_method="sft_qlora",
+            hyperparams_json={},
+            settings=settings,
+            train_rows=rows,
+        ).mlx_iters
+
+    rows_grid = [1, 5, 9, 14, 15, 19, 20, 21, 29, 30, 40, 99, 100, 200, 500]
+    series = [iters_for(r) for r in rows_grid]
+    for (r_lo, lo), (r_hi, hi) in zip(
+        zip(rows_grid, series), zip(rows_grid[1:], series[1:])
+    ):
+        assert hi >= lo, f"iters dropped from {lo} at {r_lo} rows to {hi} at {r_hi} rows"
+
+    # The specific boundary that used to invert.
+    assert iters_for(20) >= iters_for(19)
+
+
 def _make_mlx_dir(path: Path, name_or_path: str) -> None:
     """Create a minimal directory that _is_mlx_model_dir() accepts."""
     path.mkdir(parents=True, exist_ok=True)

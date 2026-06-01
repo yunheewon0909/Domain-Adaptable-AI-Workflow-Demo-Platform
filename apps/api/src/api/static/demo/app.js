@@ -912,7 +912,7 @@ async function refreshModels() {
       const keys = [m.modelKey, m.indexedModelIdentifier, m.path, m.displayName]
         .filter(Boolean)
         .map((v) => String(v).toLowerCase());
-      const looksLikeFt = keys.some((k) => /_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(k) || k.includes('heewon_platform'));
+      const looksLikeFt = keys.some((k) => /_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(k));
       return !looksLikeFt || keys.some((k) => registeredFtKeys.has(k) || registeredFtKeys.has(k.split('/').pop()));
     });
   } catch {
@@ -946,7 +946,7 @@ async function refreshModels() {
     if (keys.some((k) => registeredFtKeys.has(k) || registeredFtKeys.has(k.split('/').pop()))) {
       return true;
     }
-    return keys.some((k) => /_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(k) || k.includes('heewon_platform'));
+    return keys.some((k) => /_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(k));
   };
   const baseOnlyLlms = llms.filter((m) => !isFt(m));
 
@@ -991,7 +991,7 @@ async function refreshModels() {
   }
   // Base model to fine-tune: prefer exact liquid/lfm2.5-1.2b, then any lfm.
   // Restricted to baseOnlyLlms so an FT model whose key contains "lfm2.5"
-  // (e.g. "lfm2.5-1.2b_heewon_platform_…") is never the default.
+  // (e.g. a published "lfm2.5-1.2b_<dataset>_<timestamp>") is never the default.
   if (dom.trainBase && baseOnlyLlms.length) {
     const firstBaseLoaded = baseOnlyLlms.find((m) => m.loaded) || baseOnlyLlms[0];
     const basePreferred =
@@ -1455,13 +1455,33 @@ if (dom.verifyRunBtn) {
       appendVerifyLog(`Job ${jobId} started.`);
 
       // Poll every 2 s until done or failed.
+      // Verify-job state lives in the server's in-memory _verify_jobs dict, so
+      // a restart mid-run makes the job id 404 forever. Treat 404 as terminal,
+      // and cap consecutive transient errors so a real outage can't lock the
+      // UI either — both paths fall through to the outer finally that re-enables
+      // the Run button.
+      const MAX_POLL_ERRORS = 5;
+      let consecutiveErrors = 0;
       while (true) {
         await new Promise((r) => setTimeout(r, 2000));
         let job;
         try {
           job = await fetchJson(`/inference/verify-job/${encodeURIComponent(jobId)}`);
+          consecutiveErrors = 0;
         } catch (pollErr) {
-          appendVerifyLog(`Poll error: ${pollErr.message} — retrying…`);
+          const msg = pollErr.message || '';
+          if (msg.includes('404')) {
+            setVerifyStatus('Verification job is no longer available (did the server restart?). Reload the page and run it again.');
+            appendVerifyLog(`Job lost: ${msg}`);
+            break;
+          }
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= MAX_POLL_ERRORS) {
+            setVerifyStatus(`Stopped polling after ${consecutiveErrors} consecutive errors: ${msg}`);
+            appendVerifyLog(`Giving up: ${msg}`);
+            break;
+          }
+          appendVerifyLog(`Poll error: ${msg} — retrying (${consecutiveErrors}/${MAX_POLL_ERRORS})…`);
           continue;
         }
 

@@ -963,3 +963,47 @@ def test_model_registry_default_entries_are_seeded(client: TestClient) -> None:
     with Session(get_engine()) as session:
         registry_rows = session.query(ModelRegistryRecord).all()
         assert registry_rows
+
+
+def test_ensure_base_model_registered_dedupes_case_insensitively(
+    client: TestClient,
+) -> None:
+    """Loading an already-registered fine-tuned model from the chat dropdown
+    must NOT insert a duplicate source_type=base row.
+
+    The load endpoint passes LM Studio's lowercased modelKey, while FT rows
+    keep the publish manifest's mixed-case serving name. A case-sensitive
+    dedup missed the FT row and created a colliding base row.
+    """
+    from api.routers.lmstudio import _ensure_base_model_registered
+
+    mixed = "demo/MyModel_2026-06-01_10-30"
+    with Session(get_engine()) as session:
+        session.add(
+            ModelRegistryRecord(
+                id="model-ft-casing",
+                display_name="FT casing",
+                source_type="fine_tuned",
+                base_model_name="liquid/lfm2.5-1.2b",
+                serving_model_name=mixed,
+                published_model_name=mixed,
+                status="active",
+                publish_status="published",
+                tags_json=["fine_tuned"],
+                description="FT row with mixed-case serving name.",
+            )
+        )
+        session.commit()
+
+    # Loader resolves to the lowercased modelKey.
+    _ensure_base_model_registered(mixed.lower())
+
+    with Session(get_engine()) as session:
+        rows = session.scalars(
+            select(ModelRegistryRecord).where(
+                ModelRegistryRecord.serving_model_name.ilike(mixed)
+            )
+        ).all()
+    # Exactly the original FT row — no duplicate base row inserted.
+    assert len(rows) == 1
+    assert rows[0].source_type == "fine_tuned"

@@ -203,7 +203,7 @@ def _ensure_base_model_registered(serving_model_name: str) -> None:
     accept models the reviewer loads after startup."""
     from datetime import datetime, timezone
 
-    from sqlalchemy import select
+    from sqlalchemy import func, select
     from sqlalchemy.orm import Session as _Session
 
     from api.db import get_engine
@@ -213,9 +213,16 @@ def _ensure_base_model_registered(serving_model_name: str) -> None:
     if not serving_model_name.strip():
         return
     with _Session(get_engine()) as session:
+        # Match case-insensitively against ANY existing row (base or
+        # fine_tuned).  The load endpoint resolves load_target to LM Studio's
+        # lowercased modelKey, while fine-tuned rows preserve the publish
+        # manifest's mixed-case serving name (e.g. "demo/MyModel_2026-...").
+        # A case-sensitive equality here would miss the FT row and insert a
+        # duplicate source_type=base row pointing at the same loaded model.
         existing = session.scalar(
             select(ModelRegistryRecord).where(
-                ModelRegistryRecord.serving_model_name == serving_model_name
+                func.lower(ModelRegistryRecord.serving_model_name)
+                == serving_model_name.lower()
             )
         )
         if existing is not None:

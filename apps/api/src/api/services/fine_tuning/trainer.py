@@ -327,19 +327,23 @@ def build_training_config(
     if _user_iters is not None:
         resolved_iters = max(10, int(_user_iters))
     elif train_rows > 0:
-        # Target ~3 passes over the data, clamped to [10, 500].
-        if train_rows < 20:
-            # Tiny datasets: ~6 passes (min 30) so the adapter actually
-            # imprints the examples. Earlier this was capped at 2 passes
-            # (train_rows * 2) to avoid divergence, but that was a workaround
-            # for the old aggressive 2e-4 LR. With the LR now dialed to 1e-5
-            # for small N (below), 2 passes barely moves the weights — the FT
-            # model learns the domain persona but not the specific facts, so
-            # its answers look identical to base. More passes at the low LR
-            # sharpen recall without the divergence the high LR caused.
-            resolved_iters = max(30, min(120, train_rows * 6))
-        else:
-            resolved_iters = max(10, min(500, train_rows * 3))
+        # Two overlapping schedules, combined with max() so the result is
+        # monotonic in train_rows (more data never yields fewer iters):
+        #
+        #  * small-N boost: ~6 passes, floor 30, cap 120. Tiny datasets need
+        #    more passes to imprint — earlier this was 2 passes (train_rows*2)
+        #    as a workaround for the old aggressive 2e-4 LR, but with the LR
+        #    now dialed to 1e-5 for small N (below), 2 passes barely move the
+        #    weights, so the FT learns the persona but not the facts and reads
+        #    as identical to base.
+        #  * baseline: ~3 passes, cap 500, for larger datasets.
+        #
+        # Taking the max avoids the discontinuity a plain `if N < 20` split
+        # produced (19 rows → 114 iters but 20 rows → 60), where adding a
+        # single training pair nearly halved the passes.
+        small_n = max(30, min(120, train_rows * 6))
+        baseline = max(10, min(500, train_rows * 3))
+        resolved_iters = max(small_n, baseline)
     else:
         resolved_iters = max(10, int(settings.ft_mlx_iters))
 
