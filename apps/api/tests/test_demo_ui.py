@@ -21,6 +21,8 @@ def test_demo_surface_shows_wizard_steps(client: TestClient) -> None:
     assert 'id="train-start"' in text
     assert 'id="chat-form"' in text
     assert 'id="chat-model"' in text
+    # Step 5 in-domain question helper (suggest a question from training data)
+    assert 'id="verify-suggest-btn"' in text
     # External chat client hints
     assert "lobe-chat" in text
     assert "Open WebUI" in text
@@ -42,6 +44,9 @@ def test_demo_app_js_wires_wizard_endpoints(client: TestClient) -> None:
     assert "rag_collection_id" in text
     # Lifecycle polling is present
     assert "pollTrainingJob" in text
+    # Step 5 pulls in-domain questions from the fine-tune's training rows
+    assert "/ft-dataset-versions/" in text
+    assert "loadVerifySuggestions" in text
 
 
 def test_demo_styles_includes_theme_tokens(client: TestClient) -> None:

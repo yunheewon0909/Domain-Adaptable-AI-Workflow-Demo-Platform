@@ -58,6 +58,8 @@ const dom = {
   verifyFtModel: $('verify-ft-model'),
   verifyBaseModel: $('verify-base-model'),
   verifyQuestion: $('verify-question'),
+  verifySuggestBtn: $('verify-suggest-btn'),
+  verifySuggestHint: $('verify-suggest-hint'),
   verifyRunBtn: $('verify-run-btn'),
   verifyStatus: $('verify-status'),
   verifyProgress: $('verify-progress'),
@@ -1238,10 +1240,83 @@ function updateVerifyBaseModel() {
   const ftModel = state.ftModels.find((m) => (m.serving_model_name || m.id) === selectedVal);
   const baseModelName = (ftModel && ftModel.base_model_name) || '';
   dom.verifyBaseModel.textContent = baseModelName || '— select a fine-tuned model above —';
+  loadVerifySuggestions(ftModel);
+}
+
+// Pull a representative question out of a training row, supporting both the
+// instruction-SFT shape ({instruction, input}) and the chat shape (a list of
+// role/content messages). Returns '' when no usable question is present.
+function extractQuestionFromRow(row) {
+  const inp = row && row.input_json;
+  if (!inp) return '';
+  if (Array.isArray(inp)) {
+    const lastUser = [...inp].reverse().find((m) => m && m.role === 'user' && m.content);
+    return lastUser ? String(lastUser.content).trim() : '';
+  }
+  if (typeof inp === 'object') {
+    const instruction = String(inp.instruction || '').trim();
+    const extra = String(inp.input || '').trim();
+    return [instruction, extra].filter(Boolean).join('\n').trim();
+  }
+  return String(inp).trim();
+}
+
+// Load the fine-tune's own training questions so the user can test on
+// in-domain prompts. On out-of-domain questions FT and base answer
+// identically, which reads as "fine-tuning did nothing".
+async function loadVerifySuggestions(ftModel) {
+  state.verifySuggestions = [];
+  if (dom.verifySuggestHint) dom.verifySuggestHint.textContent = '';
+  if (dom.verifySuggestBtn) dom.verifySuggestBtn.disabled = true;
+
+  const versionId = ftModel && ftModel.lineage_json && ftModel.lineage_json.dataset_version_id;
+  if (!versionId) return;
+
+  try {
+    const rows = await fetchJson(`/ft-dataset-versions/${encodeURIComponent(versionId)}/rows`);
+    const questions = (rows || [])
+      .filter((r) => r.split === 'train')
+      .map(extractQuestionFromRow)
+      .filter(Boolean);
+    // De-dupe while preserving order.
+    state.verifySuggestions = [...new Set(questions)];
+  } catch {
+    state.verifySuggestions = [];
+  }
+
+  if (!state.verifySuggestions.length) return;
+  if (dom.verifySuggestBtn) dom.verifySuggestBtn.disabled = false;
+  if (dom.verifySuggestHint) {
+    dom.verifySuggestHint.textContent = `${state.verifySuggestions.length} training question(s) available.`;
+  }
+  // If the user hasn't typed anything yet, pre-fill an in-domain question so
+  // the default comparison is meaningful instead of a random off-topic prompt.
+  if (dom.verifyQuestion && !dom.verifyQuestion.value.trim()) {
+    fillSuggestedQuestion(0);
+  }
+}
+
+function fillSuggestedQuestion(index) {
+  const list = state.verifySuggestions || [];
+  if (!list.length || !dom.verifyQuestion) return;
+  const i = ((index % list.length) + list.length) % list.length;
+  dom.verifyQuestion.value = list[i];
+  state.verifySuggestIndex = i;
+  if (dom.verifySuggestHint) {
+    dom.verifySuggestHint.textContent =
+      `Suggested from training data (${i + 1}/${list.length}) — edit it or click again to cycle.`;
+  }
 }
 
 if (dom.verifyFtModel) {
   dom.verifyFtModel.addEventListener('change', updateVerifyBaseModel);
+}
+
+if (dom.verifySuggestBtn) {
+  dom.verifySuggestBtn.addEventListener('click', () => {
+    const next = (state.verifySuggestIndex === undefined ? -1 : state.verifySuggestIndex) + 1;
+    fillSuggestedQuestion(next);
+  });
 }
 
 function setVerifyStatus(msg) {

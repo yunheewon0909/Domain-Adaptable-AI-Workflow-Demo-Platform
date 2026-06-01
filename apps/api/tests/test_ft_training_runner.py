@@ -164,3 +164,48 @@ def test_execute_training_job_fails_when_adapter_artifacts_are_missing(
     assert failed_detail.status_code == 200
     assert failed_detail.json()["status"] == "failed"
     assert failed_detail.json()["error_json"]["phase"] == "packaging"
+
+
+def test_small_dataset_autoscale_iters_and_lr() -> None:
+    """Tiny datasets must get enough passes to imprint, at a gentle LR.
+
+    Regression guard for the "FT answers identically to base" report: a
+    9-row run previously resolved to only 18 iters (2 passes), too few to
+    move the adapter visibly. It now targets ~6 passes (min 30) while
+    keeping the low 1e-5 LR that prevents divergence on small N.
+    """
+    from api.config import get_settings
+    from api.services.fine_tuning.trainer import build_training_config
+
+    settings = get_settings()
+
+    cfg = build_training_config(
+        base_model_name="liquid/lfm2.5-1.2b",
+        training_method="sft_qlora",
+        hyperparams_json={},
+        settings=settings,
+        train_rows=9,
+    )
+    assert cfg.mlx_iters == 54  # 9 * 6, within [30, 120]
+    assert cfg.learning_rate == 1e-5
+
+    # Floor applies for very tiny sets so they still get real training.
+    tiny = build_training_config(
+        base_model_name="liquid/lfm2.5-1.2b",
+        training_method="sft_qlora",
+        hyperparams_json={},
+        settings=settings,
+        train_rows=2,
+    )
+    assert tiny.mlx_iters == 30  # max(30, 2 * 6)
+
+    # Explicit user overrides still win.
+    override = build_training_config(
+        base_model_name="liquid/lfm2.5-1.2b",
+        training_method="sft_qlora",
+        hyperparams_json={"mlx_iters": 200, "learning_rate": 2e-4},
+        settings=settings,
+        train_rows=9,
+    )
+    assert override.mlx_iters == 200
+    assert override.learning_rate == 2e-4

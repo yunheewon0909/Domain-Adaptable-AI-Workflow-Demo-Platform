@@ -249,6 +249,17 @@
           </button>
         </div>
 
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <button id="verify-suggest-btn" type="button" class="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50" disabled>
+            💡 Suggest a question from training data
+          </button>
+          <span id="verify-suggest-hint" class="text-muted-fg"></span>
+        </div>
+        <p class="text-xs text-muted-fg">
+          Tip: ask something your fine-tune was actually trained on. On questions outside
+          the training data the fine-tuned and base models usually answer identically.
+        </p>
+
         <div id="verify-status" class="text-sm text-muted-fg">Idle.</div>
 
         <progress id="verify-progress" class="hidden w-full accent-accent h-2" max="5" value="0"></progress>
@@ -350,6 +361,6 @@
       </section>
     </main>
 
-    <script src="/demo/assets/app.js?v=25"></script>
+    <script src="/demo/assets/app.js?v=26"></script>
   </body>
 </html>

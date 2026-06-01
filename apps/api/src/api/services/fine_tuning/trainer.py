@@ -284,10 +284,16 @@ def build_training_config(
         resolved_iters = max(10, int(_user_iters))
     elif train_rows > 0:
         # Target ~3 passes over the data, clamped to [10, 500].
-        # For very small datasets, cap iters further so the model doesn't
-        # over-cycle a handful of examples (each iter = 1 example here).
         if train_rows < 20:
-            resolved_iters = max(10, min(60, train_rows * 2))
+            # Tiny datasets: ~6 passes (min 30) so the adapter actually
+            # imprints the examples. Earlier this was capped at 2 passes
+            # (train_rows * 2) to avoid divergence, but that was a workaround
+            # for the old aggressive 2e-4 LR. With the LR now dialed to 1e-5
+            # for small N (below), 2 passes barely moves the weights — the FT
+            # model learns the domain persona but not the specific facts, so
+            # its answers look identical to base. More passes at the low LR
+            # sharpen recall without the divergence the high LR caused.
+            resolved_iters = max(30, min(120, train_rows * 6))
         else:
             resolved_iters = max(10, min(500, train_rows * 3))
     else:
