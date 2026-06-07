@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_engine
 from api.routers.demo import router as demo_router
+from api.routers.evaluation import router as evaluation_router
 from api.routers.health import router as health_router
 from api.routers.jobs import router as jobs_router
 from api.routers.models import router as models_router
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(models_router)
     app.include_router(rag_router)
+    app.include_router(evaluation_router)
     app.include_router(openai_compat_router)
     app.include_router(openwebui_router)
     if active_starter.demo.enabled:

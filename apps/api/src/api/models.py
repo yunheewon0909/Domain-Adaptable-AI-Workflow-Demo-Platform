@@ -331,3 +331,68 @@ class RAGQueryTraceRecord(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
     )
+
+
+# --- Evaluation (testset generation + runs/reports) -----------------------
+
+
+class EvaluationSetRecord(Base):
+    __tablename__ = "evaluation_sets"
+    __table_args__ = (Index("ix_evaluation_sets_collection_id", "collection_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'draft'")
+    )
+    question_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
+    )
+
+
+class EvaluationQuestionRecord(Base):
+    __tablename__ = "evaluation_questions"
+    __table_args__ = (
+        Index("ix_evaluation_questions_set_id", "evaluation_set_id"),
+        Index("ix_evaluation_questions_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    evaluation_set_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("evaluation_sets.id"), nullable=False
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'pending'")
+    )
+    source_chunk_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("rag_chunks.id"), nullable=True
+    )
+    source_entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
+    )
