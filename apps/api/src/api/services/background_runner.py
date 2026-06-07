@@ -92,9 +92,21 @@ def _run_rag_index_collection(payload: dict[str, Any]) -> None:
         index_collection(session, collection_id=collection_id)
 
 
-# Job-type → runner registry. Evaluation runners register here too (Phase 7).
+def _run_evaluation_run(payload: dict[str, Any]) -> None:
+    """Execute a RAG evaluation run + build its report. Runs in a thread."""
+    from api.services.evaluation.runner import run_evaluation
+
+    run_id = str(payload.get("run_id") or "").strip()
+    if not run_id:
+        raise RuntimeError("evaluation_run payload missing run_id")
+    with Session(get_engine()) as session:
+        run_evaluation(session, run_id=run_id)
+
+
+# Job-type → runner registry.
 _RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "rag_index_collection": _run_rag_index_collection,
+    "evaluation_run": _run_evaluation_run,
 }
 
 

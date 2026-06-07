@@ -396,3 +396,68 @@ class EvaluationQuestionRecord(Base):
         server_default=text("CURRENT_TIMESTAMP"),
         onupdate=func.now(),
     )
+
+
+class EvaluationRunRecord(Base):
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        Index("ix_evaluation_runs_set_id", "evaluation_set_id"),
+        Index("ix_evaluation_runs_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    evaluation_set_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("evaluation_sets.id"), nullable=False
+    )
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'local'")
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'queued'")
+    )
+    question_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    report_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EvaluationResultRecord(Base):
+    __tablename__ = "evaluation_results"
+    __table_args__ = (Index("ix_evaluation_results_run_id", "run_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("evaluation_runs.id"), nullable=False
+    )
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    generated_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retrieved_chunk_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    retrieved_entity_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    groundedness: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
+    )
+    source_coverage: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
+    )
+    hallucination: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
