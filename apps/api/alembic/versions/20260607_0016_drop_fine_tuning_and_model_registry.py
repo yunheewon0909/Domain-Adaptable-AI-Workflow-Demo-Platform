@@ -261,3 +261,58 @@ def downgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
     )
+
+    # Recreate the indexes that the original migrations (0010) drop unguarded on
+    # downgrade, plus the renamed serving index (0014). This keeps the recreated
+    # schema symmetric with the pre-0016 state so the rest of the downgrade chain
+    # finds the objects it expects.
+    op.create_index("ix_ft_datasets_task_type", "ft_datasets", ["task_type"])
+    op.create_index("ix_ft_datasets_created_at", "ft_datasets", ["created_at"])
+    op.create_index(
+        "ix_ft_dataset_versions_dataset_id", "ft_dataset_versions", ["dataset_id"]
+    )
+    op.create_index(
+        "ix_ft_dataset_versions_status", "ft_dataset_versions", ["status"]
+    )
+    op.create_index(
+        "ix_ft_dataset_versions_created_at", "ft_dataset_versions", ["created_at"]
+    )
+    op.create_index(
+        "ix_ft_dataset_rows_dataset_version_id",
+        "ft_dataset_rows",
+        ["dataset_version_id"],
+    )
+    op.create_index("ix_ft_dataset_rows_split", "ft_dataset_rows", ["split"])
+    op.create_index(
+        "ix_ft_dataset_rows_validation_status",
+        "ft_dataset_rows",
+        ["validation_status"],
+    )
+    op.create_index(
+        "ix_ft_training_jobs_dataset_version_id",
+        "ft_training_jobs",
+        ["dataset_version_id"],
+    )
+    op.create_index("ix_ft_training_jobs_status", "ft_training_jobs", ["status"])
+    op.create_index(
+        "ix_ft_training_jobs_created_at", "ft_training_jobs", ["created_at"]
+    )
+    op.create_index(
+        "ix_ft_model_artifacts_training_job_id",
+        "ft_model_artifacts",
+        ["training_job_id"],
+    )
+    op.create_index(
+        "ix_ft_model_artifacts_artifact_type",
+        "ft_model_artifacts",
+        ["artifact_type"],
+    )
+    op.create_index("ix_model_registry_status", "model_registry", ["status"])
+    op.create_index(
+        "ix_model_registry_source_type", "model_registry", ["source_type"]
+    )
+    op.create_index(
+        "ix_model_registry_serving_model_name",
+        "model_registry",
+        ["serving_model_name"],
+    )
