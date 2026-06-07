@@ -80,8 +80,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Wait for the API to be HEALTHY (not merely started) so migrations have
+      # been applied before the worker begins polling the jobs table.
       api:
-        condition: service_started
+        condition: service_healthy
     environment:
       API_DATABASE_URL: ${API_DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/industrial_ai}
       LLM_RUNTIME_PROVIDER: ${LLM_RUNTIME_PROVIDER:-ollama}

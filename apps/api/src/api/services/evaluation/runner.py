@@ -120,13 +120,17 @@ def _graph_stats(session: Session, collection_id: str) -> dict[str, Any]:
         )
         or 0
     )
+    entities = count(RAGEntityRecord)
+    relationships = count(RAGRelationshipRecord)
     return {
         "documents": documents,
         "chunks": chunk_total,
-        "entities": count(RAGEntityRecord),
-        "relationships": count(RAGRelationshipRecord),
+        "entities": entities,
+        "relationships": relationships,
         "communities": count(RAGCommunityRecord),
         "orphan_chunks": orphan_chunks,
+        # Graph density: relationships per entity (0 when there are no entities).
+        "density": round(relationships / entities, 4) if entities else 0.0,
         "indexed": chunk_total > 0,
     }
 
@@ -142,81 +146,101 @@ def run_evaluation(
     run.status = "running"
     session.commit()
 
-    questions = list(
-        session.scalars(
-            select(EvaluationQuestionRecord).where(
-                EvaluationQuestionRecord.evaluation_set_id == run.evaluation_set_id,
-                EvaluationQuestionRecord.status != "rejected",
-            )
-        ).all()
-    )
-
-    results: list[EvaluationResultRecord] = []
-    coverage_scored = 0
-    coverage_hits = 0
-    for q in questions:
-        retrieval = query_collection(
-            session,
-            collection_id=run.collection_id,
-            query=q.question,
-            mode=run.mode,
-            top_k=5,
+    try:
+        questions = list(
+            session.scalars(
+                select(EvaluationQuestionRecord).where(
+                    EvaluationQuestionRecord.evaluation_set_id == run.evaluation_set_id,
+                    EvaluationQuestionRecord.status != "rejected",
+                )
+            ).all()
         )
-        context = retrieval.get("context", "")
-        chunk_ids = [c["chunk_id"] for c in retrieval.get("chunks", [])]
-        entity_ids = [e["entity_id"] for e in retrieval.get("entities", [])]
-        answer = answerer(q.question, context)
-        grounded = _groundedness(answer, context)
 
-        coverage = 0.0
-        if q.source_chunk_id:
-            coverage_scored += 1
-            if q.source_chunk_id in chunk_ids:
-                coverage = 1.0
-                coverage_hits += 1
-        hallucination = bool(answer) and grounded < _GROUNDEDNESS_THRESHOLD
-
-        results.append(
-            EvaluationResultRecord(
-                id=_new_id("eval-res"),
-                run_id=run.id,
-                question_id=q.id,
-                question=q.question,
-                generated_answer=answer or None,
-                retrieved_chunk_ids_json=chunk_ids,
-                retrieved_entity_ids_json=entity_ids,
-                groundedness=grounded,
-                source_coverage=coverage,
-                hallucination=hallucination,
-                notes=(
-                    "answer not grounded in retrieved evidence"
-                    if hallucination
-                    else None
-                ),
+        results: list[EvaluationResultRecord] = []
+        coverage_scored = 0
+        coverage_hits = 0
+        for q in questions:
+            retrieval = query_collection(
+                session,
+                collection_id=run.collection_id,
+                query=q.question,
+                mode=run.mode,
+                top_k=5,
             )
+            context = retrieval.get("context", "")
+            chunk_ids = [c["chunk_id"] for c in retrieval.get("chunks", [])]
+            entity_ids = [e["entity_id"] for e in retrieval.get("entities", [])]
+            answer = answerer(q.question, context)
+            grounded = _groundedness(answer, context)
+
+            coverage = 0.0
+            # Only score source coverage when the retrieval mode actually
+            # returns chunk-level evidence; global/community-summary mode has no
+            # chunks, so coverage is "not applicable" rather than 0 (a 0 would
+            # falsely imply total retrieval failure).
+            if q.source_chunk_id and chunk_ids:
+                coverage_scored += 1
+                if q.source_chunk_id in chunk_ids:
+                    coverage = 1.0
+                    coverage_hits += 1
+            hallucination = bool(answer) and grounded < _GROUNDEDNESS_THRESHOLD
+
+            results.append(
+                EvaluationResultRecord(
+                    id=_new_id("eval-res"),
+                    run_id=run.id,
+                    question_id=q.id,
+                    question=q.question,
+                    generated_answer=answer or None,
+                    retrieved_chunk_ids_json=chunk_ids,
+                    retrieved_entity_ids_json=entity_ids,
+                    groundedness=grounded,
+                    source_coverage=coverage,
+                    hallucination=hallucination,
+                    notes=(
+                        "answer not grounded in retrieved evidence"
+                        if hallucination
+                        else None
+                    ),
+                )
+            )
+        session.add_all(results)
+
+        n = len(results)
+        avg_groundedness = round(sum(r.groundedness for r in results) / n, 4) if n else 0.0
+        hallucination_rate = (
+            round(sum(1 for r in results if r.hallucination) / n, 4) if n else 0.0
         )
-    session.add_all(results)
+        source_coverage = (
+            round(coverage_hits / coverage_scored, 4) if coverage_scored else None
+        )
 
-    n = len(results)
-    avg_groundedness = round(sum(r.groundedness for r in results) / n, 4) if n else 0.0
-    hallucination_rate = round(sum(1 for r in results if r.hallucination) / n, 4) if n else 0.0
-    source_coverage = round(coverage_hits / coverage_scored, 4) if coverage_scored else None
-
-    report = {
-        "question_count": n,
-        "answer_quality": {
-            "avg_groundedness": avg_groundedness,
-            "hallucination_rate": hallucination_rate,
-        },
-        "retrieval_quality": {
-            "source_coverage": source_coverage,
-            "questions_with_known_source": coverage_scored,
-        },
-        "collection_health": _graph_stats(session, run.collection_id),
-    }
-    run.question_count = n
-    run.report_json = report
-    run.status = "succeeded"
-    run.finished_at = datetime.now(timezone.utc)
-    session.commit()
-    return report
+        report = {
+            "question_count": n,
+            "answer_quality": {
+                "avg_groundedness": avg_groundedness,
+                "hallucination_rate": hallucination_rate,
+            },
+            "retrieval_quality": {
+                "source_coverage": source_coverage,
+                "questions_with_known_source": coverage_scored,
+            },
+            "collection_health": _graph_stats(session, run.collection_id),
+        }
+        run.question_count = n
+        run.report_json = report
+        run.status = "succeeded"
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        return report
+    except Exception as exc:
+        # Never leave the run stuck in 'running'; record the failure so the
+        # report endpoint and any reaper can see a terminal state.
+        session.rollback()
+        run = session.get(EvaluationRunRecord, run_id)
+        if run is not None:
+            run.status = "failed"
+            run.error = str(exc)[:4000]
+            run.finished_at = datetime.now(timezone.utc)
+            session.commit()
+        raise

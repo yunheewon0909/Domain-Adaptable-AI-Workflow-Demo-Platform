@@ -59,23 +59,32 @@ def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
         return []
     if len(text) <= chunk_size:
         return [text]
-    step = max(1, chunk_size - max(0, overlap))
+    # Clamp overlap to a sane range so the window always makes forward progress.
+    overlap = max(0, min(overlap, chunk_size - 1))
+    n = len(text)
     chunks: list[str] = []
     start = 0
-    while start < len(text):
-        end = min(len(text), start + chunk_size)
+    while start < n:
+        end = min(n, start + chunk_size)
         window = text[start:end]
-        if end < len(text):
+        if end < n:
             # Try to break on the last paragraph or sentence boundary.
             for sep in ("\n\n", ". ", "\n", " "):
                 idx = window.rfind(sep)
                 if idx >= chunk_size // 2:
                     window = window[: idx + len(sep)]
                     break
+        consumed = len(window)
         piece = window.strip()
         if piece:
             chunks.append(piece)
-        start += max(step, len(window))
+        # Stop once this window reaches the end of the text. Otherwise advance by
+        # the characters actually consumed minus the overlap — never by a fixed
+        # `step`, which could skip past un-emitted characters when a boundary
+        # break trims the window shorter than the step (silent data loss).
+        if start + consumed >= n:
+            break
+        start += max(1, consumed - overlap)
     return chunks
 
 

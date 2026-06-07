@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.models import JobRecord
@@ -132,20 +133,41 @@ def create_job(
     max_attempts: int = 3,
     commit: bool = True,
 ) -> JobRecord:
-    job = JobRecord(
-        id=next_job_id(session),
-        type=job_type,
-        workflow_key=workflow_key,
-        dataset_key=dataset_key,
-        status=status,
-        payload_json=payload_json,
-        attempts=0,
-        max_attempts=max_attempts,
-    )
-    session.add(job)
-    if commit:
-        session.commit()
-        session.refresh(job)
-    else:
+    def _build() -> JobRecord:
+        return JobRecord(
+            id=next_job_id(session),
+            type=job_type,
+            workflow_key=workflow_key,
+            dataset_key=dataset_key,
+            status=status,
+            payload_json=payload_json,
+            attempts=0,
+            max_attempts=max_attempts,
+        )
+
+    if not commit:
+        # Inside a caller-managed transaction: a single flush. (The id-collision
+        # retry below requires its own commit boundary, so it only applies to
+        # the autocommit path.)
+        job = _build()
+        session.add(job)
         session.flush()
-    return job
+        return job
+
+    # next_job_id() allocates ids by scanning max(suffix)+1, so two concurrent
+    # enqueues can pick the same id and collide on the PK. Retry on the unique
+    # violation, recomputing the id each attempt, instead of surfacing a 500.
+    last_exc: IntegrityError | None = None
+    for _ in range(8):
+        job = _build()
+        session.add(job)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            last_exc = exc
+            continue
+        session.refresh(job)
+        return job
+    assert last_exc is not None
+    raise last_exc

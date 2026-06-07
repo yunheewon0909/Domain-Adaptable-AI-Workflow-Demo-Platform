@@ -19,7 +19,14 @@ import asyncio
 import logging
 import signal
 
-from api.services.background_runner import dispatcher_loop
+from sqlalchemy.orm import Session
+
+from api.db import get_engine
+from api.services.background_runner import (
+    dispatcher_loop,
+    reap_stale_running_jobs,
+    reap_unsupported_queue_rows,
+)
 
 logger = logging.getLogger("api.worker")
 
@@ -32,6 +39,13 @@ async def _run() -> None:
             loop.add_signal_handler(sig, stop_event.set)
         except NotImplementedError:  # pragma: no cover - non-unix
             pass
+    # The worker owns dispatch, so it reaps its OWN stale rows from a previous
+    # worker process here (the API no longer does — see api.main lifespan).
+    with Session(get_engine()) as session:
+        reap_unsupported_queue_rows(session)
+        reaped = reap_stale_running_jobs(session)
+        if reaped:
+            logger.info("reaped %d stale running job(s) from a previous worker", reaped)
     logger.info("worker starting; dispatching jobs from the shared queue")
     await dispatcher_loop(stop_event)
     logger.info("worker stopped")

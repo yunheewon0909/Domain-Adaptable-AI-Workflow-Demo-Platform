@@ -141,11 +141,22 @@ def _seed_entities(
     query_l = query.lower()
 
     def score(entity: RAGEntityRecord) -> float:
-        if qvec and entity.embedding_json:
-            return _cosine_similarity(qvec, entity.embedding_json)
-        # name mention or lexical overlap with the description
-        mention = 1.0 if entity.normalized_name and entity.normalized_name in query_l else 0.0
-        return mention + 0.001 * _lexical_score(query, entity.description or entity.name)
+        # Additive: an exact name mention always boosts an entity even when
+        # embeddings are present, so verbatim-named entities are never filtered
+        # out by a low cosine score.
+        base = (
+            _cosine_similarity(qvec, entity.embedding_json)
+            if (qvec and entity.embedding_json)
+            else 0.0
+        )
+        mention = (
+            1.0
+            if entity.normalized_name and entity.normalized_name in query_l
+            else 0.0
+        )
+        return base + mention + 0.001 * _lexical_score(
+            query, entity.description or entity.name
+        )
 
     ranked = sorted(entities, key=score, reverse=True)
     return [e for e in ranked if score(e) > 0][:limit]
@@ -230,9 +241,27 @@ def _local_search(
         else []
     )
 
+    # Surface both seeds and the 1-hop neighbors discovered via expansion, so the
+    # evidence trace distinguishes them and relationship endpoints resolve to
+    # listed entities.
+    neighbor_only_ids = neighbor_ids - seed_ids
+    neighbor_entities = (
+        list(
+            session.scalars(
+                select(RAGEntityRecord).where(
+                    RAGEntityRecord.id.in_(neighbor_only_ids)
+                )
+            ).all()
+        )
+        if neighbor_only_ids
+        else []
+    )
     entity_payload = [
-        {"entity_id": e.id, "name": e.name, "type": e.type, "seed": e.id in seed_ids}
+        {"entity_id": e.id, "name": e.name, "type": e.type, "seed": True}
         for e in seeds
+    ] + [
+        {"entity_id": e.id, "name": e.name, "type": e.type, "seed": False}
+        for e in neighbor_entities
     ]
     rel_payload = [
         {

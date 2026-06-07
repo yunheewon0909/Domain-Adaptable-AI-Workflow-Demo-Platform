@@ -18,6 +18,7 @@ from api.routers.openai_compat import router as openai_compat_router
 from api.routers.openwebui import router as openwebui_router
 from api.routers.rag import router as rag_router
 from api.services.background_runner import (
+    _background_dispatch_enabled,
     reap_stale_running_jobs,
     reap_unsupported_queue_rows,
     start_dispatcher_task,
@@ -41,12 +42,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info(
                 "marked %d queued/running jobs with deprecated types as failed", reaped
             )
-        stale_running = reap_stale_running_jobs(session)
-        if stale_running:
-            logger.info(
-                "marked %d stale running jobs (left over from a previous process) as failed",
-                stale_running,
-            )
+        # Only the process that OWNS dispatch may reap `running` jobs: in the
+        # Docker topology the worker container runs the dispatcher and owns the
+        # in-flight rows, so the API (FT_BACKGROUND_DISPATCH=false) must not
+        # mark them failed on its own restart. The worker reaps its own stale
+        # rows on startup (see api.worker).
+        if _background_dispatch_enabled():
+            stale_running = reap_stale_running_jobs(session)
+            if stale_running:
+                logger.info(
+                    "marked %d stale running jobs (left over from a previous process) as failed",
+                    stale_running,
+                )
 
     # In compose the worker container runs the dispatcher; the API runs with
     # FT_BACKGROUND_DISPATCH=false. For single-process local dev the API can run

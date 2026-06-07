@@ -269,12 +269,16 @@ def _stream_via_runtime(
         }
         yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
 
+    # The upstream's own terminal chunk already carries finish_reason="stop";
+    # this trailing chunk exists only to attach platform metadata, so it must
+    # NOT emit a second non-null finish_reason (the OpenAI streaming contract
+    # allows exactly one terminal chunk per choice).
     final_chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
         "x_domain_platform": platform_meta,
     }
     yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"

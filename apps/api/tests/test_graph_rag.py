@@ -56,6 +56,23 @@ def test_chunk_text_splits_long_text() -> None:
     assert all(c.strip() for c in chunks)
 
 
+def test_chunk_text_does_not_drop_text_on_boundary_trim() -> None:
+    """Regression: a boundary break before the step boundary must not skip chars."""
+    text = ("A" * 280) + "\n\n" + ("B" * 900)
+    chunks = chunk_text(text, chunk_size=500, overlap=50)
+    covered_a = sum(c.count("A") for c in chunks)
+    covered_b = sum(c.count("B") for c in chunks)
+    assert covered_a >= text.count("A")
+    assert covered_b >= text.count("B")
+
+
+def test_chunk_text_applies_overlap() -> None:
+    """Regression: overlap must actually overlap (shared content between chunks)."""
+    chunks = chunk_text("word " * 400, chunk_size=500, overlap=50)
+    total = sum(c.count("word") for c in chunks)
+    assert total > 400, "expected duplicated tokens from overlap"
+
+
 # --- indexing ----------------------------------------------------------
 def test_index_collection_creates_chunks_entities_relationships(client: TestClient) -> None:
     coll = _seed_collection_with_doc(

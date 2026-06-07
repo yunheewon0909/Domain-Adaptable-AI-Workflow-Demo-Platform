@@ -34,7 +34,7 @@ def _hallucinating_answerer(question: str, context: str) -> str:
     return "completely unrelated zebra elephant spaceship narwhal"
 
 
-def _setup_run(client: TestClient, answerer) -> dict:
+def _setup_run_mode(client: TestClient, answerer, mode: str = "local") -> dict:
     coll = client.post("/rag-collections", json={"name": "KB"}).json()["id"]
     client.post(
         f"/rag-collections/{coll}/documents/text",
@@ -45,10 +45,14 @@ def _setup_run(client: TestClient, answerer) -> dict:
         gen = generate_evaluation_set(
             session, collection_id=coll, name="eval", generator=_fake_qgen
         )
-        run = create_run(session, evaluation_set_id=gen["evaluation_set_id"])
+        run = create_run(session, evaluation_set_id=gen["evaluation_set_id"], mode=mode)
         report = run_evaluation(session, run_id=run.id, answerer=answerer)
         run_id = run.id
     return {"collection_id": coll, "run_id": run_id, "report": report}
+
+
+def _setup_run(client: TestClient, answerer) -> dict:
+    return _setup_run_mode(client, answerer, mode="local")
 
 
 # --- scoring units -----------------------------------------------------
@@ -127,6 +131,52 @@ def test_run_endpoint_enqueues_job_and_report_fetchable(client: TestClient) -> N
     assert rbody["run"]["status"] == "succeeded"
     assert rbody["report"]["question_count"] >= 1
     assert isinstance(rbody["results"], list) and rbody["results"]
+
+
+def test_run_marks_failed_when_answerer_raises(client: TestClient) -> None:
+    """Regression: a raising run must end 'failed' with an error, not stuck 'running'."""
+    import pytest as _pytest
+
+    from api.models import EvaluationRunRecord
+
+    coll = client.post("/rag-collections", json={"name": "KB"}).json()["id"]
+    client.post(
+        f"/rag-collections/{coll}/documents/text",
+        json={"filename": "n.md", "content": "Pump P-101 feeds the reactor."},
+    )
+
+    def _boom(question: str, context: str) -> str:
+        raise RuntimeError("answerer exploded")
+
+    with Session(get_engine()) as session:
+        index_collection(session, collection_id=coll, extractor=_fake_extractor)
+        gen = generate_evaluation_set(
+            session, collection_id=coll, name="eval", generator=_fake_qgen
+        )
+        run = create_run(session, evaluation_set_id=gen["evaluation_set_id"])
+        run_id = run.id
+        with _pytest.raises(RuntimeError, match="answerer exploded"):
+            run_evaluation(session, run_id=run_id, answerer=_boom)
+
+    with Session(get_engine()) as session:
+        row = session.get(EvaluationRunRecord, run_id)
+        assert row is not None
+        assert row.status == "failed"
+        assert "answerer exploded" in (row.error or "")
+        assert row.finished_at is not None
+
+
+def test_global_mode_coverage_is_not_applicable_not_zero(client: TestClient) -> None:
+    """Regression: global mode returns no chunks, so source_coverage is None, not 0."""
+    out = _setup_run_mode(client, _grounded_answerer, mode="global")
+    rq = out["report"]["retrieval_quality"]
+    assert rq["source_coverage"] is None
+    assert rq["questions_with_known_source"] == 0
+
+
+def test_report_includes_graph_density(client: TestClient) -> None:
+    out = _setup_run(client, _grounded_answerer)
+    assert "density" in out["report"]["collection_health"]
 
 
 def test_run_endpoint_404_for_missing_set(client: TestClient) -> None:

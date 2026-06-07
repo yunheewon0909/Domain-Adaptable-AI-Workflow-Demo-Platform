@@ -124,6 +124,23 @@ def test_chat_completion_streams_via_runtime(client: TestClient) -> None:
     assert "Hello " in text and "world" in text
     assert "data: [DONE]" in text
     assert [m["role"] for m in fake.received] == ["system", "user"]
+    # Exactly one chunk carries a non-null finish_reason (OpenAI streaming
+    # contract); the synthetic metadata trailer must not duplicate "stop".
+    import json as _json
+
+    stops = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if payload == "[DONE]":
+            continue
+        chunk = _json.loads(payload)
+        for choice in chunk.get("choices", []):
+            if choice.get("finish_reason") is not None:
+                stops += 1
+    assert stops == 1, f"expected exactly one terminal finish_reason, got {stops}"
 
 
 def test_chat_completion_reasoning_mirrored_to_content(client: TestClient) -> None:
