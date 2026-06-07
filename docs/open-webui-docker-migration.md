@@ -54,7 +54,8 @@ against real evidence), which is what differentiates this from plain Open WebUI 
 
 `apps/api/src/api/services/runtime/` defines `ChatRuntime` + `EmbeddingRuntime` protocols with
 an `OpenAICompatRuntime` base (covers Ollama `/v1/*`, LM Studio, any OpenAI-compatible
-endpoint) and an `OllamaRuntime` subclass (native `/api/tags`, `/api/embed`). Selected by
+endpoint) and an `OllamaRuntime` subclass (native `/api/tags` for listing; chat + embeddings via
+the OpenAI-compatible `/v1/*`). Selected by
 `LLM_RUNTIME_PROVIDER` (default `ollama`), `LLM_BASE_URL` (default `http://ollama:11434`),
 `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL`. The old `LMSTUDIO_*` envs survive one release as
 deprecated aliases. LM Studio is never required.

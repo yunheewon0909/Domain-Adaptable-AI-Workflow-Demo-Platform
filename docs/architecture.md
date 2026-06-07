@@ -10,7 +10,7 @@ Five containers wired by `compose.yml`:
 
 - **`open-webui`** — primary chat UI; points its OpenAI connection at `api`'s `/v1/*`.
 - **`api`** — FastAPI app: domain RAG/evaluation/report endpoints + OpenAI-compatible shim. Runs
-  with the in-process dispatcher off (`RUN_DISPATCHER=false`).
+  with the in-process dispatcher off (`FT_BACKGROUND_DISPATCH=false`).
 - **`worker`** — same image as `api`, entrypoint `python -m api.worker`; runs the dispatcher loop
   for long jobs (graph indexing, evaluation runs).
 - **`ollama`** — default chat + embedding runtime.
@@ -26,7 +26,8 @@ under `data/rag_collections/<collection>/<document>` (the `app_data` volume).
 
 - `OpenAICompatRuntime` — base; talks the OpenAI `/v1/*` dialect (covers Ollama `/v1`, LM Studio,
   any OpenAI-compatible endpoint).
-- `OllamaRuntime` — subclass; native model listing (`/api/tags`) and embeddings (`/api/embed`).
+- `OllamaRuntime` — subclass; native model listing via `/api/tags`. Chat + embeddings use
+  Ollama's OpenAI-compatible `/v1/*` surface (so embeddings POST to `/v1/embeddings`).
 
 Selected by `LLM_RUNTIME_PROVIDER` (default `ollama`), `LLM_BASE_URL`
 (default `http://ollama:11434`), `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL`. `LMSTUDIO_*` envs remain as
@@ -38,8 +39,8 @@ The `jobs` table is the queue and lifecycle source of truth (`queued → running
 succeeded/failed`). `services/background_runner.py` claims rows with `SELECT … FOR UPDATE SKIP
 LOCKED` (Postgres) or an in-process `asyncio.Lock` (sqlite tests) and dispatches to the runner
 registered for the job type. In compose, only the `worker` container runs the loop; the `api`
-container sets `RUN_DISPATCHER=false`. Current job types: `rag_index_collection` /
-`rag_index_document` and `evaluation_run`.
+container sets `FT_BACKGROUND_DISPATCH=false`. Current job types: `rag_index_collection` and
+`evaluation_run`.
 
 ## Graph RAG
 
@@ -91,8 +92,10 @@ excerpts, embedding model) — the substrate for evaluation.
 ## OpenAI-compatible shim
 
 `GET /v1/models` and `POST /v1/chat/completions` proxy the configured runtime. Optional
-`rag_collection_id` + `mode` body fields ground a completion with graph retrieval. This is what
-Open WebUI points at; plain OpenAI clients without the extra fields get ordinary chat.
+`rag_collection_id` + `top_k` body fields ground a completion with document-level retrieval
+(`preview_collection_retrieval`). This is what Open WebUI points at; plain OpenAI clients without
+the extra fields get ordinary chat. Graph-mode retrieval (local/global/naive) lives on the
+dedicated `POST /rag-collections/{id}/query` endpoint, not the chat shim.
 
 ## `/demo`
 

@@ -95,7 +95,7 @@ COLLECTION=$(curl -s -X POST http://127.0.0.1:8000/rag-collections \
 
 curl -s -X POST "http://127.0.0.1:8000/rag-collections/$COLLECTION/documents/text" \
   -H 'Content-Type: application/json' \
-  -d '{"filename":"notes.md","text":"Pump P-101 feeds reactor R-200. ..."}'
+  -d '{"filename":"notes.md","content":"Pump P-101 feeds reactor R-200. ..."}'
 
 # 2. Build the knowledge graph (worker job: chunk → embed → extract → communities → summarize)
 curl -s -X POST "http://127.0.0.1:8000/rag-collections/$COLLECTION/index"
@@ -141,7 +141,7 @@ Run Open WebUI (bundled in compose) and:
 - import the platform tool: `GET /openwebui/platform_tools.py`;
 - `GET /openwebui/manifest.json` lists the exposed methods: `list_collections`,
   `create_collection`, `upload_text_document`, `search_collection`, `get_entity`, `get_subgraph`,
-  `generate_evaluation_set`, `run_rag_evaluation`, `get_evaluation_report`.
+  `generate_evaluation_set`, `run_rag_evaluation`, `get_evaluation_report`, `get_job_status`.
 
 ## Development (AgentDocker) & verification
 

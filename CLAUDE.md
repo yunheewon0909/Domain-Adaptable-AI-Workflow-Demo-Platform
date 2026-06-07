@@ -49,12 +49,13 @@ Therefore:
 
 - **Runtime adapter** (`services/runtime/`): all LLM/embedding calls go through `ChatRuntime` /
   `EmbeddingRuntime`. `OpenAICompatRuntime` (base) covers Ollama `/v1/*`, LM Studio, and any
-  OpenAI-compatible endpoint; `OllamaRuntime` adds native `/api/tags` + `/api/embed`. Provider is
+  OpenAI-compatible endpoint; `OllamaRuntime` adds native `/api/tags` (chat + embeddings still go
+  through Ollama's OpenAI-compatible `/v1/*`). Provider is
   chosen by `LLM_RUNTIME_PROVIDER` (default `ollama`). Never hardcode a provider in routers/services.
 - **Worker container**: long jobs (graph indexing, evaluation runs) run in the `worker` container
   via `python -m api.worker`, which runs the same dispatcher loop (`services/background_runner.py`)
   off the shared Postgres **jobs** queue. The API container runs with the dispatcher off
-  (`RUN_DISPATCHER=false`). Job types and their runners live in `background_runner._RUNNERS`.
+  (`FT_BACKGROUND_DISPATCH=false`). Job types and their runners live in `background_runner._RUNNERS`.
 - **Jobs table is the queue + lifecycle source of truth** (`queued → running → succeeded/failed`),
   claimed with `SELECT … FOR UPDATE SKIP LOCKED` on Postgres (asyncio.Lock fallback on sqlite).
 - **Graph RAG** (`services/rag/graph_index.py`, `graph_retrieval.py`): Postgres property graph

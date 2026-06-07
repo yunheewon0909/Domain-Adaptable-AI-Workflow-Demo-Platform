@@ -17,7 +17,8 @@ OpenAI-compatible runtimes without code changes.
 - Add `apps/api/src/api/services/runtime/` defining `ChatRuntime` and `EmbeddingRuntime`
   protocols.
 - Implement `OpenAICompatRuntime` (base; OpenAI `/v1/*` dialect — covers Ollama `/v1`, LM Studio,
-  any OpenAI-compatible server) and `OllamaRuntime` (subclass; native `/api/tags` + `/api/embed`).
+  any OpenAI-compatible server) and `OllamaRuntime` (subclass; native `/api/tags` for model
+  listing, with chat + embeddings via Ollama's OpenAI-compatible `/v1/*`).
 - Select via config: `LLM_RUNTIME_PROVIDER` (default `ollama`), `LLM_BASE_URL`
   (default `http://ollama:11434`), `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL`.
 - Rewire `openai_compat.py`, `llm.py`, and `embedding_client.py` to the adapter. **No router or
