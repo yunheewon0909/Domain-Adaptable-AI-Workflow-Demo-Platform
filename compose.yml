@@ -1,0 +1,113 @@
+# Docker-first stack: postgres + ollama + open-webui + api + worker.
+# Basic usage:
+#   cp .env.example .env
+#   docker compose up -d --build
+#   docker compose exec ollama ollama pull llama3.2
+#   docker compose exec ollama ollama pull nomic-embed-text
+# Open WebUI: http://127.0.0.1:3000   API: http://127.0.0.1:8000   Ollama: 11434
+#
+# The default path requires no LM Studio and no MLX. To use a native runtime
+# instead of the bundled Ollama, set LLM_RUNTIME_PROVIDER / LLM_BASE_URL (see
+# .env.example) — that is optional advanced configuration, not the default.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-industrial_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-industrial_ai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      API_DATABASE_URL: ${API_DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/industrial_ai}
+      LLM_RUNTIME_PROVIDER: ${LLM_RUNTIME_PROVIDER:-ollama}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-llama3.2}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-nomic-embed-text}
+      # API process does NOT run the dispatcher; the worker container does.
+      FT_BACKGROUND_DISPATCH: "false"
+    volumes:
+      - app_data:/app/data
+    ports:
+      - "8000:8000"
+    # Apply migrations, then serve.
+    command:
+      - sh
+      - -c
+      - >-
+        alembic -c apps/api/alembic.ini upgrade head &&
+        uvicorn api.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      API_DATABASE_URL: ${API_DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/industrial_ai}
+      LLM_RUNTIME_PROVIDER: ${LLM_RUNTIME_PROVIDER:-ollama}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-llama3.2}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-nomic-embed-text}
+    volumes:
+      - app_data:/app/data
+    command: ["python", "-m", "api.worker"]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      # Point Open WebUI's OpenAI connection at the platform shim.
+      OPENAI_API_BASE_URL: http://api:8000/v1
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-no-key-required}
+    volumes:
+      - openwebui_data:/app/backend/data
+    ports:
+      - "3000:8080"
+
+volumes:
+  postgres_data:
+  ollama_data:
+  openwebui_data:
+  app_data:
