@@ -2,6 +2,47 @@
 
 All notable changes to this repository will be documented in this file.
 
+## [Unreleased] - 2026-06 — Docker-first Open WebUI migration
+
+Redirect from the Mac-native MLX QLoRA + LM Studio product to a **Docker-first domain RAG +
+evaluation backend** fronted by **Open WebUI**, with **Ollama** as the default runtime. See
+`docs/open-webui-docker-migration.md` and ADRs 0006–0011. Delivered in phases:
+
+### Added
+
+- **Docker Compose** (`compose.yml`): `postgres`, `ollama`, `open-webui`, `api`, `worker`
+  services with `postgres_data` / `ollama_data` / `openwebui_data` / `app_data` volumes;
+  `apps/api/Dockerfile` (`python:3.12-slim`); worker entrypoint `python -m api.worker`. The
+  default path requires no LM Studio or MLX.
+- **Runtime adapter** (`services/runtime/`): `ChatRuntime` + `EmbeddingRuntime` protocols with an
+  `OpenAICompatRuntime` base and an `OllamaRuntime` subclass. Selected via `LLM_RUNTIME_PROVIDER`
+  (default `ollama`), `LLM_BASE_URL`, `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL`. LM Studio becomes one
+  optional OpenAI-compatible provider; `LMSTUDIO_*` envs map onto `LLM_*` as deprecated aliases.
+- **Graph RAG** index lifecycle: `rag_chunks`, `rag_entities`, `rag_relationships`,
+  `rag_entity_chunks`, `rag_communities` (+ members), `rag_query_traces` tables; `graph_index` /
+  `graph_retrieval` services; `networkx` for community detection; worker index jobs; local/global/
+  naive retrieval modes with full evidence traces.
+- **Evaluation** surface: `evaluation_sets` / `evaluation_questions` (reviewable, chunk-linked)
+  and `evaluation_runs` / `evaluation_results` (groundedness, source coverage, hallucination
+  notes) with report endpoints for `/demo` and Open WebUI.
+- New Open WebUI tools: `list_collections`, `create_collection`, `upload_text_document`,
+  `search_collection`, `get_entity`, `get_subgraph`, `generate_evaluation_set`,
+  `run_rag_evaluation`, `get_evaluation_report`.
+
+### Removed
+
+- **Fine-tuning removed from the core**: MLX QLoRA trainer, `/ft-*` routes, fine-tuning UI
+  (demo steps 2–5), model-artifact publishing, deterministic smoke trainer, LM Studio
+  symlink/register flow, the Step-5 LLM-as-Judge `/inference/verify-job`, and the `ft_datasets` /
+  `ft_dataset_versions` / `ft_dataset_rows` / `ft_training_jobs` / `ft_model_artifacts` tables
+  (dropped in one migration alongside the code).
+- `/demo` is no longer a chat surface — it is an admin/evaluation/debug dashboard only.
+
+### Changed
+
+- `/demo` reframed; `README.md`, `CLAUDE.md`, `docs/architecture.md` rewritten for the Docker-first
+  Open WebUI shape.
+
 ## [0.9.1] - 2026-05-23
 
 ### Changed (UI)

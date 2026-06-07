@@ -1,81 +1,109 @@
 # Architecture
 
-## Current shape (v0.9.0)
+> **Target shape (migration in progress, 2026-06).** This describes the Docker-first Open WebUI
+> Graph RAG / evaluation platform. The prior Mac-native MLX QLoRA shape is superseded; see
+> `docs/open-webui-docker-migration.md` and ADRs 0006–0011.
 
-Mac-native FastAPI monolith. Single uv workspace member (`apps/api`). No `compose.yml`, no separate worker process. Postgres runs locally via `brew services start postgresql@16`. LM Studio at `http://127.0.0.1:1234/v1` serves chat + embedding models. The trainer subprocess shells out to brew `mlx_lm.lora` + `mlx_lm.fuse`.
+## Runtime shape
 
-The repo is intentionally narrow: **MLX QLoRA fine-tuning + collection-managed RAG**. The legacy reviewer Workflow surface and the PLC test-automation slice were removed in v0.9.0 to keep the codebase focused.
+Five containers wired by `compose.yml`:
 
-Postgres is still the system of record for the queue and operational metadata. RAG document content (`text_preview` + the stored file bytes) lives in `rag_documents.metadata_json` and `data/rag_collections/<collection>/<document>`.
+- **`open-webui`** — primary chat UI; points its OpenAI connection at `api`'s `/v1/*`.
+- **`api`** — FastAPI app: domain RAG/evaluation/report endpoints + OpenAI-compatible shim. Runs
+  with the in-process dispatcher off (`RUN_DISPATCHER=false`).
+- **`worker`** — same image as `api`, entrypoint `python -m api.worker`; runs the dispatcher loop
+  for long jobs (graph indexing, evaluation runs).
+- **`ollama`** — default chat + embedding runtime.
+- **`postgres`** — system of record: knowledge graph, evaluation data, job queue, operational
+  metadata.
 
-## Routers (`apps/api/src/api/routers/`)
+The API and worker share `API_DATABASE_URL` and the same job-runner registry. Document bytes live
+under `data/rag_collections/<collection>/<document>` (the `app_data` volume).
 
-- `fine_tuning` — dataset CRUD, version status transitions, training enqueue, **dataset-from-RAG-collection** Q/A generator
-- `models` — registry inspection, lineage, artifact/log access, publish (places fused model under `~/.lmstudio/models/` + probes LM Studio), inference
-- `rag` — collection CRUD, document upload/delete, retrieval preview
-- `jobs` — generic queue read endpoints (no PLC filter)
-- `openai_compat` — `/v1/models` + `/v1/chat/completions` with real LM Studio SSE passthrough; readiness-gated to selectable registry rows
-- `openwebui` — serves the importable Open WebUI tool artifact + manifest
-- `demo` — static reviewer UI (vanilla JS + Tailwind via CDN, 3-step wizard: Knowledge base → Train → Chat)
-- `health`
+## Runtime adapter (`services/runtime/`)
 
-## Queue
+`ChatRuntime` and `EmbeddingRuntime` protocols abstract all model calls.
 
-The `jobs` table is the queue and lifecycle source of truth (`queued → running → succeeded/failed`). `ft_training_jobs` has a richer phase model: `queued → preparing_data → training → packaging → registering → succeeded/failed`. There is no separate worker process — runner modules are dispatched in-process (`api.services.model_registry.job_runner`). Long-running MLX subprocesses stream stdout/stderr directly to `data/model_artifacts/<job_id>/trainer_output/training.log` so memory stays bounded.
+- `OpenAICompatRuntime` — base; talks the OpenAI `/v1/*` dialect (covers Ollama `/v1`, LM Studio,
+  any OpenAI-compatible endpoint).
+- `OllamaRuntime` — subclass; native model listing (`/api/tags`) and embeddings (`/api/embed`).
 
-An async background dispatcher (Phase D2) is planned but not yet wired: today `complete_training_job` runs synchronously when invoked.
+Selected by `LLM_RUNTIME_PROVIDER` (default `ollama`), `LLM_BASE_URL`
+(default `http://ollama:11434`), `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL`. `LMSTUDIO_*` envs remain as
+deprecated aliases for one release. Routers and services never talk to a runtime directly.
 
-## AI ops slice
+## Queue & worker
 
-Tables:
-- `ft_datasets`, `ft_dataset_versions`, `ft_dataset_rows`
-- `ft_training_jobs`, `ft_model_artifacts`, `model_registry`
-- `rag_collections`, `rag_documents`
+The `jobs` table is the queue and lifecycle source of truth (`queued → running →
+succeeded/failed`). `services/background_runner.py` claims rows with `SELECT … FOR UPDATE SKIP
+LOCKED` (Postgres) or an in-process `asyncio.Lock` (sqlite tests) and dispatches to the runner
+registered for the job type. In compose, only the `worker` container runs the loop; the `api`
+container sets `RUN_DISPATCHER=false`. Current job types: `rag_index_collection` /
+`rag_index_document` and `evaluation_run`.
 
-End-to-end loop:
+## Graph RAG
 
-1. Create a RAG collection and upload documents (`POST /rag-collections`, `POST /rag-collections/{id}/documents`). Remove either with `DELETE /rag-documents/{id}` (single doc) or `DELETE /rag-collections/{id}` (cascading to documents + on-disk storage).
-2. Generate a fine-tuning dataset from the collection (`POST /ft-datasets/from-rag-collection`). The Q/A generator chunks the document `text_preview`, asks LM Studio for strict-JSON `{"question":..., "answer":...}` pairs per chunk, and writes them as `ft_dataset_rows` with `input_json={"instruction":..., "input":""}`, `target_json={"output":...}`.
-3. Lock the dataset version (`POST /ft-dataset-versions/{id}/status`).
-4. Enqueue training (`POST /ft-training-jobs`). The trainer exports JSONL under `data/model_artifacts/<job_id>/dataset_export/`, runs `mlx_lm.lora` → adapter weights, then `mlx_lm.fuse` → a fused MLX model dir.
-5. Publish (`POST /ft-training-jobs/{id}/publish`). The platform symlinks the fused model dir into `~/.lmstudio/models/<MLX_MODEL_NAMESPACE>/<name>/` (`MLX_MODEL_NAMESPACE` defaults to `demo`) and probes LM Studio's `/v1/models`. The probe invalidates its 30s cache first so a reviewer who just loaded the model in LM Studio sees the registry flip on the same click. If LM Studio reports the model loaded, the registry row flips from `artifact_ready` to `published`/`selectable` and shows up in `/v1/models`.
+Lean in-repo GraphRAG — Postgres property graph + `networkx`, not Microsoft's `graphrag` package.
 
-## Readiness gating
+### Tables
 
-- `artifact_ready` — adapter/report/manifest validated; reviewable, **not** selectable
-- `publish_ready` — publish manifest/template exists, fused model placed in LM Studio's models dir
-- `published` / `selectable` — LM Studio reports the model loaded via `/v1/models` probe
+- `rag_collections`, `rag_documents` (existing) + `rag_chunks`
+- `rag_entities`, `rag_relationships`, `rag_entity_chunks` (entity→chunk provenance)
+- `rag_communities`, `rag_community_members`
+- `rag_query_traces` (persisted retrieval evidence for evaluation)
 
-`base_model_name` (user-facing serving lineage), `trainer_model_name` (actual MLX/HF checkpoint used by `mlx_lm.lora`), and `display_name` are intentionally distinct.
+Embeddings are stored as JSON; cosine is computed in pure Python at demo scale. `pgvector` is an
+optional advanced toggle, not the default.
 
-## Smoke fallback
+### Index lifecycle (worker job)
 
-`deterministic_smoke` backend produces a placeholder adapter package without invoking MLX. Used when `FT_ALLOW_SMOKE_FALLBACK=true` and the configured trainer model fails to resolve (HF download error). Validates the artifact pipeline only — not model quality.
+`parse → chunk → embed_chunks → extract_graph → detect_communities → summarize_communities`.
+
+- **extract_graph** — per chunk the chat runtime returns JSON `{entities, relationships}`;
+  entities merge by normalized name across chunks with provenance recorded in `rag_entity_chunks`.
+- **detect_communities** — build the per-collection graph in `networkx`, run
+  `greedy_modularity_communities`, persist communities.
+- **summarize_communities** — the chat runtime summarizes each community (title + summary) for
+  global search; the summary is embedded.
+
+### Retrieval
+
+- **local** (default) — embed query → seed chunks/entities → 1–2 hop expansion over
+  `rag_relationships` → gather connected chunks + relationships + relevant community summaries →
+  grounded context + full trace.
+- **global** — map-reduce over community summaries for broad questions.
+- **naive** — chunk-vector retrieval fallback before the graph is built.
+
+Every retrieval writes a `rag_query_traces` row (chunk/entity/relationship/community ids, scores,
+excerpts, embedding model) — the substrate for evaluation.
+
+## Evaluation (`services/evaluation/`)
+
+- **Generation** — the former Q/A generator produces reviewable `evaluation_questions` (status
+  accept/reject/edit) linked to `source_chunk_id` / `source_entity_id`.
+- **Runs** — `evaluation_runs` execute retrieval + answer per question via the runtime adapter,
+  score groundedness against stored traces, compute source coverage, and flag ungrounded claims
+  into `evaluation_results`.
+- **Reports** — aggregate collection health, retrieval quality, answer quality, source coverage,
+  and graph stats (entity/relationship/community counts, density, orphan chunks). Surfaced to
+  `/demo` and the Open WebUI tool.
 
 ## OpenAI-compatible shim
 
-`GET /v1/models` lists only `readiness.selectable == true` rows.
+`GET /v1/models` and `POST /v1/chat/completions` proxy the configured runtime. Optional
+`rag_collection_id` + `mode` body fields ground a completion with graph retrieval. This is what
+Open WebUI points at; plain OpenAI clients without the extra fields get ordinary chat.
 
-`POST /v1/chat/completions`:
-- non-streaming: buffered single response
-- streaming (`stream: true`): real LM Studio SSE chunks proxied through; `id` and `model` are rewritten to the platform's exposed identifiers, `system_fingerprint` is stripped, and thinking-mode `reasoning_content` deltas are mirrored into `content` for generic OpenAI clients; a trailing platform-metadata chunk + `data: [DONE]` are appended
+## `/demo`
 
-Optional `rag_collection_id` + `top_k` body fields ground a completion with platform-managed RAG evidence. Plain OpenAI clients that don't send these fields get ordinary registry-gated chat.
-
-## RAG slice
-
-Only `services/rag/collections.py` and `services/rag/embedding_client.py` remain. PDF text extraction uses `pypdf`. Markitdown (microsoft, ~50k stars) is deferred until Python 3.14 `onnxruntime` wheels exist.
+Admin / evaluation / debug dashboard only — **not** a chat UI. Lets a reviewer inspect
+collections, trigger indexing, review evaluation sets, run evaluations, and read reports.
 
 ## Conventions
 
-- Reuse the existing queue + runner subprocess pattern when adding a new domain.
+- Reuse the queue + worker for new long-running work; one queue, one worker.
 - New routers under `apps/api/src/api/routers/`, included in `main.py:create_app`.
-- New alembic migrations: date-prefixed, under `apps/api/alembic/versions/`.
-- `PROJECT_ROOT = Path(__file__).resolve().parents[4]` is fragile — touching `apps/api/` nesting breaks every relative path resolver.
-- The trainer assumes brew-installed `mlx_lm.lora` + `mlx_lm.fuse` on PATH. The `deterministic_smoke` backend is the only sanctioned escape hatch.
-- LM Studio is the only supported serving runtime; don't reintroduce Ollama.
-- API contract uses `serving_model_name` (DB column renamed from `ollama_model_name` in alembic `20260523_0014`).
-
-## Why this still fits a "skeleton"
-
-The architectural backbone (FastAPI app + Postgres queue + co-hosted reviewer UI + readiness-gated OpenAI shim) is unchanged. v0.9.0 removed two domain slices (PLC, legacy Workflow) and one DB-column rename, but the queue/runner/registry pattern that survives is still the substrate for adding new domains.
+- New alembic migrations: date-prefixed under `apps/api/alembic/versions/`.
+- All model calls go through `services/runtime/`.
+- Container images use `python:3.12-slim`; code stays 3.11+ compatible.
+- Graph algorithms use `networkx` (pure Python) — avoid native-dep graph libraries.
