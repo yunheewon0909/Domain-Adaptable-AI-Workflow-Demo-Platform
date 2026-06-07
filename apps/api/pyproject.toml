@@ -1,12 +1,13 @@
 [project]
 name = "industrial-ai-api"
-version = "0.9.0"
-description = "Mac-native FastAPI service for MLX QLoRA fine-tuning + RAG collections backed by LM Studio"
+version = "0.10.0"
+description = "Docker-first FastAPI backend for Graph RAG + evaluation, fronted by Open WebUI"
 requires-python = ">=3.11,<3.15"
 dependencies = [
    "alembic>=1.16.0,<2.0.0",
    "fastapi>=0.115.0,<1.0.0",
    "httpx>=0.28.1,<1.0.0",
+   "networkx>=3.2,<4.0.0",
    "pypdf>=5.4.0,<6.0.0",
    "psycopg[binary]>=3.2.0,<4.0.0",
    "python-multipart>=0.0.20,<1.0.0",

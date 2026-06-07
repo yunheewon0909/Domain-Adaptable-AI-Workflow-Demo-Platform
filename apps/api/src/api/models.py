@@ -5,11 +5,13 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -165,4 +167,167 @@ class RAGDocumentRecord(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
         onupdate=func.now(),
+    )
+
+
+# --- Graph RAG (ADR 0010) -------------------------------------------------
+
+
+class RAGChunkRecord(Base):
+    __tablename__ = "rag_chunks"
+    __table_args__ = (
+        Index("ix_rag_chunks_collection_id", "collection_id"),
+        Index("ix_rag_chunks_document_id", "document_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    document_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_documents.id"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    embedding_json: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    # Declared last: a column named `text` would otherwise shadow the imported
+    # `text()` clause for the server_default calls above within this class body.
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class RAGEntityRecord(Base):
+    __tablename__ = "rag_entities"
+    __table_args__ = (
+        Index("ix_rag_entities_collection_id", "collection_id"),
+        Index("ix_rag_entities_normalized_name", "normalized_name"),
+        Index("ix_rag_entities_community_id", "community_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_json: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    degree: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    community_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class RAGRelationshipRecord(Base):
+    __tablename__ = "rag_relationships"
+    __table_args__ = (
+        Index("ix_rag_relationships_collection_id", "collection_id"),
+        Index("ix_rag_relationships_source_entity_id", "source_entity_id"),
+        Index("ix_rag_relationships_target_entity_id", "target_entity_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    source_entity_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_entities.id"), nullable=False
+    )
+    target_entity_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_entities.id"), nullable=False
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("1.0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class RAGEntityChunkRecord(Base):
+    __tablename__ = "rag_entity_chunks"
+    __table_args__ = (
+        Index("ix_rag_entity_chunks_entity_id", "entity_id"),
+        Index("ix_rag_entity_chunks_chunk_id", "chunk_id"),
+        UniqueConstraint("entity_id", "chunk_id", name="uq_rag_entity_chunk"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_entities.id"), nullable=False
+    )
+    chunk_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_chunks.id"), nullable=False
+    )
+
+
+class RAGCommunityRecord(Base):
+    __tablename__ = "rag_communities"
+    __table_args__ = (Index("ix_rag_communities_collection_id", "collection_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    level: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_embedding_json: Mapped[list[float] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    member_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class RAGCommunityMemberRecord(Base):
+    __tablename__ = "rag_community_members"
+    __table_args__ = (
+        Index("ix_rag_community_members_community_id", "community_id"),
+        Index("ix_rag_community_members_entity_id", "entity_id"),
+        UniqueConstraint("community_id", "entity_id", name="uq_rag_community_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    community_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_communities.id"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_entities.id"), nullable=False
+    )
+
+
+class RAGQueryTraceRecord(Base):
+    __tablename__ = "rag_query_traces"
+    __table_args__ = (Index("ix_rag_query_traces_collection_id", "collection_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("rag_collections.id"), nullable=False
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    results_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
     )

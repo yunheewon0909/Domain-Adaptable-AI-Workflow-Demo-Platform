@@ -81,10 +81,21 @@ def _claim_next_queued_job(session: Session) -> JobRecord | None:
     return job
 
 
-# Job-type → runner registry. RAG indexing and evaluation runners register
-# here (see services/rag and services/evaluation). Empty until those phases
-# wire their jobs in.
-_RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {}
+def _run_rag_index_collection(payload: dict[str, Any]) -> None:
+    """Build the Graph RAG knowledge graph for a collection. Runs in a thread."""
+    from api.services.rag.graph_index import index_collection
+
+    collection_id = str(payload.get("collection_id") or "").strip()
+    if not collection_id:
+        raise RuntimeError("rag_index_collection payload missing collection_id")
+    with Session(get_engine()) as session:
+        index_collection(session, collection_id=collection_id)
+
+
+# Job-type → runner registry. Evaluation runners register here too (Phase 7).
+_RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {
+    "rag_index_collection": _run_rag_index_collection,
+}
 
 
 def reap_unsupported_queue_rows(session: Session) -> int:

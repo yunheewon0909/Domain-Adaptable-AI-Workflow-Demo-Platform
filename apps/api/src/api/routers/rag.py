@@ -6,7 +6,15 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from sqlalchemy import select
+
 from api.db import get_engine
+from api.models import (
+    RAGCollectionRecord,
+    RAGEntityRecord,
+    RAGRelationshipRecord,
+)
+from api.services.jobs import create_job, serialize_job_summary
 from api.services.rag.collections import (
     add_collection_document,
     add_collection_document_text,
@@ -22,8 +30,17 @@ from api.services.rag.collections import (
     rename_document,
     update_document_content,
 )
+from api.services.rag.graph_retrieval import MODES, query_collection
 
 router = APIRouter(tags=["rag"])
+
+
+class GraphQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1)
+    mode: str = Field(default="local")
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 class CreateRAGCollectionRequest(BaseModel):
@@ -318,3 +335,127 @@ def post_rag_retrieval_preview(request: RetrievalPreviewRequest) -> dict[str, An
             raise HTTPException(
                 status_code=404, detail="RAG collection not found"
             ) from exc
+
+
+# --- Graph RAG (ADR 0010) -------------------------------------------------
+
+
+@router.post("/rag-collections/{collection_id}/index", status_code=202)
+def enqueue_collection_index(collection_id: str) -> dict[str, Any]:
+    """Enqueue a Graph RAG (re)index job. The worker container processes it."""
+    with Session(get_engine()) as session:
+        if session.get(RAGCollectionRecord, collection_id) is None:
+            raise HTTPException(status_code=404, detail="RAG collection not found")
+        job = create_job(
+            session,
+            job_type="rag_index_collection",
+            payload_json={"collection_id": collection_id},
+        )
+        return {"job": serialize_job_summary(job)}
+
+
+@router.post("/rag-collections/{collection_id}/query")
+def post_collection_query(
+    collection_id: str, request: GraphQueryRequest
+) -> dict[str, Any]:
+    if request.mode not in MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"mode must be one of {sorted(MODES)}",
+        )
+    with Session(get_engine()) as session:
+        try:
+            return query_collection(
+                session,
+                collection_id=collection_id,
+                query=request.query,
+                mode=request.mode,
+                top_k=request.top_k,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="RAG collection not found"
+            ) from exc
+
+
+@router.get("/rag-entities/{entity_id}")
+def get_rag_entity(entity_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        entity = session.get(RAGEntityRecord, entity_id)
+        if entity is None:
+            raise HTTPException(status_code=404, detail="entity not found")
+        rels = list(
+            session.scalars(
+                select(RAGRelationshipRecord).where(
+                    (RAGRelationshipRecord.source_entity_id == entity_id)
+                    | (RAGRelationshipRecord.target_entity_id == entity_id)
+                )
+            ).all()
+        )
+        return {
+            "id": entity.id,
+            "name": entity.name,
+            "type": entity.type,
+            "description": entity.description,
+            "degree": entity.degree,
+            "community_id": entity.community_id,
+            "relationships": [
+                {
+                    "id": r.id,
+                    "source_entity_id": r.source_entity_id,
+                    "target_entity_id": r.target_entity_id,
+                    "description": r.description,
+                    "weight": r.weight,
+                }
+                for r in rels
+            ],
+        }
+
+
+@router.get("/rag-collections/{collection_id}/subgraph")
+def get_collection_subgraph(
+    collection_id: str, limit: int = Query(default=100, ge=1, le=1000)
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        if session.get(RAGCollectionRecord, collection_id) is None:
+            raise HTTPException(status_code=404, detail="RAG collection not found")
+        entities = list(
+            session.scalars(
+                select(RAGEntityRecord)
+                .where(RAGEntityRecord.collection_id == collection_id)
+                .order_by(RAGEntityRecord.degree.desc())
+                .limit(limit)
+            ).all()
+        )
+        entity_ids = {e.id for e in entities}
+        rels = [
+            r
+            for r in session.scalars(
+                select(RAGRelationshipRecord).where(
+                    RAGRelationshipRecord.collection_id == collection_id
+                )
+            ).all()
+            if r.source_entity_id in entity_ids and r.target_entity_id in entity_ids
+        ]
+        return {
+            "collection_id": collection_id,
+            "nodes": [
+                {
+                    "id": e.id,
+                    "name": e.name,
+                    "type": e.type,
+                    "degree": e.degree,
+                    "community_id": e.community_id,
+                }
+                for e in entities
+            ],
+            "edges": [
+                {
+                    "id": r.id,
+                    "source": r.source_entity_id,
+                    "target": r.target_entity_id,
+                    "weight": r.weight,
+                }
+                for r in rels
+            ],
+        }
