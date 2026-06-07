@@ -1,33 +1,30 @@
 """
-title: Domain Adaptable AI Platform - RAG & Models
+title: Domain Adaptable AI Platform - Graph RAG & Evaluation
 author: Domain Adaptable AI Platform
 author_url: https://github.com/
 funding_url: https://github.com/
-version: 0.2.0
+version: 0.3.0
 license: MIT
 description: >
-  Open WebUI Tool that lets a chat call into the platform's RAG
-  collections and runtime models. Connects to the FastAPI service at
-  the configured base URL (defaults to http://api:8000 in compose, or
-  http://host.docker.internal:8000 for a native runtime). Read-only by
-  default; deletes a RAG document only when the chat explicitly invokes
-  delete_rag_document.
+  Open WebUI Tool exposing the platform's Graph RAG and evaluation surface:
+  manage collections, upload documents, search the knowledge graph, inspect
+  entities/subgraphs, and generate + run evaluation testsets with reports.
+  Connects to the FastAPI service at the configured base URL (defaults to
+  http://api:8000 inside Docker Compose; use http://host.docker.internal:8000
+  for a native runtime, or http://127.0.0.1:8000 on the same host).
 
 This file is designed to be installed into Open WebUI as a Tool:
 
   Open WebUI -> Workspace -> Tools -> + (New)
   paste this entire file, set the Valves if needed, then enable the tool on a
-  chat. The chat model can then call these methods through Open WebUI's
-  function-calling layer.
-
-It is intentionally dependency-light: only stdlib (urllib, json) is used so
-that the tool runs inside any Open WebUI container without extra packages.
+  chat. The chat model can then call these methods through Open WebUI's tool
+  calling. Only the Python standard library + pydantic are used so the tool
+  runs inside any Open WebUI container without extra packages.
 """
 
 from __future__ import annotations
 
 import json
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,7 +33,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-_DEFAULT_BASE_URL = "http://host.docker.internal:8000"
+_DEFAULT_BASE_URL = "http://api:8000"
 _DEFAULT_TIMEOUT_SECONDS = 30
 
 
@@ -44,18 +41,17 @@ class Tools:
     """Platform tool surface exposed to Open WebUI chats.
 
     Each public method becomes a function the chat model can call. Methods
-    return JSON-encoded strings so the calling model can read them directly
-    without an extra serialization step.
+    return JSON-encoded strings so the calling model can read them directly.
     """
 
     class Valves(BaseModel):
         api_base_url: str = Field(
             default=_DEFAULT_BASE_URL,
             description=(
-                "Base URL of the platform FastAPI service. Default targets "
-                "the Mac host from a Docker-hosted Open WebUI; use "
-                "http://127.0.0.1:8000 when Open WebUI runs on the same Mac, "
-                "or the LAN / Tailscale address for remote clients."
+                "Base URL of the platform FastAPI service. Default targets the "
+                "`api` service inside Docker Compose; use "
+                "http://host.docker.internal:8000 for a native runtime or "
+                "http://127.0.0.1:8000 on the same host."
             ),
         )
         request_timeout_seconds: int = Field(
@@ -65,10 +61,10 @@ class Tools:
             description="HTTP timeout for every call into the platform API.",
         )
         default_top_k: int = Field(
-            default=4,
+            default=5,
             ge=1,
-            le=10,
-            description="Default top_k used for RAG queries when the chat does not specify one.",
+            le=20,
+            description="Default top_k used for searches when the chat does not specify one.",
         )
 
     def __init__(self) -> None:
@@ -77,15 +73,10 @@ class Tools:
     # ---- helpers -------------------------------------------------------
 
     def _url(self, path: str) -> str:
-        base = self.valves.api_base_url.rstrip("/")
-        return f"{base}{path}"
+        return f"{self.valves.api_base_url.rstrip('/')}{path}"
 
     def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json_body: dict[str, Any] | None = None,
+        self, method: str, path: str, *, json_body: dict[str, Any] | None = None
     ) -> tuple[int, Any]:
         url = self._url(path)
         data: bytes | None = None
@@ -93,7 +84,7 @@ class Tools:
         if json_body is not None:
             data = json.dumps(json_body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        if method not in ("GET", "POST", "DELETE"):
+        if method not in ("GET", "POST", "DELETE", "PATCH"):
             return 0, {"error": "unsupported_method", "detail": method}
         req = urllib.request.Request(url=url, data=data, method=method, headers=headers)
         try:
@@ -118,158 +109,6 @@ class Tools:
     def _format(payload: Any) -> str:
         return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
-    @staticmethod
-    def _project_collection(item: Any) -> Any:
-        # Keep chat-model context lean: drop nested document text_previews,
-        # chunking policy, and timestamps from the listing. Reviewers can still
-        # call the underlying API for full detail when they actually need it.
-        if not isinstance(item, dict):
-            return item
-        documents = item.get("documents") or []
-        document_filenames = [
-            doc.get("filename")
-            for doc in documents
-            if isinstance(doc, dict) and doc.get("filename")
-        ]
-        return {
-            "id": item.get("id"),
-            "name": item.get("name"),
-            "description": item.get("description"),
-            "embedding_model": item.get("embedding_model"),
-            "document_count": item.get("document_count", len(documents)),
-            "document_filenames": document_filenames,
-        }
-
-    @staticmethod
-    def _project_retrieval(payload: Any) -> Any:
-        # Keep the tool result small enough for local chat models to summarize
-        # quickly. Full excerpts are useful in the API, but Open WebUI only
-        # needs source names, scores, and short snippets for chat grounding.
-        if not isinstance(payload, dict):
-            return payload
-        results = []
-        for item in payload.get("results") or []:
-            if not isinstance(item, dict):
-                results.append(item)
-                continue
-            excerpt = str(item.get("excerpt") or "")
-            results.append(
-                {
-                    "filename": item.get("filename"),
-                    "score": item.get("score"),
-                    "excerpt": excerpt[:500],
-                }
-            )
-        return {
-            "collection_id": payload.get("collection_id"),
-            "collection_name": payload.get("collection_name"),
-            "query": payload.get("query"),
-            "top_k": payload.get("top_k"),
-            "results": results,
-        }
-
-    @staticmethod
-    def _project_document(item: Any) -> Any:
-        # Listing projection: drop text_preview and metadata blobs so listing
-        # responses stay small. Expose owner_tag and size_bytes (from
-        # text_length) so chat models can disambiguate seeded vs uploaded docs.
-        if not isinstance(item, dict):
-            return item
-        metadata = item.get("metadata_json") or {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        size_bytes = item.get("preview_length")
-        if size_bytes is None:
-            size_bytes = metadata.get("text_length")
-        return {
-            "id": item.get("id"),
-            "collection_id": item.get("collection_id"),
-            "filename": item.get("filename"),
-            "mime_type": item.get("mime_type"),
-            "source_type": item.get("source_type"),
-            "status": item.get("status"),
-            "size_bytes": size_bytes,
-            "owner_tag": metadata.get("owner_tag"),
-        }
-
-    @staticmethod
-    def _project_document_detail(item: Any) -> Any:
-        # Detail projection: include a truncated text_preview so the chat model
-        # can summarize a single document without pulling multi-kilobyte blobs
-        # of full text.
-        if not isinstance(item, dict):
-            return item
-        metadata = item.get("metadata_json") or {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        size_bytes = item.get("preview_length")
-        if size_bytes is None:
-            size_bytes = metadata.get("text_length")
-        text_preview = str(item.get("text_preview") or "")
-        return {
-            "id": item.get("id"),
-            "collection_id": item.get("collection_id"),
-            "filename": item.get("filename"),
-            "mime_type": item.get("mime_type"),
-            "source_type": item.get("source_type"),
-            "status": item.get("status"),
-            "checksum": item.get("checksum"),
-            "size_bytes": size_bytes,
-            "owner_tag": metadata.get("owner_tag"),
-            "parse_method": item.get("parse_method") or metadata.get("parse_method"),
-            "text_preview": text_preview[:1000],
-            "created_at": item.get("created_at"),
-            "updated_at": item.get("updated_at"),
-        }
-
-    @staticmethod
-    def _project_model(item: Any) -> Any:
-        if not isinstance(item, dict):
-            return item
-        readiness = item.get("readiness") if isinstance(item.get("readiness"), dict) else {}
-        return {
-            "model_id": item.get("id"),
-            "name": item.get("display_name"),
-            "description": item.get("description"),
-            "status": item.get("status"),
-            "publish_status": item.get("publish_status"),
-            "source_type": item.get("source_type"),
-            "tags": item.get("tags_json") or [],
-            "selectable": readiness.get("selectable", False) if isinstance(readiness, dict) else False,
-            "selectable_reason": readiness.get("selectable_reason") if isinstance(readiness, dict) else None,
-        }
-
-    @staticmethod
-    def _project_job(item: Any) -> Any:
-        # Drop payload_json (the request input the chat already knows) so the
-        # polling response stays small and result_json stands out.
-        if not isinstance(item, dict):
-            return item
-        return {
-            "id": item.get("id") or item.get("job_id"),
-            "type": item.get("type"),
-            "status": item.get("status"),
-            "attempts": item.get("attempts"),
-            "max_attempts": item.get("max_attempts"),
-            "error": item.get("error"),
-            "result_json": item.get("result_json"),
-            "created_at": item.get("created_at"),
-            "started_at": item.get("started_at"),
-            "finished_at": item.get("finished_at"),
-        }
-
-    @staticmethod
-    def _summarize_result(result_json: dict[str, Any] | None) -> dict[str, Any]:
-        if not isinstance(result_json, dict):
-            return {"result": result_json}
-        internal_keys = {"timing", "raw", "meta", "request", "payload"}
-        summary: dict[str, Any] = {
-            key: value for key, value in result_json.items() if key not in internal_keys
-        }
-        if not summary:
-            summary["result"] = result_json
-        return summary
-
     def _error(self, status: int, body: Any, *, action: str) -> str:
         return self._format(
             {
@@ -279,373 +118,187 @@ class Tools:
                 "platform_response": body,
                 "hint": (
                     "Check that api_base_url is reachable from the Open WebUI "
-                    "host. From Docker Open WebUI use "
-                    "http://host.docker.internal:8000; same-host use "
-                    "http://127.0.0.1:8000; remote use the LAN / Tailscale "
-                    "address of the Mac."
+                    "container and that the platform API is running."
                 ),
             }
         )
 
-    # ---- RAG collections ----------------------------------------------
+    def _ok(self, status: int, body: Any, *, action: str, **extra: Any) -> str:
+        if status < 200 or status >= 300:
+            return self._error(status, body, action=action)
+        return self._format({"ok": True, **extra, "result": body})
 
-    def list_rag_collections(self) -> str:
-        """List the platform's RAG collections.
+    # ---- collections ---------------------------------------------------
 
-        Use this when the user asks "what RAG collections are available",
-        "which knowledge bases exist", or before calling query_rag_collection.
+    def list_collections(self) -> str:
+        """List RAG collections (knowledge bases) on the platform.
 
-        :return: JSON string describing each collection (id, name, document
-            counts). Empty list means the platform has no collections yet.
+        :return: JSON string with the collection list, or an error envelope.
         """
         status, body = self._request("GET", "/rag-collections")
         if status != 200:
-            return self._error(status, body, action="list_rag_collections")
+            return self._error(status, body, action="list_collections")
         collections = (
-            [self._project_collection(item) for item in body]
+            [
+                {
+                    "id": c.get("id"),
+                    "name": c.get("name"),
+                    "description": c.get("description"),
+                    "document_count": c.get("document_count"),
+                    "index_status": c.get("index_status"),
+                }
+                for c in body
+                if isinstance(c, dict)
+            ]
             if isinstance(body, list)
             else body
         )
         return self._format({"ok": True, "collections": collections})
 
-    def query_rag_collection(
+    def create_collection(self, name: str, description: str | None = None) -> str:
+        """Create a new RAG collection (knowledge base).
+
+        :param name: Human-readable collection name.
+        :param description: Optional description.
+        :return: JSON string with the created collection, or an error envelope.
+        """
+        payload: dict[str, Any] = {"name": name}
+        if description is not None:
+            payload["description"] = description
+        status, body = self._request("POST", "/rag-collections", json_body=payload)
+        return self._ok(status, body, action="create_collection")
+
+    def upload_text_document(
+        self, collection_id: str, filename: str, content: str
+    ) -> str:
+        """Add a text document to a collection.
+
+        :param collection_id: Target collection id.
+        :param filename: Display filename for the document.
+        :param content: Plain-text document body.
+        :return: JSON string with the created document, or an error envelope.
+        """
+        encoded = urllib.parse.quote(collection_id, safe="")
+        status, body = self._request(
+            "POST",
+            f"/rag-collections/{encoded}/documents/text",
+            json_body={"filename": filename, "content": content},
+        )
+        return self._ok(status, body, action="upload_text_document")
+
+    # ---- graph search + inspection ------------------------------------
+
+    def search_collection(
         self,
         collection_id: str,
         query: str,
+        mode: str = "local",
         top_k: int | None = None,
     ) -> str:
-        """Run a retrieval preview against one RAG collection.
+        """Search a collection with Graph RAG retrieval.
 
-        Use this to ground an answer in a specific platform RAG collection
-        before responding to the user. The result includes the top matching
-        chunks with filenames and excerpts; the chat model should cite these
-        in its final answer.
-
-        :param collection_id: Collection id from list_rag_collections.
-        :param query: Natural-language query to embed and search with.
-        :param top_k: How many chunks to return. Defaults to the Valve's
-            default_top_k. Clamped to 1..10 by the platform.
-        :return: JSON string with the top matches, or an error envelope.
+        :param collection_id: Collection to search.
+        :param query: Natural-language query.
+        :param mode: "local" (graph neighborhood), "global" (community
+            summaries), or "naive" (chunk vectors). Defaults to local.
+        :param top_k: Optional result count (clamped server-side).
+        :return: JSON string with retrieval evidence (chunks, entities,
+            relationships, communities, context) + a trace id, or an error.
         """
-        effective_top_k = int(top_k) if top_k is not None else self.valves.default_top_k
-        effective_top_k = max(1, min(effective_top_k, 10))
+        encoded = urllib.parse.quote(collection_id, safe="")
+        payload: dict[str, Any] = {
+            "query": query,
+            "mode": mode,
+            "top_k": top_k if top_k is not None else self.valves.default_top_k,
+        }
+        status, body = self._request(
+            "POST", f"/rag-collections/{encoded}/query", json_body=payload
+        )
+        return self._ok(status, body, action="search_collection")
+
+    def get_entity(self, entity_id: str) -> str:
+        """Fetch one knowledge-graph entity and its relationships.
+
+        :param entity_id: Entity id (from search_collection or get_subgraph).
+        :return: JSON string with the entity + relationships, or an error.
+        """
+        encoded = urllib.parse.quote(entity_id, safe="")
+        status, body = self._request("GET", f"/rag-entities/{encoded}")
+        return self._ok(status, body, action="get_entity")
+
+    def get_subgraph(self, collection_id: str, limit: int | None = None) -> str:
+        """Fetch the collection's knowledge graph (top entities + edges).
+
+        :param collection_id: Collection id.
+        :param limit: Max number of entities (by degree). Server clamps 1..1000.
+        :return: JSON string with nodes + edges, or an error envelope.
+        """
+        encoded = urllib.parse.quote(collection_id, safe="")
+        path = f"/rag-collections/{encoded}/subgraph"
+        if limit is not None:
+            path += f"?limit={int(limit)}"
+        status, body = self._request("GET", path)
+        return self._ok(status, body, action="get_subgraph")
+
+    # ---- evaluation ----------------------------------------------------
+
+    def generate_evaluation_set(
+        self,
+        collection_id: str,
+        name: str,
+        questions_per_chunk: int | None = None,
+    ) -> str:
+        """Generate a reviewable evaluation testset from a collection's chunks.
+
+        :param collection_id: Collection to derive questions from (must be indexed).
+        :param name: Name for the evaluation set.
+        :param questions_per_chunk: Optional questions per chunk (1..10).
+        :return: JSON string with the created evaluation set, or an error.
+        """
+        payload: dict[str, Any] = {"collection_id": collection_id, "name": name}
+        if questions_per_chunk is not None:
+            payload["questions_per_chunk"] = int(questions_per_chunk)
+        status, body = self._request(
+            "POST", "/evaluation-sets/from-collection", json_body=payload
+        )
+        return self._ok(status, body, action="generate_evaluation_set")
+
+    def run_rag_evaluation(
+        self, evaluation_set_id: str, mode: str = "local"
+    ) -> str:
+        """Enqueue a RAG evaluation run over an evaluation set.
+
+        :param evaluation_set_id: Set to evaluate.
+        :param mode: Retrieval mode (local/global/naive).
+        :return: JSON string with the queued run + backing job, or an error.
+            Poll get_job_status, then fetch get_evaluation_report.
+        """
         status, body = self._request(
             "POST",
-            "/rag-retrieval/preview",
-            json_body={
-                "collection_id": collection_id,
-                "query": query,
-                "top_k": effective_top_k,
-            },
+            "/evaluation-runs",
+            json_body={"evaluation_set_id": evaluation_set_id, "mode": mode},
         )
-        if status != 200:
-            return self._error(status, body, action="query_rag_collection")
-        return self._format({"ok": True, "retrieval": self._project_retrieval(body)})
+        return self._ok(status, body, action="run_rag_evaluation")
 
-    def get_rag_collection(self, collection_id: str) -> str:
-        """Fetch full detail for one RAG collection.
+    def get_evaluation_report(self, run_id: str) -> str:
+        """Fetch the report + per-question results for an evaluation run.
 
-        Use this when the user asks "tell me about collection X", "describe
-        the Ops handbook collection", or otherwise wants more than the compact
-        list_rag_collections projection. The returned envelope includes the
-        collection's embedding model, chunking policy, document count, and
-        timestamps.
-
-        :param collection_id: Collection id from list_rag_collections.
-        :return: JSON string with full collection detail, or an error envelope
-            when the collection does not exist.
+        :param run_id: Evaluation run id from run_rag_evaluation.
+        :return: JSON string with the report (answer quality, retrieval quality,
+            collection health) + per-question results, or an error envelope.
         """
-        encoded_id = urllib.parse.quote(collection_id, safe="")
-        status, body = self._request("GET", f"/rag-collections/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="get_rag_collection")
-        return self._format({"ok": True, "collection": body})
+        encoded = urllib.parse.quote(run_id, safe="")
+        status, body = self._request("GET", f"/evaluation-runs/{encoded}/report")
+        return self._ok(status, body, action="get_evaluation_report")
 
-    def list_rag_documents(self, collection_id: str) -> str:
-        """List documents belonging to a RAG collection.
-
-        Use this when the user asks "what's in collection X", "show me the
-        files in the Ops handbook", or before calling get_rag_document /
-        delete_rag_document. Returns a compact projection (id, filename,
-        mime_type, size_bytes, owner_tag) with text_preview omitted to keep
-        the chat context lean.
-
-        :param collection_id: Collection id from list_rag_collections.
-        :return: JSON string with the document list, or an error envelope when
-            the collection does not exist.
-        """
-        encoded_id = urllib.parse.quote(collection_id, safe="")
-        status, body = self._request(
-            "GET", f"/rag-collections/{encoded_id}/documents"
-        )
-        if status != 200:
-            return self._error(status, body, action="list_rag_documents")
-        documents = (
-            [self._project_document(item) for item in body]
-            if isinstance(body, list)
-            else body
-        )
-        return self._format(
-            {"ok": True, "collection_id": collection_id, "documents": documents}
-        )
-
-    def get_rag_document(self, document_id: str) -> str:
-        """Fetch full detail for one RAG document.
-
-        Use this when the user asks "what does document X contain" or wants
-        the parsed preview of a specific file. The returned envelope includes
-        a text_preview truncated to 1000 characters; for longer excerpts run
-        query_rag_collection instead.
-
-        :param document_id: Document id from list_rag_documents.
-        :return: JSON string with document detail, or an error envelope when
-            the document does not exist.
-        """
-        encoded_id = urllib.parse.quote(document_id, safe="")
-        status, body = self._request("GET", f"/rag-documents/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="get_rag_document")
-        return self._format(
-            {"ok": True, "document": self._project_document_detail(body)}
-        )
-
-    def delete_rag_document(self, document_id: str) -> str:
-        """Delete a RAG document. DESTRUCTIVE; confirm with the user first.
-
-        This permanently removes the document record and its stored file from
-        the platform; the chunks are removed from retrieval on the next
-        reindex. Always confirm the user's intent before calling this; the
-        operation cannot be undone.
-
-        :param document_id: Document id from list_rag_documents.
-        :return: JSON string with a confirmation envelope (deleted=true,
-            storage_deleted, collection_id), or an error envelope when the
-            document does not exist.
-        """
-        encoded_id = urllib.parse.quote(document_id, safe="")
-        status, body = self._request("DELETE", f"/rag-documents/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="delete_rag_document")
-        result = body if isinstance(body, dict) else {"raw": body}
-        return self._format(
-            {
-                "ok": True,
-                "action": "delete_rag_document",
-                "document_id": result.get("document_id") or document_id,
-                "collection_id": result.get("collection_id"),
-                "deleted": bool(result.get("deleted", True)),
-                "storage_deleted": bool(result.get("storage_deleted", False)),
-            }
-        )
-
-    def delete_rag_collection(self, collection_id: str) -> str:
-        """Delete a RAG collection and all of its documents. DESTRUCTIVE.
-
-        Cascades: removes every document in the collection plus the
-        on-disk storage directory. Always confirm the user's intent
-        before calling — the cascade cannot be undone, and a deleted
-        seed collection is not silently restored on the next API
-        restart.
-
-        :param collection_id: Collection id from list_rag_collections.
-        :return: JSON string with a confirmation envelope
-            (deleted=true, document_count, storage_deleted), or an
-            error envelope when the collection does not exist.
-        """
-        encoded_id = urllib.parse.quote(collection_id, safe="")
-        status, body = self._request("DELETE", f"/rag-collections/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="delete_rag_collection")
-        result = body if isinstance(body, dict) else {"raw": body}
-        return self._format(
-            {
-                "ok": True,
-                "action": "delete_rag_collection",
-                "collection_id": result.get("collection_id") or collection_id,
-                "deleted": bool(result.get("deleted", True)),
-                "document_count": result.get("document_count"),
-                "storage_deleted": result.get("storage_deleted"),
-            }
-        )
-
-    # ---- Selectable models --------------------------------------------
-
-    def list_selectable_models(self) -> str:
-        """List platform models that are ready for inference selection."""
-        status, body = self._request("GET", "/models")
-        if status != 200:
-            return self._error(status, body, action="list_selectable_models")
-        raw_models = body if isinstance(body, list) else []
-        selectable = [
-            self._project_model(item)
-            for item in raw_models
-            if isinstance(item, dict)
-            and isinstance(item.get("readiness"), dict)
-            and item["readiness"].get("selectable", False)
-        ]
-        return self._format({"ok": True, "models": selectable})
-
-    # ---- Models registry ----------------------------------------------
-
-    def list_platform_models(self, include_review_only: bool = False) -> str:
-        """List platform models from the registry.
-
-        Use this when the user asks "what models are available", "which models
-        can I run", or before calling get_model_detail / run_platform_inference.
-        By default only selectable models are returned; set include_review_only
-        to True to also include models still in review or not yet published.
-
-        :param include_review_only: When False (default), only readiness.selectable
-            models are returned. When True, all registry entries are returned.
-        :return: JSON string with the projected model list, total count, and
-            selectable_count.
-        """
-        status, body = self._request("GET", "/models")
-        if status != 200:
-            return self._error(status, body, action="list_platform_models")
-        raw_models = body if isinstance(body, list) else []
-        dict_models = [item for item in raw_models if isinstance(item, dict)]
-        selectable_count = sum(
-            1
-            for item in dict_models
-            if isinstance(item.get("readiness"), dict)
-            and item["readiness"].get("selectable", False)
-        )
-        if include_review_only:
-            filtered = dict_models
-        else:
-            filtered = [
-                item
-                for item in dict_models
-                if isinstance(item.get("readiness"), dict)
-                and item["readiness"].get("selectable", False)
-            ]
-        models = [self._project_model(item) for item in filtered]
-        return self._format(
-            {
-                "ok": True,
-                "models": models,
-                "total": len(dict_models),
-                "selectable_count": selectable_count,
-            }
-        )
-
-    def get_model_detail(self, model_id: str) -> str:
-        """Fetch full detail for one platform model.
-
-        Use this when the user asks "tell me about model X" or wants warnings,
-        timestamps, and full projected fields. Returns the projected model plus
-        warnings, created_at, updated_at.
-
-        :param model_id: Model id from list_platform_models.
-        :return: JSON string with model detail, or an error envelope on 404.
-        """
-        encoded_id = urllib.parse.quote(model_id, safe="")
-        status, body = self._request("GET", f"/models/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="get_model_detail")
-        projected = self._project_model(body) if isinstance(body, dict) else {}
-        if isinstance(projected, dict) and isinstance(body, dict):
-            projected["warnings"] = body.get("warnings") or []
-            projected["created_at"] = body.get("created_at")
-            projected["updated_at"] = body.get("updated_at")
-        return self._format({"ok": True, "model": projected})
-
-    def run_platform_inference(
-        self,
-        model_id: str,
-        prompt: str,
-        rag_collection_id: str | None = None,
-        top_k: int | None = None,
-    ) -> str:
-        """Run a single-turn inference against a platform model.
-
-        Use this when the user wants a direct answer from a specific platform
-        model, optionally grounded in a RAG collection.
-
-        :param model_id: Model id from list_platform_models (must be selectable).
-        :param prompt: User prompt to send to the model.
-        :param rag_collection_id: Optional RAG collection id for grounding.
-        :param top_k: Optional retrieval top_k (only meaningful with
-            rag_collection_id). Clamped to 1..10.
-        :return: JSON string with the answer and model_id, or an error envelope
-            on failure (Ollama down, invalid model, etc.).
-        """
-        body_payload: dict[str, Any] = {"model_id": model_id, "prompt": prompt}
-        if rag_collection_id is not None:
-            body_payload["rag_collection_id"] = rag_collection_id
-        if top_k is not None:
-            body_payload["top_k"] = max(1, min(int(top_k), 10))
-        status, body = self._request("POST", "/inference/run", json_body=body_payload)
-        if status != 200:
-            return self._error(status, body, action="run_platform_inference")
-        if not isinstance(body, dict):
-            return self._format({"ok": True, "answer": None, "model_id": model_id, "raw": body})
-        return self._format(
-            {
-                "ok": True,
-                "answer": body.get("answer"),
-                "model_id": body.get("model_id") or model_id,
-                "usage": body.get("usage"),
-            }
-        )
-
-    # ---- Jobs ----------------------------------------------------------
+    # ---- jobs ----------------------------------------------------------
 
     def get_job_status(self, job_id: str) -> str:
-        """Fetch the current status of a platform job.
+        """Poll a queued platform job (indexing or evaluation).
 
-        Use this to poll a queued job (e.g. an FT training job) for
-        completion. When status is "succeeded" the result_json field carries
-        the job output. When status is "failed" the error field explains why.
-
-        :param job_id: Job id from the response of the enqueue call.
-        :return: JSON string describing the job (status, attempts, error,
-            result_json, timestamps).
+        :param job_id: Job id returned by an enqueue call.
+        :return: JSON string describing the job, or an error envelope.
         """
-        encoded_id = urllib.parse.quote(job_id, safe="")
-        status, body = self._request("GET", f"/jobs/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="get_job_status")
-        return self._format({"ok": True, "job": self._project_job(body)})
-
-    def summarize_job_result(self, job_id: str) -> str:
-        """Return a concise summary of a platform job result."""
-        encoded_id = urllib.parse.quote(job_id, safe="")
-        status, body = self._request("GET", f"/jobs/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="summarize_job_result")
-        job = self._project_job(body) if isinstance(body, dict) else {}
-        job_status = job.get("status") if isinstance(job, dict) else None
-        if job_status == "succeeded":
-            result_json = job.get("result_json") if isinstance(job, dict) else None
-            summary = self._summarize_result(result_json)
-            return self._format(
-                {
-                    "ok": True,
-                    "job_id": job_id,
-                    "status": job_status,
-                    "summary": summary,
-                }
-            )
-        if job_status == "failed":
-            error = job.get("error") if isinstance(job, dict) else None
-            return self._format(
-                {
-                    "ok": False,
-                    "job_id": job_id,
-                    "status": job_status,
-                    "error": error,
-                    "suggestion": "Check the job inputs and retry, or inspect the platform logs.",
-                }
-            )
-        return self._format(
-            {
-                "ok": True,
-                "job_id": job_id,
-                "status": job_status,
-                "summary": None,
-                "next_step": f"Call get_job_status with job_id={job_id!r} to poll again.",
-            }
-        )
-
+        encoded = urllib.parse.quote(job_id, safe="")
+        status, body = self._request("GET", f"/jobs/{encoded}")
+        return self._ok(status, body, action="get_job_status")

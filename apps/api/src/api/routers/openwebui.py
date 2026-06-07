@@ -51,30 +51,26 @@ def get_openwebui_manifest() -> dict[str, object]:
         "tools": [
             {
                 "id": "platform_tools",
-                "title": "Domain Adaptable AI Platform - RAG, Models, FT",
+                "title": "Domain Adaptable AI Platform - Graph RAG & Evaluation",
                 "url_path": f"/openwebui/{_PLATFORM_TOOLS_FILENAME}",
                 "methods": [
-                    "list_rag_collections",
-                    "query_rag_collection",
-                    "get_rag_collection",
-                    "list_rag_documents",
-                    "get_rag_document",
-                    "delete_rag_document",
-                    "delete_rag_collection",
-                    "list_selectable_models",
-                    "list_platform_models",
-                    "get_model_detail",
-                    "run_platform_inference",
+                    "list_collections",
+                    "create_collection",
+                    "upload_text_document",
+                    "search_collection",
+                    "get_entity",
+                    "get_subgraph",
+                    "generate_evaluation_set",
+                    "run_rag_evaluation",
+                    "get_evaluation_report",
                     "get_job_status",
-                    "summarize_job_result",
                 ],
                 "install_hint": (
                     "Open WebUI -> Workspace -> Tools -> + (New), paste the "
-                    "served file's contents, save, then enable the tool on "
-                    "a chat. Set the api_base_url Valve to the platform API "
-                    "host reachable from Open WebUI (e.g. "
-                    "http://host.docker.internal:8000 from a Docker Open "
-                    "WebUI, or the LAN / Tailscale address of the Mac)."
+                    "served file's contents, save, then enable the tool on a "
+                    "chat. The api_base_url Valve defaults to http://api:8000 "
+                    "(Docker Compose); set it to http://host.docker.internal:8000 "
+                    "for a native runtime."
                 ),
             }
         ],
