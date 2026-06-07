@@ -325,45 +325,10 @@ def wait_for_job(job_id: str, timeout_seconds: int = 120) -> dict[str, object]:
     )
 
 
-def wait_for_ft_training_job(training_job_id: str, timeout_seconds: int = 180) -> dict[str, object]:
-    return _wait_for_terminal_payload(
-        path=f"/ft-training-jobs/{training_job_id}",
-        timeout_seconds=timeout_seconds,
-        label=f"FT training job {training_job_id}",
-    )
-
-
 def list_models() -> list[dict[str, object]]:
-    payload = json_list(request_json("GET", "/models", expected_status=200), "/models response")
-    return [item for item in payload if isinstance(item, dict)]
-
-
-def get_selectable_model(*, allow_skip: bool | None = None) -> dict[str, object]:
-    allow_skip = env_flag("E2E_ALLOW_NO_MODEL_SKIP", False) if allow_skip is None else allow_skip
-    for model in list_models():
-        readiness = model.get("readiness")
-        if isinstance(readiness, dict) and readiness.get("selectable") is True:
-            print_ok(f"Selected runtime-ready model: {model.get('id')} ({model.get('display_name')})")
-            return model
-    message = "No runtime-ready/selectable model is available from /models"
-    if allow_skip:
-        raise E2ESkip(message)
-    fail(message)
-    raise AssertionError("unreachable")
-
-
-def find_artifact_only_model() -> dict[str, object] | None:
-    for model in list_models():
-        readiness = model.get("readiness")
-        if not isinstance(readiness, dict):
-            continue
-        if (
-            model.get("source_type") == "fine_tuned"
-            and model.get("status") == "artifact_ready"
-            and readiness.get("selectable") is False
-        ):
-            return model
-    return None
+    payload = request_json("GET", "/models", expected_status=200)
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    return [item for item in json_list(data, "/models data") if isinstance(item, dict)]
 
 
 def create_rag_collection(name: str, description: str | None = None) -> dict[str, object]:
@@ -388,127 +353,6 @@ def upload_rag_document(collection_id: str, file_path: Path, mime_type: str | No
     )
     payload = json_dict(response.json(), "RAG document payload")
     return payload
-
-
-def create_locked_ft_dataset(*, dataset_name: str, rows: list[dict[str, object]], version_label: str = "e2e-v1") -> dict[str, str]:
-    dataset = json_dict(
-        request_json(
-        "POST",
-        "/ft-datasets",
-        json_body={
-            "name": dataset_name,
-            "task_type": "instruction_sft",
-            "schema_type": "json",
-            "description": "E2E smoke dataset",
-        },
-        expected_status=201,
-        ),
-        "FT dataset payload",
-    )
-    dataset_id = assert_non_empty_string(dataset.get("id"), "dataset_id")
-
-    version = json_dict(
-        request_json(
-        "POST",
-        f"/ft-datasets/{dataset_id}/versions",
-        json_body={"version_label": version_label},
-        expected_status=201,
-        ),
-        "FT dataset version payload",
-    )
-    version_id = assert_non_empty_string(version.get("id"), "version_id")
-
-    request_json(
-        "POST",
-        f"/ft-dataset-versions/{version_id}/rows",
-        json_body={"rows": rows},
-        expected_status=201,
-    )
-    request_json(
-        "POST",
-        f"/ft-dataset-versions/{version_id}/status",
-        json_body={"status": "validated"},
-        expected_status=200,
-    )
-    request_json(
-        "POST",
-        f"/ft-dataset-versions/{version_id}/status",
-        json_body={"status": "locked"},
-        expected_status=200,
-    )
-    return {"dataset_id": dataset_id, "version_id": version_id}
-
-
-def enqueue_ft_smoke_training(
-    version_id: str,
-    *,
-    trainer_model_name: str = "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
-    base_model_name: str = "qwen3.5-4b-mlx",
-) -> dict[str, object]:
-    """Enqueue a smoke training job.
-
-    The default trainer_model_name resolves to a tiny MLX checkpoint that
-    the brew `mlx_lm.lora` CLI can download from Hugging Face the first
-    time it runs. The default base_model_name matches the current
-    Mac-native demo model so the lineage warning makes sense.
-    """
-    payload = json_dict(
-        request_json(
-        "POST",
-        "/ft-training-jobs",
-        json_body={
-            "dataset_version_id": version_id,
-            "base_model_name": base_model_name,
-            "training_method": "sft_qlora",
-            "hyperparams_json": {
-                "smoke_test": True,
-                "epochs": 1,
-                "batch_size": 1,
-                "gradient_accumulation_steps": 1,
-                "max_seq_length": 256,
-                "lora_r": 4,
-                "lora_alpha": 8,
-                "lora_dropout": 0.0,
-                "seed": 42,
-                "trainer_model_name": trainer_model_name,
-            },
-        },
-        expected_status=202,
-        ),
-        "FT training job payload",
-    )
-    return payload
-
-
-def default_ft_rows() -> list[dict[str, object]]:
-    return [
-        {
-            "split": "train",
-            "input_json": {
-                "instruction": "summarize",
-                "input": "workflow reviewer should stay grounded in evidence",
-            },
-            "target_json": {"output": "grounded workflow summary"},
-            "metadata_json": {"source": "e2e", "smoke_test": True},
-        },
-        {
-            "split": "val",
-            "input_json": {
-                "instruction": "classify",
-                "input": "artifact-ready models are review-only",
-            },
-            "target_json": {"output": "review_only"},
-            "metadata_json": {"source": "e2e", "smoke_test": True},
-        },
-    ]
-
-
-def artifact_path(path_value: object) -> Path:
-    raw_path = Path(assert_non_empty_string(path_value, "artifact path"))
-    if str(raw_path).startswith("/workspace/"):
-        relative = raw_path.relative_to("/workspace")
-        return repo_root() / relative
-    return raw_path
 
 
 def run_main(main_func: Callable[[], None]) -> None:
