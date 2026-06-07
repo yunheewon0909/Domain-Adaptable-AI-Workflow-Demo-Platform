@@ -1,24 +1,22 @@
-"""In-process background dispatcher for the `jobs` queue.
+"""Background dispatcher for the `jobs` queue.
 
-The platform has no separate worker process. Without a dispatcher, queue-backed
-`ft_train_model` rows sit in `queued` forever. This module ships a small
-asyncio loop that claims `queued` rows and runs the matching runner module.
+In the Docker deployment the dedicated `worker` container runs this loop
+(``python -m api.worker``); for single-process local dev the API can run it
+in-process. Without a dispatcher, queued rows sit in `queued` forever.
 
 Design:
 
-- One dispatcher task per FastAPI process. Multi-worker uvicorn would race
-  on the queue; the dispatcher uses a `SELECT ... FOR UPDATE SKIP LOCKED`-
-  style claim where Postgres supports it. For SQLite tests (and Postgres
-  fallback) it serializes via an in-process `asyncio.Lock`.
-- The runner functions (e.g. `complete_training_job`) are synchronous and can
-  spend minutes-hours inside an MLX subprocess. We dispatch them via
-  `asyncio.to_thread()` so the event loop stays responsive for HTTP requests
-  and concurrent jobs.
-- Disable in tests by setting `FT_BACKGROUND_DISPATCH=false` before lifespan
-  startup (the project conftest does this).
+- The dispatcher claims `queued` rows with a `SELECT ... FOR UPDATE SKIP
+  LOCKED` claim on Postgres; SQLite tests serialize via an in-process
+  `asyncio.Lock`.
+- Runner functions are synchronous and may run for minutes (graph indexing,
+  evaluation runs). We dispatch them via `asyncio.to_thread()` so the event
+  loop stays responsive.
+- The in-process dispatcher is disabled with `FT_BACKGROUND_DISPATCH=false`
+  (the API container and the project conftest set this); the worker entrypoint
+  runs the loop unconditionally.
 
-The dispatcher intentionally only handles `ft_train_model` for now; new
-job types can register handlers in `_RUNNERS`.
+Job types register their runners in `_RUNNERS`.
 """
 
 from __future__ import annotations
@@ -35,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_engine
-from api.models import FTTrainingJobRecord, JobRecord
+from api.models import JobRecord
 
 
 logger = logging.getLogger("api.background_runner")
@@ -83,20 +81,10 @@ def _claim_next_queued_job(session: Session) -> JobRecord | None:
     return job
 
 
-def _run_ft_training_job(payload: dict[str, Any]) -> None:
-    """Sync runner for ft_train_model jobs. Runs in a worker thread."""
-    from api.services.model_registry.service import complete_training_job
-
-    training_job_id = str(payload.get("training_job_id") or "").strip()
-    if not training_job_id:
-        raise RuntimeError("ft_train_model payload missing training_job_id")
-    with Session(get_engine()) as session:
-        complete_training_job(session, training_job_id=training_job_id)
-
-
-_RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {
-    "ft_train_model": _run_ft_training_job,
-}
+# Job-type → runner registry. RAG indexing and evaluation runners register
+# here (see services/rag and services/evaluation). Empty until those phases
+# wire their jobs in.
+_RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {}
 
 
 def reap_unsupported_queue_rows(session: Session) -> int:
@@ -160,64 +148,6 @@ def reap_stale_running_jobs(session: Session) -> int:
     return len(rows)
 
 
-_STALE_TRAINING_PHASES = (
-    "preparing_data",
-    "training",
-    "packaging",
-    "registering",
-)
-
-
-def reap_stale_training_jobs(session: Session) -> int:
-    """Fail any FT training job stuck in a mid-flight phase without a running queue row.
-
-    `complete_training_job` advances the domain row through `preparing_data →
-    training → packaging → registering` while the backing `jobs` row holds
-    `running`. If the API is killed mid-run, `reap_stale_running_jobs` flips
-    the queue row to `failed`, but the FT training row stays in a mid-flight
-    phase forever. Mark such rows `failed` with a crash_recovery error so
-    reviewers can re-enqueue instead of waiting on a zombie.
-    """
-    stmt = select(FTTrainingJobRecord).where(
-        FTTrainingJobRecord.status.in_(_STALE_TRAINING_PHASES)
-    )
-    rows = session.scalars(stmt).all()
-    if not rows:
-        return 0
-    now = datetime.now(timezone.utc)
-    reaped = 0
-    for row in rows:
-        backing_running = False
-        if row.backing_job_id:
-            backing = session.get(JobRecord, row.backing_job_id)
-            backing_running = (
-                backing is not None
-                and backing.type == "ft_train_model"
-                and backing.status == "running"
-            )
-        if backing_running:
-            continue
-        prior_phase = row.status
-        row.status = "failed"
-        row.finished_at = now
-        row.error_json = {
-            "category": "crash_recovery",
-            "phase": prior_phase,
-            "message": (
-                "Training job left in a mid-flight phase by a previous API process; "
-                "no running backing job exists. Re-enqueue to retry."
-            ),
-        }
-        row.log_text = (
-            (row.log_text or "")
-            + "\nTraining job reaped on startup: no running backing job found."
-        ).strip()
-        reaped += 1
-    if reaped:
-        session.commit()
-    return reaped
-
-
 async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> None:
     """Run a single claimed job in a worker thread, recording outcome."""
     runner = _RUNNERS.get(job_type)
@@ -244,8 +174,8 @@ async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> 
     with Session(get_engine()) as session:
         row = session.get(JobRecord, job_id)
         if row is not None and row.status == "running":
-            # complete_training_job() already wrote a richer status to the
-            # domain table; only the queue row needs to flip to succeeded.
+            # The runner may have written richer domain state already; only the
+            # queue row needs to flip to succeeded here.
             row.status = "succeeded"
             row.finished_at = now
             session.commit()

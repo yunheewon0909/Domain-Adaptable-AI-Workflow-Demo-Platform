@@ -1,3 +1,11 @@
+"""OpenAI-compatible shim (`/v1/*`) — what Open WebUI points at.
+
+Backed by the configured runtime adapter (Ollama by default). Lists the
+runtime's models, proxies chat completions (buffered or streamed), and supports
+optional RAG grounding via the custom ``rag_collection_id`` body field. There is
+no model registry / readiness gating any more (ADR 0008).
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,30 +14,16 @@ import uuid
 from collections.abc import Iterator
 from typing import Any, Literal
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from pathlib import Path
-
-from api.config import get_settings
 from api.db import get_engine
 from api.dependencies import get_llm_client
 from api.llm import LLMClient, LLMClientError
-
-
-def _supports_streaming(llm_client: object) -> bool:
-    """Whether the runtime can stream raw chat-completion chunks.
-
-    Any runtime that exposes ``stream_chat_messages`` (the OpenAI-compatible
-    runtimes and LM Studio) is streamed through directly; clients without it
-    (e.g. simple test fakes) fall back to buffered single-chunk SSE.
-    """
-    return callable(getattr(llm_client, "stream_chat_messages", None))
-from api.services.model_registry import list_models
 from api.services.rag.collections import preview_collection_retrieval
+from api.services.runtime import get_chat_runtime
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
@@ -55,61 +49,47 @@ class ChatCompletionRequest(BaseModel):
     top_k: int = Field(default=4, ge=1, le=10)
 
 
-def _is_selectable(model: dict[str, Any]) -> bool:
-    readiness = model.get("readiness") or {}
-    return bool(readiness.get("selectable"))
+def _supports_streaming(llm_client: object) -> bool:
+    return callable(getattr(llm_client, "stream_chat_messages", None))
 
 
-def _model_tags(model: dict[str, Any]) -> set[str]:
-    tags = model.get("tags_json") or []
-    return {str(tag).strip().lower() for tag in tags if str(tag).strip()}
+def _runtime_model_ids() -> list[str]:
+    try:
+        return get_chat_runtime().list_model_ids()
+    except Exception:
+        return []
 
 
-def _friendly_model_name(raw_name: str | None) -> str:
-    if not raw_name:
-        return "Unknown model"
-    base = raw_name.split(":", 1)[0]
-    if base.lower().startswith("qwen"):
-        base = base.replace("qwen", "Qwen", 1)
-    size = ""
-    if ":" in raw_name:
-        variant = raw_name.split(":", 1)[1]
-        head = variant.split("-", 1)[0]
-        if head:
-            size = f" {head.upper()}"
-    return f"{base}{size}".strip()
+def _build_prompt(messages: list[ChatMessage]) -> tuple[str, str]:
+    last_user_idx: int | None = None
+    for idx in range(len(messages) - 1, -1, -1):
+        if messages[idx].role == "user":
+            last_user_idx = idx
+            break
+    if last_user_idx is None:
+        raise HTTPException(
+            status_code=400,
+            detail="chat completion requires at least one user message",
+        )
+    question = (messages[last_user_idx].content or "").strip()
+    if not question:
+        raise HTTPException(
+            status_code=400, detail="last user message must have non-empty content"
+        )
 
-
-def _exposed_model_id(model: dict[str, Any]) -> str:
-    tags = _model_tags(model)
-    friendly = _friendly_model_name(
-        str(model.get("serving_model_name") or "")
-    )
-    if "default" in tags:
-        return f"{friendly} - default platform model"
-    if "fallback" in tags:
-        return f"{friendly} - fallback platform model"
-    label = str(model.get("display_name") or model.get("id") or friendly).strip()
-    return f"{label} - platform model"
-
-
-def _model_sort_key(model: dict[str, Any]) -> tuple[int, str]:
-    tags = _model_tags(model)
-    if "default" in tags:
-        priority = 0
-    elif "fallback" in tags:
-        priority = 1
-    else:
-        priority = 2
-    return (priority, _exposed_model_id(model))
+    context_parts: list[str] = []
+    for idx, message in enumerate(messages):
+        if idx == last_user_idx:
+            continue
+        content = (message.content or "").strip()
+        if content:
+            context_parts.append(f"[{message.role}]\n{content}")
+    context = "\n\n".join(context_parts) or "No prior context provided."
+    return question, context
 
 
 def _apply_rag_to_context(
-    *,
-    rag_collection_id: str,
-    question: str,
-    top_k: int,
-    context: str,
+    *, rag_collection_id: str, question: str, top_k: int, context: str
 ) -> tuple[str, dict[str, Any]]:
     with Session(get_engine()) as session:
         try:
@@ -139,296 +119,7 @@ def _apply_rag_to_context(
     return new_context, retrieval_preview
 
 
-def _build_prompt(messages: list[ChatMessage]) -> tuple[str, str]:
-    last_user_idx: int | None = None
-    for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx].role == "user":
-            last_user_idx = idx
-            break
-    if last_user_idx is None:
-        raise HTTPException(
-            status_code=400,
-            detail="chat completion requires at least one user message",
-        )
-    question_msg = messages[last_user_idx]
-    question = (question_msg.content or "").strip()
-    if not question:
-        raise HTTPException(
-            status_code=400,
-            detail="last user message must have non-empty content",
-        )
-
-    context_parts: list[str] = []
-    for idx, message in enumerate(messages):
-        if idx == last_user_idx:
-            continue
-        content = (message.content or "").strip()
-        if not content:
-            continue
-        context_parts.append(f"[{message.role}]\n{content}")
-    context = "\n\n".join(context_parts) or "No prior context provided."
-    return question, context
-
-
-def _resolve_loaded_lmstudio_id(model_name: str) -> str:
-    """Resolve registry casing/namespaced aliases to the actual loaded LM Studio id.
-
-    Fine-tuned model rows preserve display casing, while LM Studio commonly
-    exposes loaded MLX models as lowercase IDs. Sending the registry-cased name
-    directly to LM Studio produces HTTP 400. Prefer the exact /v1/models id.
-    When the model is not loaded, attempt to load it via lms CLI before
-    re-resolving, so the chat path is self-healing after a service restart.
-
-    Uses ``loaded_lmstudio_models`` (the shared, test-mockable loaded-set
-    helper) so tests don't accidentally trigger real LM Studio loads when
-    a chat request targets a model that the mock claims is loaded.
-    """
-    import subprocess
-    import shutil
-
-    from api.services.model_registry.lmstudio_register import (
-        invalidate_loaded_cache,
-        loaded_lmstudio_models,
-    )
-
-    requested = str(model_name or "").strip()
-    if not requested:
-        return requested
-
-    base_url = get_settings().lmstudio_base_url.rstrip("/")
-
-    def _loaded_ids() -> list[str]:
-        try:
-            return list(loaded_lmstudio_models(base_url=base_url))
-        except Exception:
-            return []
-
-    def _match(ids: list[str], target: str) -> str | None:
-        target_l = target.lower()
-        target_base_l = target_l.rsplit("/", 1)[-1]
-        for mid in ids:
-            if mid.lower() == target_l or mid.lower() == target_base_l:
-                return mid
-        for mid in ids:
-            mid_base_l = mid.lower().rsplit("/", 1)[-1]
-            if mid_base_l == target_l or mid_base_l == target_base_l:
-                return mid
-        return None
-
-    ids = _loaded_ids()
-    resolved = _match(ids, requested)
-    if resolved is not None:
-        return resolved
-
-    # Not loaded — try loading via lms CLI using the lowercase modelKey,
-    # which avoids interactive selectors on this Mac.  This best-effort
-    # auto-load is only useful in production; in tests, the mock returns
-    # the model id immediately so we never reach this branch.
-    lms_exe = shutil.which("lms") or str(Path.home() / ".lmstudio" / "bin" / "lms")
-    load_target = requested.lower()
-    try:
-        subprocess.run(
-            [lms_exe, "load", load_target, "--gpu", "max"],
-            capture_output=True, text=True, timeout=300,
-            stdin=subprocess.DEVNULL,
-        )
-        invalidate_loaded_cache()
-    except Exception:
-        pass  # load attempt best-effort; fall back to original name
-
-    ids = _loaded_ids()
-    resolved = _match(ids, requested)
-    return resolved if resolved is not None else requested
-
-
-def _resolve_selectable_model(session: Session, requested_model: str) -> dict[str, Any]:
-    requested = requested_model.strip()
-    if not requested:
-        raise HTTPException(status_code=400, detail="model must be provided")
-
-    models = list_models(session)
-    by_id = {str(model["id"]): model for model in models if model.get("id")}
-    # `list_models` returns newest-first. Multiple fine-tuned rows can
-    # share a `display_name` (and thus exposed_id), e.g. two training
-    # runs of the same dataset version. Build the dict in two passes so
-    # the *selectable* one wins when present; otherwise fall back to
-    # the newest non-selectable. Without this, a stale failed-publish
-    # row from an earlier session can win and the chat call dies with
-    # "fine-tuned model publish preparation failed" even though a
-    # working sibling is loaded in LM Studio.
-    by_exposed_id: dict[str, dict[str, Any]] = {}
-    for model in models:  # newest first
-        key = _exposed_model_id(model)
-        if key not in by_exposed_id:
-            by_exposed_id[key] = model
-    for model in models:  # override with a selectable sibling if any
-        if _is_selectable(model):
-            by_exposed_id[_exposed_model_id(model)] = model
-    if requested in by_exposed_id:
-        model = by_exposed_id[requested]
-        if not _is_selectable(model):
-            readiness = model.get("readiness") or {}
-            raise HTTPException(
-                status_code=404,
-                detail=str(
-                    readiness.get("selectable_reason")
-                    or "model is not runtime-ready/selectable"
-                ),
-            )
-        return model
-
-    if requested in by_id:
-        model = by_id[requested]
-        if not _is_selectable(model):
-            readiness = model.get("readiness") or {}
-            raise HTTPException(
-                status_code=404,
-                detail=str(
-                    readiness.get("selectable_reason")
-                    or "model is not runtime-ready/selectable"
-                ),
-            )
-        return model
-
-    matches_by_serving = [
-        model
-        for model in models
-        if str(model.get("serving_model_name") or "").lower() == requested.lower()
-        or str(model.get("published_model_name") or "").lower() == requested.lower()
-    ]
-    if not matches_by_serving:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "model not found in registry; the OpenAI-compatible shim only exposes "
-                "registry-tracked runtime-ready/selectable models"
-            ),
-        )
-    selectable_match = next(
-        (model for model in matches_by_serving if _is_selectable(model)),
-        None,
-    )
-    if selectable_match is None:
-        readiness = (matches_by_serving[0].get("readiness") or {})
-        raise HTTPException(
-            status_code=404,
-            detail=str(
-                readiness.get("selectable_reason")
-                or "model is not runtime-ready/selectable"
-            ),
-        )
-    return selectable_match
-
-
-@router.get("/models")
-def list_v1_models() -> dict[str, Any]:
-    with Session(get_engine()) as session:
-        models = list_models(session)
-    now = int(time.time())
-    data = [
-        {
-            "id": _exposed_model_id(model),
-            "object": "model",
-            "created": now,
-            "owned_by": OWNED_BY,
-            "registry_id": model.get("id"),
-            "display_name": model.get("display_name"),
-            "serving_model_name": model.get("serving_model_name"),
-            "source_type": model.get("source_type"),
-            "readiness": model.get("readiness"),
-        }
-        for model in sorted(models, key=_model_sort_key)
-        if _is_selectable(model)
-    ]
-    return {"object": "list", "data": data}
-
-
-def _run_chat_completion(
-    request: ChatCompletionRequest,
-    llm_client: LLMClient,
-) -> tuple[dict[str, Any], str, str, int]:
-    with Session(get_engine()) as session:
-        model = _resolve_selectable_model(session, request.model)
-
-    question, context = _build_prompt(request.messages)
-
-    retrieval_preview: dict[str, Any] | None = None
-    if request.rag_collection_id:
-        context, retrieval_preview = _apply_rag_to_context(
-            rag_collection_id=request.rag_collection_id,
-            question=question,
-            top_k=request.top_k,
-            context=context,
-        )
-
-    serving_model_name = model.get("serving_model_name")
-    if not serving_model_name:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "selected model has no serving target; only runtime-ready/selectable "
-                "models can be used through the OpenAI-compatible shim"
-            ),
-        )
-    lmstudio_model_id = _resolve_loaded_lmstudio_id(str(serving_model_name))
-
-    try:
-        result = llm_client.generate_answer(
-            question=question,
-            context=context,
-            model=lmstudio_model_id,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-        )
-    except LLMClientError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"LLM request failed: {exc}"
-        ) from exc
-
-    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-    created = int(time.time())
-    exposed_model_id = _exposed_model_id(model) if model.get("id") else str(
-        serving_model_name
-    )
-    response = {
-        "id": completion_id,
-        "object": "chat.completion",
-        "created": created,
-        "model": exposed_model_id,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": result.answer},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        },
-        "x_domain_platform": {
-            "registry_model_id": model.get("id"),
-            "serving_model_name": serving_model_name,
-            "lmstudio_model_id": lmstudio_model_id,
-            "used_fallback": result.used_fallback,
-            "actual_model": result.model,
-            "source_type": model.get("source_type"),
-            "readiness": model.get("readiness"),
-            "rag_collection_id": request.rag_collection_id,
-            "retrieval_preview": retrieval_preview,
-            "notes": [
-                "Token counts are placeholders; LM Studio's OpenAI shim does not report usage.",
-                "RAG-collection grounding is opt-in via rag_collection_id; ordinary OpenAI clients that do not send it remain plain chat.",
-            ],
-        },
-    }
-    return response, completion_id, exposed_model_id, created
-
-
-def _build_lmstudio_messages(
-    *, question: str, context: str
-) -> list[dict[str, Any]]:
+def _build_messages(*, question: str, context: str) -> list[dict[str, Any]]:
     return [
         {
             "role": "system",
@@ -438,63 +129,113 @@ def _build_lmstudio_messages(
                 "otherwise rely on your own knowledge."
             ),
         },
-        {
-            "role": "user",
-            "content": f"Context:\n{context}\n\nQuestion: {question}",
-        },
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
     ]
 
 
-def _stream_via_lmstudio(
+@router.get("/models")
+def list_v1_models() -> dict[str, Any]:
+    now = int(time.time())
+    return {
+        "object": "list",
+        "data": [
+            {"id": model_id, "object": "model", "created": now, "owned_by": OWNED_BY}
+            for model_id in _runtime_model_ids()
+        ],
+    }
+
+
+def _platform_meta(
+    request: ChatCompletionRequest,
+    retrieval_preview: dict[str, Any] | None,
+    *,
+    streamed: bool,
+) -> dict[str, Any]:
+    return {
+        "model": request.model,
+        "rag_collection_id": request.rag_collection_id,
+        "retrieval_preview": retrieval_preview,
+        "notes": [
+            "Token counts are placeholders; the runtime shim does not report usage.",
+            "RAG-collection grounding is opt-in via rag_collection_id.",
+        ]
+        + (
+            ["Stream chunks are proxied from the runtime with id+model rewritten."]
+            if streamed
+            else []
+        ),
+    }
+
+
+def _run_chat_completion(
+    request: ChatCompletionRequest, llm_client: LLMClient
+) -> tuple[dict[str, Any], str, str, int]:
+    question, context = _build_prompt(request.messages)
+    retrieval_preview: dict[str, Any] | None = None
+    if request.rag_collection_id:
+        context, retrieval_preview = _apply_rag_to_context(
+            rag_collection_id=request.rag_collection_id,
+            question=question,
+            top_k=request.top_k,
+            context=context,
+        )
+
+    try:
+        result = llm_client.generate_answer(
+            question=question,
+            context=context,
+            model=request.model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+    except LLMClientError as exc:
+        raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+    response = {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": request.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": result.answer},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "x_domain_platform": _platform_meta(request, retrieval_preview, streamed=False),
+    }
+    return response, completion_id, request.model, created
+
+
+def _stream_via_runtime(
     *,
     llm_client: Any,
     question: str,
     context: str,
-    serving_model_name: str,
+    model: str,
     temperature: float,
     max_tokens: int | None,
     completion_id: str,
-    exposed_model_id: str,
     created: int,
     platform_meta: dict[str, Any],
 ) -> Iterator[str]:
-    if not _supports_streaming(llm_client):
-        # Fall back to buffered single-chunk SSE for non-streaming clients.
-        yield from _stream_chat_completion(
-            {
-                "choices": [{"message": {"content": ""}}],
-                "x_domain_platform": platform_meta,
-            },
-            completion_id,
-            exposed_model_id,
-            created,
-        )
-        return
-
     try:
-        upstream_iter = llm_client.stream_chat_messages(
-            messages=_build_lmstudio_messages(question=question, context=context),
-            model=serving_model_name,
+        upstream = llm_client.stream_chat_messages(
+            messages=_build_messages(question=question, context=context),
+            model=model,
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        for chunk in upstream_iter:
-            # Rewrite the upstream id+model so external clients see the
-            # platform's exposed identifiers, not LM Studio's raw model id.
+        for chunk in upstream:
             chunk = dict(chunk)
             chunk["id"] = completion_id
-            chunk["model"] = exposed_model_id
+            chunk["model"] = model
             chunk["created"] = created
-            # system_fingerprint leaks the upstream serving name; strip it
-            # so all client-facing identifiers stay platform-owned.
             chunk.pop("system_fingerprint", None)
-            # Thinking-mode models (Qwen3, DeepSeek-R1) stream tokens in
-            # `reasoning_content` and leave `content` empty until the
-            # reasoning pass ends. Most OpenAI-compatible clients only
-            # render `content`, so mirror reasoning tokens into a
-            # `content` field while the model is still thinking. The
-            # final assistant message (after the reasoning pass) lands in
-            # `content` natively and overwrites this on its own chunk.
             choices = chunk.get("choices")
             if isinstance(choices, list):
                 for choice in choices:
@@ -517,7 +258,7 @@ def _stream_via_lmstudio(
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": exposed_model_id,
+            "model": model,
             "choices": [
                 {
                     "index": 0,
@@ -532,7 +273,7 @@ def _stream_via_lmstudio(
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": exposed_model_id,
+        "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
         "x_domain_platform": platform_meta,
     }
@@ -540,45 +281,38 @@ def _stream_via_lmstudio(
     yield "data: [DONE]\n\n"
 
 
-def _stream_chat_completion(
-    response: dict[str, Any],
-    completion_id: str,
-    exposed_model_id: str,
-    created: int,
+def _stream_buffered(
+    response: dict[str, Any], completion_id: str, model: str, created: int
 ) -> Iterator[str]:
     content = response["choices"][0]["message"]["content"] or ""
-    first_chunk = {
+    first = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": exposed_model_id,
-        "choices": [
-            {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-        ],
+        "model": model,
+        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
     }
-    yield f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n"
-
+    yield f"data: {json.dumps(first, ensure_ascii=False)}\n\n"
     if content:
-        content_chunk = {
+        chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": exposed_model_id,
+            "model": model,
             "choices": [
                 {"index": 0, "delta": {"content": content}, "finish_reason": None}
             ],
         }
-        yield f"data: {json.dumps(content_chunk, ensure_ascii=False)}\n\n"
-
-    final_chunk = {
+        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    final = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": exposed_model_id,
+        "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
         "x_domain_platform": response["x_domain_platform"],
     }
-    yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+    yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"
 
 
@@ -588,10 +322,7 @@ def post_v1_chat_completion(
     llm_client: LLMClient = Depends(get_llm_client),
 ) -> Any:
     if request.stream and _supports_streaming(llm_client):
-        with Session(get_engine()) as session:
-            model = _resolve_selectable_model(session, request.model)
         question, context = _build_prompt(request.messages)
-
         retrieval_preview: dict[str, Any] | None = None
         if request.rag_collection_id:
             context, retrieval_preview = _apply_rag_to_context(
@@ -600,59 +331,29 @@ def post_v1_chat_completion(
                 top_k=request.top_k,
                 context=context,
             )
-
-        serving_model_name = model.get("serving_model_name")
-        if not serving_model_name:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "selected model has no serving target; only runtime-ready/selectable "
-                    "models can be used through the OpenAI-compatible shim"
-                ),
-            )
-        lmstudio_model_id = _resolve_loaded_lmstudio_id(str(serving_model_name))
-
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
-        exposed_model_id = _exposed_model_id(model) if model.get("id") else str(
-            serving_model_name
-        )
-        platform_meta = {
-            "registry_model_id": model.get("id"),
-            "serving_model_name": serving_model_name,
-            "lmstudio_model_id": lmstudio_model_id,
-            "source_type": model.get("source_type"),
-            "readiness": model.get("readiness"),
-            "rag_collection_id": request.rag_collection_id,
-            "retrieval_preview": retrieval_preview,
-            "notes": [
-                "Stream chunks are proxied directly from LM Studio with id+model rewritten to the platform identifiers.",
-                "RAG-collection grounding is opt-in via rag_collection_id.",
-            ],
-        }
         return StreamingResponse(
-            _stream_via_lmstudio(
+            _stream_via_runtime(
                 llm_client=llm_client,
                 question=question,
                 context=context,
-                serving_model_name=lmstudio_model_id,
+                model=request.model,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 completion_id=completion_id,
-                exposed_model_id=exposed_model_id,
                 created=created,
-                platform_meta=platform_meta,
+                platform_meta=_platform_meta(
+                    request, retrieval_preview, streamed=True
+                ),
             ),
             media_type="text/event-stream",
         )
 
-    response, completion_id, exposed_model_id, created = _run_chat_completion(
-        request, llm_client
-    )
+    response, completion_id, model, created = _run_chat_completion(request, llm_client)
     if request.stream:
-        # Fallback for non-LM-Studio clients (test fakes etc.): buffer + wrap.
         return StreamingResponse(
-            _stream_chat_completion(response, completion_id, exposed_model_id, created),
+            _stream_buffered(response, completion_id, model, created),
             media_type="text/event-stream",
         )
     return response

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class AppDefinition:
     title: str
-    version: str = "0.9.0"
+    version: str = "0.10.0"
 
 
 @dataclass(frozen=True)
@@ -26,10 +26,10 @@ DEFAULT_STARTER = StarterDefinition(
     app=AppDefinition(title="Domain-Adaptable AI Workflow Demo API"),
     demo=DemoDefinition(
         enabled=True,
-        eyebrow="Demo-first reviewer experience",
+        eyebrow="Admin / evaluation / debug dashboard",
         subtitle=(
-            "Manage RAG collections, build fine-tuning datasets from them, run MLX QLoRA "
-            "training, and load the resulting model in LM Studio for inference."
+            "Inspect RAG collections, trigger Graph RAG indexing, and review "
+            "evaluation reports. Chat happens in Open WebUI, not here."
         ),
     ),
 )

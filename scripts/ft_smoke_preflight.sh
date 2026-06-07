@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-uv run --project "$REPO_ROOT/apps/api" python \
-  "$REPO_ROOT/apps/api/src/api/services/fine_tuning/preflight.py" "$@"

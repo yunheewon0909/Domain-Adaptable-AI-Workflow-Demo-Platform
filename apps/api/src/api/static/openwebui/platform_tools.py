@@ -1,17 +1,17 @@
 """
-title: Domain Adaptable AI Platform - RAG, Models, FT
+title: Domain Adaptable AI Platform - RAG & Models
 author: Domain Adaptable AI Platform
 author_url: https://github.com/
 funding_url: https://github.com/
-version: 0.1.0
+version: 0.2.0
 license: MIT
 description: >
   Open WebUI Tool that lets a chat call into the platform's RAG
-  collections, model registry, and fine-tuning catalog. Connects to
-  the FastAPI service at the configured base URL (defaults to
-  http://host.docker.internal:8000 so a Docker-hosted Open WebUI
-  reaches the Mac host). Read-only by default; deletes a RAG
-  document only when the chat explicitly invokes delete_rag_document.
+  collections and runtime models. Connects to the FastAPI service at
+  the configured base URL (defaults to http://api:8000 in compose, or
+  http://host.docker.internal:8000 for a native runtime). Read-only by
+  default; deletes a RAG document only when the chat explicitly invokes
+  delete_rag_document.
 
 This file is designed to be installed into Open WebUI as a Tool:
 
@@ -257,73 +257,6 @@ class Tools:
             "started_at": item.get("started_at"),
             "finished_at": item.get("finished_at"),
         }
-
-    @staticmethod
-    def _project_ft_dataset(item: Any) -> Any:
-        # Listing projection: drop nested versions/rows so the chat picker stays
-        # compact. version_count is derived from the embedded versions list.
-        if not isinstance(item, dict):
-            return item
-        versions = item.get("versions") or []
-        return {
-            "dataset_id": item.get("id"),
-            "name": item.get("name"),
-            "description": item.get("description"),
-            "version_count": len(versions) if isinstance(versions, list) else 0,
-            "created_at": item.get("created_at"),
-        }
-
-    @staticmethod
-    def _project_ft_version(item: Any) -> Any:
-        if not isinstance(item, dict):
-            return item
-        return {
-            "version_id": item.get("id"),
-            "version_number": item.get("version_label"),
-            "status": item.get("status"),
-            "row_count": item.get("row_count"),
-            "created_at": item.get("created_at"),
-        }
-
-    @staticmethod
-    def _project_ft_training_job(item: Any) -> Any:
-        if not isinstance(item, dict):
-            return item
-        return {
-            "job_id": item.get("id"),
-            "status": item.get("status"),
-            "dataset_name": item.get("dataset_name"),
-            "base_model": item.get("base_model_name"),
-            "training_method": item.get("training_method"),
-            "created_at": item.get("created_at"),
-            "finished_at": item.get("finished_at"),
-        }
-
-    @staticmethod
-    def _project_ft_training_job_detail(item: Any) -> Any:
-        if not isinstance(item, dict):
-            return item
-        base = Tools._project_ft_training_job(item)
-        if not isinstance(base, dict):
-            return base
-        artifacts = item.get("artifacts") or []
-        artifact_id: str | None = None
-        if isinstance(artifacts, list):
-            for artifact in artifacts:
-                if isinstance(artifact, dict) and artifact.get("id"):
-                    artifact_id = artifact.get("id")
-                    break
-        error_json = item.get("error_json")
-        if isinstance(error_json, dict):
-            error = error_json.get("detail") or error_json.get("error") or error_json
-        else:
-            error = error_json
-        base["error"] = error
-        base["artifact_id"] = artifact_id
-        base["logs_url_hint"] = (
-            f"call get_ft_training_logs(job_id={item.get('id')!r}) for full log text"
-        )
-        return base
 
     @staticmethod
     def _summarize_result(result_json: dict[str, Any] | None) -> dict[str, Any]:
@@ -618,22 +551,6 @@ class Tools:
             projected["updated_at"] = body.get("updated_at")
         return self._format({"ok": True, "model": projected})
 
-    def get_model_lineage(self, model_id: str) -> str:
-        """Fetch lineage metadata for one platform model.
-
-        Use this when the user asks about a model's base model, trainer,
-        artifact, or published name. Returns the raw lineage dict from the
-        platform unchanged (it is already compact).
-
-        :param model_id: Model id from list_platform_models.
-        :return: JSON string with the lineage dict, or an error envelope on 404.
-        """
-        encoded_id = urllib.parse.quote(model_id, safe="")
-        status, body = self._request("GET", f"/models/{encoded_id}/lineage")
-        if status != 200:
-            return self._error(status, body, action="get_model_lineage")
-        return self._format({"ok": True, "lineage": body})
-
     def run_platform_inference(
         self,
         model_id: str,
@@ -732,131 +649,3 @@ class Tools:
             }
         )
 
-    # ---- Fine-tuning lifecycle (read-only) -----------------------------
-
-    def list_ft_datasets(self) -> str:
-        """List fine-tuning datasets registered on the platform.
-
-        Use this when the user asks "what FT datasets exist", "which fine-tuning
-        datasets are available", or before drilling into versions. Returns a
-        compact projection (dataset_id, name, description, version_count,
-        created_at); nested versions/rows are omitted.
-
-        :return: JSON string with the dataset list, or an error envelope.
-        """
-        status, body = self._request("GET", "/ft-datasets")
-        if status != 200:
-            return self._error(status, body, action="list_ft_datasets")
-        datasets = (
-            [self._project_ft_dataset(item) for item in body]
-            if isinstance(body, list)
-            else body
-        )
-        return self._format({"ok": True, "datasets": datasets})
-
-    def list_ft_dataset_versions(self, dataset_id: str) -> str:
-        """List versions for one fine-tuning dataset.
-
-        Use this when the user asks "what versions does dataset X have" or
-        before fetching a version summary. The platform's dataset detail
-        endpoint embeds versions; this method extracts and projects them.
-
-        :param dataset_id: Dataset id from list_ft_datasets.
-        :return: JSON string with the version list, or an error envelope when
-            the dataset does not exist.
-        """
-        encoded_id = urllib.parse.quote(dataset_id, safe="")
-        status, body = self._request("GET", f"/ft-datasets/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="list_ft_dataset_versions")
-        versions: list[Any] | Any = []
-        if isinstance(body, dict):
-            raw_versions = body.get("versions") or []
-            if isinstance(raw_versions, list):
-                versions = [self._project_ft_version(item) for item in raw_versions]
-            else:
-                versions = raw_versions
-        return self._format(
-            {"ok": True, "dataset_id": dataset_id, "versions": versions}
-        )
-
-    def get_ft_dataset_version_summary(self, version_id: str) -> str:
-        """Fetch the row-count summary for one fine-tuning dataset version.
-
-        Use this when the user asks "how many rows does version X have" or
-        "what's the status of FT version X". Returns the platform's
-        already-compact summary (status, row_count, splits, row_summary,
-        timestamps) with no row payloads.
-
-        :param version_id: Version id from list_ft_dataset_versions.
-        :return: JSON string with the summary, or an error envelope when the
-            version does not exist.
-        """
-        encoded_id = urllib.parse.quote(version_id, safe="")
-        status, body = self._request(
-            "GET", f"/ft-dataset-versions/{encoded_id}/summary"
-        )
-        if status != 200:
-            return self._error(status, body, action="get_ft_dataset_version_summary")
-        return self._format({"ok": True, "summary": body})
-
-    def list_ft_training_jobs(self) -> str:
-        """List fine-tuning training jobs.
-
-        Use this when the user asks "what FT training jobs ran", "which
-        trainers are queued", or before drilling into a specific job. Returns
-        a compact projection (job_id, status, dataset_name, base_model,
-        training_method, created_at, finished_at).
-
-        :return: JSON string with the training job list, or an error envelope.
-        """
-        status, body = self._request("GET", "/ft-training-jobs")
-        if status != 200:
-            return self._error(status, body, action="list_ft_training_jobs")
-        jobs = (
-            [self._project_ft_training_job(item) for item in body]
-            if isinstance(body, list)
-            else body
-        )
-        return self._format({"ok": True, "jobs": jobs})
-
-    def get_ft_training_job(self, job_id: str) -> str:
-        """Fetch detail for one fine-tuning training job.
-
-        Use this when the user asks "tell me about FT training job X" or
-        wants the failure reason / produced artifact id. Returns the compact
-        projection plus error, artifact_id, and a logs_url_hint pointing at
-        get_ft_training_logs.
-
-        :param job_id: Training job id from list_ft_training_jobs.
-        :return: JSON string with the job detail, or an error envelope on 404.
-        """
-        encoded_id = urllib.parse.quote(job_id, safe="")
-        status, body = self._request("GET", f"/ft-training-jobs/{encoded_id}")
-        if status != 200:
-            return self._error(status, body, action="get_ft_training_job")
-        return self._format({"ok": True, "job": self._project_ft_training_job_detail(body)})
-
-    def get_ft_training_logs(self, job_id: str) -> str:
-        """Fetch training log text for one fine-tuning training job.
-
-        Use this when the user asks "show me the FT training logs" or "why
-        did training fail". The platform returns either a JSON envelope with a
-        ``log_text`` field or raw text; both are normalized into
-        ``{"ok": true, "logs": "..."}``.
-
-        :param job_id: Training job id from list_ft_training_jobs.
-        :return: JSON string with the log text, or an error envelope on 404.
-        """
-        encoded_id = urllib.parse.quote(job_id, safe="")
-        status, body = self._request("GET", f"/ft-training-jobs/{encoded_id}/logs")
-        if status != 200:
-            return self._error(status, body, action="get_ft_training_logs")
-        logs: Any
-        if isinstance(body, dict):
-            logs = body.get("log_text") or body.get("logs") or body.get("raw") or ""
-        elif isinstance(body, str):
-            logs = body
-        else:
-            logs = body
-        return self._format({"ok": True, "job_id": job_id, "logs": logs})

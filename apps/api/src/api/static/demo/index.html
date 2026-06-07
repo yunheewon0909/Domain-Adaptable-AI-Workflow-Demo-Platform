@@ -1,366 +1,53 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="cache-control" content="no-store" />
     <title>{{APP_TITLE}}</title>
-    <link rel="stylesheet" href="/demo/assets/styles.css" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'media',
-        theme: {
-          extend: {
-            colors: {
-              border: 'hsl(var(--border))',
-              bg: 'hsl(var(--bg))',
-              card: 'hsl(var(--card))',
-              fg: 'hsl(var(--fg))',
-              muted: 'hsl(var(--muted))',
-              'muted-fg': 'hsl(var(--muted-fg))',
-              accent: 'hsl(var(--accent))',
-              'accent-fg': 'hsl(var(--accent-fg))',
-              destructive: 'hsl(var(--destructive))',
-            },
-            borderRadius: { lg: '0.75rem', xl: '1rem' },
-            fontFamily: {
-              sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-            },
-          },
-        },
-      };
-    </script>
+    <link rel="stylesheet" href="/demo/assets/styles.css?v=10" />
   </head>
-  <body class="min-h-full bg-bg text-fg antialiased">
-    <main class="mx-auto max-w-3xl px-4 py-10 space-y-8">
-      <header class="space-y-2">
-        <p class="text-xs uppercase tracking-widest text-muted-fg">{{DEMO_EYEBROW}}</p>
-        <h1 class="text-3xl font-semibold">{{APP_TITLE}}</h1>
-        <p class="text-muted-fg">{{DEMO_SUBTITLE}}</p>
+  <body>
+    <main class="container">
+      <header class="page-header">
+        <p class="eyebrow">{{DEMO_EYEBROW}}</p>
+        <h1>{{APP_TITLE}}</h1>
+        <p class="subtitle">{{DEMO_SUBTITLE}}</p>
+        <p class="note">
+          This is an <strong>admin / evaluation / debug dashboard</strong>, not a chat UI.
+          For chat, use <strong>Open WebUI</strong> at
+          <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a>.
+        </p>
       </header>
 
-      <!-- Step 1: Knowledge base -->
-      <section class="rounded-xl border border-border bg-card p-6 space-y-4">
-        <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 1</p>
-          <h2 class="text-xl font-semibold">Knowledge base</h2>
-          <p class="text-sm text-muted-fg">
-            Upload one or more documents (txt, md, pdf) into a collection. Anything you ask in
-            chat below can be grounded in the active collection's content.
-          </p>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="flex-1 min-w-[200px] text-sm space-y-1">
-            <span class="text-muted-fg">Active collection</span>
-            <select id="kb-select" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
-          </label>
-          <input
-            id="kb-new-name"
-            type="text"
-            placeholder="New collection name"
-            class="rounded-md border border-border bg-card px-3 py-2 text-sm"
-          />
-          <button id="kb-new-button" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">
-            Create
-          </button>
-          <button id="kb-reveal" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted" title="Open active collection's storage dir in Finder">
-            Reveal
-          </button>
-          <button id="kb-rename-collection" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted" title="Rename the active collection">
-            Rename
-          </button>
-          <button id="kb-delete-collection" type="button" class="rounded-md border border-border px-4 py-2 text-sm text-destructive hover:bg-destructive/10" title="Delete the active collection and all of its documents">
-            Delete
-          </button>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-3">
-          <input id="kb-file" type="file" multiple class="flex-1 min-w-[200px] text-sm" />
-          <button id="kb-upload-button" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-            Upload to collection
-          </button>
-        </div>
-
-        <button id="kb-new-doc-button" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]">
-          📄 New Document
-        </button>
-        <div id="kb-new-doc-form" class="hidden mt-2 space-y-2">
-          <input
-            id="kb-text-name"
-            type="text"
-            placeholder="Filename (e.g. notes.txt)"
-            class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
-          />
-          <textarea
-            id="kb-text-content"
-            rows="5"
-            placeholder="Paste or type document content…"
-            class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono resize-y"
-          ></textarea>
-          <div class="flex justify-end gap-2">
-            <button id="kb-text-cancel" type="button" class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted min-h-[40px]">✖ Cancel</button>
-            <button id="kb-text-save" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]">💾 Save</button>
-          </div>
-        </div>
-
-        <div id="kb-docs" class="text-sm text-muted-fg">No collection selected.</div>
-        <p id="kb-hint" class="text-xs text-muted-fg"></p>
+      <section class="card" id="status-card">
+        <h2>Service status</h2>
+        <ul class="status-list">
+          <li>API health: <span id="health-status">checking…</span></li>
+          <li>Runtime models: <span id="model-count">checking…</span></li>
+        </ul>
       </section>
 
-      <!-- Step 2: Generate Q&A (optional) -->
-      <section class="rounded-xl border border-border bg-card p-6 space-y-4">
-        <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 2 · optional</p>
-          <h2 class="text-xl font-semibold">Generate Q&amp;A pairs</h2>
-          <p class="text-sm text-muted-fg">
-            Skip this step to chat using the base model + retrieval. To fine-tune, generate Q/A
-            pairs from your collection, review them in Step 3, then train in Step 4.
-          </p>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="text-sm space-y-1">
-            <span class="text-muted-fg">Pairs per chunk</span>
-            <input id="train-pairs" type="number" min="1" max="10" value="3" class="w-20 rounded-md border border-border bg-card px-3 py-2" />
-          </label>
-          <label class="text-sm space-y-1">
-            <span class="text-muted-fg">Max chunks</span>
-            <input id="train-max-chunks" type="number" min="1" max="200" value="20" class="w-20 rounded-md border border-border bg-card px-3 py-2" />
-          </label>
-          <label class="text-sm space-y-1 flex-1 min-w-[200px]">
-            <span class="text-muted-fg">Q/A generator model (4B+ recommended)</span>
-            <select id="train-qa-model" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
-          </label>
-          <button id="generate-qa-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-            Generate Q/A pairs
-          </button>
-        </div>
-
-        <p class="text-xs text-muted-fg mt-1">⚠️ For Q/A generation, use a model with 4B+ parameters (e.g. qwen3.5-4b-mlx). Models under 2B may fail to produce valid training pairs.</p>
-
-        <div id="generate-qa-status" class="text-sm text-muted-fg">Idle.</div>
+      <section class="card">
+        <h2>Runtime models</h2>
+        <p class="hint">Served by the configured runtime (Ollama by default), via <code>/v1/models</code>.</p>
+        <ul id="model-list" class="data-list"><li>loading…</li></ul>
       </section>
 
-      <!-- Step 3: Review & Edit Q&A -->
-      <section id="qa-review-section" class="rounded-xl border border-border bg-card p-6 space-y-4">
-        <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 3 · optional</p>
-          <h2 class="text-xl font-semibold">Review &amp; edit Q&amp;A pairs</h2>
-          <p class="text-sm text-muted-fg">
-            Review the generated pairs. Edit questions or answers inline, delete unwanted pairs, then proceed to fine-tuning.
-          </p>
-        </div>
-
-        <div class="flex items-center justify-between flex-wrap gap-3">
-          <span id="qa-pair-count" class="text-sm text-muted-fg">0 pairs</span>
-          <div class="flex gap-2">
-            <button id="add-pair-btn" type="button" class="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">
-              + Add pair manually
-            </button>
-          </div>
-        </div>
-
-        <div id="qa-pairs-list" class="space-y-2"></div>
+      <section class="card">
+        <h2>RAG collections</h2>
+        <p class="hint">Knowledge bases for Graph RAG, via <code>/rag-collections</code>.</p>
+        <ul id="collection-list" class="data-list"><li>loading…</li></ul>
       </section>
 
-      <!-- Step 4: Fine-tune -->
-      <section id="finetune-section" class="rounded-xl border border-border bg-card p-6 space-y-4">
-        <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 4 · optional</p>
-          <h2 class="text-xl font-semibold">Fine-tune</h2>
-          <p class="text-sm text-muted-fg">
-            Train on the reviewed Q/A pairs using MLX QLoRA. The result is auto-staged for LM Studio; load it there to make it selectable in chat.
-          </p>
-        </div>
-
-        <label class="text-sm space-y-1 max-w-xs">
-          <span class="text-muted-fg">Base model to fine-tune</span>
-          <select id="train-base" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
-        </label>
-
-        <button id="train-start" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-          Start Training
-        </button>
-
-        <ol id="train-stepper" class="flex flex-wrap items-center gap-1 text-xs text-muted-fg hidden">
-          <li data-phase="preparing_data" class="step px-2 py-1 rounded border border-border">Prepare data</li>
-          <li class="opacity-40">→</li>
-          <li data-phase="training" class="step px-2 py-1 rounded border border-border">Train</li>
-          <li class="opacity-40">→</li>
-          <li data-phase="packaging" class="step px-2 py-1 rounded border border-border">Package</li>
-          <li class="opacity-40">→</li>
-          <li data-phase="registering" class="step px-2 py-1 rounded border border-border">Register</li>
-          <li class="opacity-40">→</li>
-          <li data-phase="succeeded" class="step px-2 py-1 rounded border border-border">Done</li>
-        </ol>
-        <div id="train-status" class="text-sm text-muted-fg">Idle.</div>
-
-        <details id="train-logs-wrap" class="text-xs text-muted-fg hidden">
-          <summary class="cursor-pointer">Show training log</summary>
-          <pre id="train-logs" class="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap"></pre>
-        </details>
-      </section>
-
-      <!-- Step 5: Verify (LLM-as-Judge) -->
-      <section id="verify-section" class="rounded-xl border border-border bg-card p-6 space-y-4">
-        <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Step 5 · optional</p>
-          <h2 class="text-xl font-semibold">Verify fine-tuned model</h2>
-          <p class="text-sm text-muted-fg">
-            Compare your fine-tuned model against the base model using an LLM-as-Judge.
-            The judge scores four answer variants (FT+RAG, FT only, Base+RAG, Base only) out of 10.
-          </p>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="flex-1 min-w-[200px] text-sm space-y-1">
-            <span class="text-muted-fg">Verifier model (judge)</span>
-            <select id="verify-judge-model" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
-          </label>
-          <label class="flex-1 min-w-[200px] text-sm space-y-1">
-            <span class="text-muted-fg">Fine-tuned model to test</span>
-            <select id="verify-ft-model" class="w-full rounded-md border border-border bg-card px-3 py-2">
-              <option value="">— no fine-tuned models —</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="text-sm space-y-1">
-          <span class="text-muted-fg">Auto-detected base model</span>
-          <div id="verify-base-model" class="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-fg">
-            — select a fine-tuned model above —
-          </div>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="flex-1 min-w-[200px] text-sm space-y-1">
-            <span class="text-muted-fg">Test question</span>
-            <input
-              id="verify-question"
-              type="text"
-              placeholder="Ask a question to test both models…"
-              class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
-            />
-          </label>
-          <button id="verify-run-btn" type="button" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90 min-h-[40px]">
-            Run Verification
-          </button>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-2 text-xs">
-          <button id="verify-suggest-btn" type="button" class="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50" disabled>
-            💡 Suggest a question from training data
-          </button>
-          <span id="verify-suggest-hint" class="text-muted-fg"></span>
-        </div>
-        <p class="text-xs text-muted-fg">
-          Tip: ask something your fine-tune was actually trained on. On questions outside
-          the training data the fine-tuned and base models usually answer identically.
+      <section class="card">
+        <h2>Advanced</h2>
+        <p class="hint">
+          Open WebUI tool artifact: <code>/openwebui/platform_tools.py</code> ·
+          manifest: <code>/openwebui/manifest.json</code>.
         </p>
-
-        <div id="verify-status" class="text-sm text-muted-fg">Idle.</div>
-
-        <progress id="verify-progress" class="hidden w-full accent-accent h-2" max="5" value="0"></progress>
-
-        <details id="verify-log-wrap" class="hidden text-xs text-muted-fg">
-          <summary class="cursor-pointer select-none">Show inference log</summary>
-          <div id="verify-log" class="mt-2 max-h-48 overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-relaxed space-y-1 font-mono"></div>
-        </details>
-
-        <div id="verify-ft-banner" class="hidden"></div>
-
-        <div id="verify-results" class="hidden overflow-x-auto">
-          <table class="w-full text-sm border-collapse">
-            <thead>
-              <tr class="text-left text-xs text-muted-fg uppercase tracking-wider">
-                <th class="px-3 py-2 border border-border bg-muted">Variant</th>
-                <th class="px-3 py-2 border border-border bg-muted">Answer</th>
-                <th class="px-3 py-2 border border-border bg-muted w-16 text-center">Score</th>
-                <th class="px-3 py-2 border border-border bg-muted">Judge comment</th>
-              </tr>
-            </thead>
-            <tbody id="verify-results-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- Chat -->
-      <section class="rounded-xl border border-border bg-card p-6 space-y-4">
-        <div class="space-y-1">
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">Chat</p>
-          <h2 class="text-xl font-semibold">Chat</h2>
-          <p class="text-sm text-muted-fg">
-            Pick a model and (optionally) ground the answer in the active knowledge base.
-            Fine-tuned models appear here once you load them in LM Studio.
-          </p>
-        </div>
-
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="flex-1 min-w-[200px] text-sm space-y-1">
-            <span class="text-muted-fg">Model</span>
-            <select id="chat-model" class="w-full rounded-md border border-border bg-card px-3 py-2"></select>
-          </label>
-          <label class="flex items-center gap-2 text-sm">
-            <input id="chat-ground" type="checkbox" checked />
-            <span>Use knowledge base as context</span>
-          </label>
-        </div>
-
-        <form id="chat-form" class="flex flex-wrap items-end gap-3">
-          <input
-            id="chat-input"
-            type="text"
-            placeholder="Ask a question…"
-            class="flex-1 min-w-[200px] rounded-md border border-border bg-card px-3 py-2 text-sm"
-            required
-          />
-          <button type="submit" class="rounded-md bg-accent text-accent-fg px-4 py-2 text-sm font-medium hover:opacity-90">
-            Send
-          </button>
-          <button id="chat-clear" type="button" class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">
-            Clear
-          </button>
-        </form>
-
-        <div id="chat-suggestions" class="flex flex-wrap gap-2 text-xs"></div>
-
-        <div id="chat-log" class="space-y-3 min-h-[160px] rounded-md border border-border bg-bg p-4 text-sm"></div>
-
-        <!-- Manage fine-tuned models -->
-        <details class="group" id="ft-manage-section">
-          <summary class="cursor-pointer text-xs font-medium text-muted-fg list-none flex items-center justify-between">
-            <span>Manage fine-tuned models</span>
-            <span class="text-xs text-muted-fg group-open:hidden">show</span>
-            <span class="text-xs text-muted-fg hidden group-open:inline">hide</span>
-          </summary>
-          <div id="ft-manage-list" class="mt-2 space-y-1 text-xs text-muted-fg">
-            — no fine-tuned models —
-          </div>
-        </details>
-      </section>
-
-      <!-- Settings (collapsed) -->
-      <section class="rounded-xl border border-border bg-card">
-        <details class="group p-6 space-y-3">
-          <summary class="cursor-pointer text-sm font-medium text-muted-fg list-none flex items-center justify-between">
-            <span>Advanced · service status</span>
-            <span class="text-xs text-muted-fg group-open:hidden">show</span>
-            <span class="text-xs text-muted-fg hidden group-open:inline">hide</span>
-          </summary>
-          <div id="settings-status" class="text-xs text-muted-fg space-y-1 pt-2"></div>
-          <p class="text-xs text-muted-fg pt-2">
-            Want a richer chat client? Configure
-            <a class="underline" href="https://github.com/lobehub/lobe-chat" target="_blank" rel="noopener">lobe-chat</a>
-            or
-            <a class="underline" href="https://github.com/open-webui/open-webui" target="_blank" rel="noopener">Open WebUI</a>
-            with an OpenAI-compatible base URL pointing at <code class="bg-muted px-1 py-0.5 rounded">/v1</code>.
-          </p>
-        </details>
       </section>
     </main>
-
-    <script src="/demo/assets/app.js?v=27"></script>
+    <script src="/demo/assets/app.js?v=10"></script>
   </body>
 </html>

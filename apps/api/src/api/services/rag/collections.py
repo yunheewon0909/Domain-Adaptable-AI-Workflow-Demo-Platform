@@ -183,7 +183,7 @@ def create_collection(
 ) -> dict[str, Any]:
     settings = get_settings()
     now = datetime.now(timezone.utc)
-    embedding = (embedding_model or settings.lmstudio_embed_model).strip()
+    embedding = (embedding_model or settings.llm_embed_model).strip()
     policy = chunking_policy_json or {
         "chunk_size": settings.rag_chunk_size,
         "chunk_overlap": settings.rag_chunk_overlap,
@@ -501,7 +501,7 @@ _DEMO_SEED_COLLECTIONS: tuple[_SeedCollectionSpec, ...] = (
         name="Demo Operations Handbook",
         description=(
             "Pre-seeded industrial operations knowledge base. Use it to demo "
-            "RAG-grounded chat and to derive a QA dataset for fine-tuning."
+            "RAG-grounded chat and to derive an evaluation testset."
         ),
         documents=(
             _SeedDocumentSpec(
@@ -613,7 +613,7 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
                 id=spec.collection_id,
                 name=spec.name,
                 description=spec.description,
-                embedding_model=settings.lmstudio_embed_model,
+                embedding_model=settings.llm_embed_model,
                 chunking_policy_json={
                     "chunk_size": settings.rag_chunk_size,
                     "chunk_overlap": settings.rag_chunk_overlap,
@@ -632,7 +632,7 @@ def ensure_default_rag_collections(session: Session) -> list[dict[str, Any]]:
             assert collection is not None  # narrowed: not new => exists
             policy = collection.chunking_policy_json or {}
             if policy.get("owner_tag") == SEED_COLLECTION_OWNER_TAG:
-                desired_embed = settings.lmstudio_embed_model
+                desired_embed = settings.llm_embed_model
                 if (
                     collection.description != spec.description
                     or collection.embedding_model != desired_embed

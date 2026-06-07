@@ -71,16 +71,9 @@ def test_platform_tools_exposes_expected_methods() -> None:
         "list_selectable_models",
         "list_platform_models",
         "get_model_detail",
-        "get_model_lineage",
         "run_platform_inference",
         "get_job_status",
         "summarize_job_result",
-        "list_ft_datasets",
-        "list_ft_dataset_versions",
-        "get_ft_dataset_version_summary",
-        "list_ft_training_jobs",
-        "get_ft_training_job",
-        "get_ft_training_logs",
     ):
         method = getattr(instance, method_name, None)
         assert callable(method), f"missing required tool method: {method_name}"
@@ -126,16 +119,9 @@ def test_openwebui_platform_tools_endpoint_serves_python(client: TestClient) -> 
     assert "def list_selectable_models" in body
     assert "def list_platform_models" in body
     assert "def get_model_detail" in body
-    assert "def get_model_lineage" in body
     assert "def run_platform_inference" in body
     assert "def get_job_status" in body
     assert "def summarize_job_result" in body
-    assert "def list_ft_datasets" in body
-    assert "def list_ft_dataset_versions" in body
-    assert "def get_ft_dataset_version_summary" in body
-    assert "def list_ft_training_jobs" in body
-    assert "def get_ft_training_job" in body
-    assert "def get_ft_training_logs" in body
 
 
 def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None:
@@ -158,16 +144,9 @@ def test_openwebui_manifest_describes_platform_tools(client: TestClient) -> None
         "list_selectable_models",
         "list_platform_models",
         "get_model_detail",
-        "get_model_lineage",
         "run_platform_inference",
         "get_job_status",
         "summarize_job_result",
-        "list_ft_datasets",
-        "list_ft_dataset_versions",
-        "get_ft_dataset_version_summary",
-        "list_ft_training_jobs",
-        "get_ft_training_job",
-        "get_ft_training_logs",
     }
 
 
@@ -681,51 +660,6 @@ def test_get_model_detail_returns_error_envelope_for_missing() -> None:
     assert decoded["http_status"] == 404
 
 
-def test_get_model_lineage_returns_raw_lineage() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned_lineage = {
-        "model_id": "model-1",
-        "source_type": "trained",
-        "base_model_name": "llama3:8b",
-        "trainer_model_name": "axolotl",
-        "trainer_backend": "qlora",
-        "artifact_id": "artifact-1",
-        "artifact_type": "lora_adapter",
-        "artifact_format": "gguf",
-        "published_model_name": "ops-llama3-8b",
-        "status": "active",
-        "publish_status": "published",
-        "readiness": {"selectable": True, "selectable_reason": None},
-        "warnings": [],
-        "lineage_json": {"steps": []},
-    }
-    calls: list[tuple[str, str]] = []
-
-    def _fake_request(method, path, *, json_body=None):
-        calls.append((method, path))
-        return 200, canned_lineage
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_model_lineage("model-1"))
-    assert decoded["ok"] is True
-    assert calls == [("GET", "/models/model-1/lineage")]
-    assert decoded["lineage"] == canned_lineage
-
-
-def test_get_model_lineage_returns_error_envelope_for_missing() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "not found"})  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_model_lineage("missing"))
-    assert decoded["ok"] is False
-    assert decoded["action"] == "get_model_lineage"
-    assert decoded["http_status"] == 404
-
-
 def test_run_platform_inference_returns_answer() -> None:
     module = _load_platform_tools_module()
     tools = module.Tools()
@@ -861,304 +795,3 @@ def test_summarize_job_result_returns_status_for_running() -> None:
     assert decoded["summary"] is None
     assert "next_step" in decoded
 
-
-# ---- Phase 5: Fine-tuning lifecycle ----------------------------------------
-
-
-def test_list_ft_datasets_returns_compact_projection() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned = [
-        {
-            "id": "ft-dataset-1",
-            "name": "Ops SFT",
-            "task_type": "sft",
-            "schema_type": "json",
-            "description": "ops fine-tune corpus",
-            "current_version_id": "ft-version-2",
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-02T00:00:00Z",
-            "versions": [
-                {"id": "ft-version-1"},
-                {"id": "ft-version-2"},
-            ],
-        }
-    ]
-    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_ft_datasets())
-    assert decoded["ok"] is True
-    entry = decoded["datasets"][0]
-    assert entry["dataset_id"] == "ft-dataset-1"
-    assert entry["name"] == "Ops SFT"
-    assert entry["version_count"] == 2
-    assert entry["created_at"] == "2025-01-01T00:00:00Z"
-    for noisy_key in ("versions", "task_type", "schema_type", "current_version_id", "updated_at"):
-        assert noisy_key not in entry
-
-
-def test_list_ft_datasets_returns_error_envelope() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools._request = lambda method, path, *, json_body=None: (500, {"detail": "boom"})  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_ft_datasets())
-    assert decoded["ok"] is False
-    assert decoded["action"] == "list_ft_datasets"
-    assert decoded["http_status"] == 500
-
-
-def test_list_ft_dataset_versions_extracts_and_projects() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned = {
-        "id": "ft-dataset-1",
-        "name": "Ops SFT",
-        "versions": [
-            {
-                "id": "ft-version-1",
-                "version_label": "v1",
-                "status": "draft",
-                "row_count": 10,
-                "created_at": "2025-01-01T00:00:00Z",
-                "row_summary": {"total": 10, "valid": 9, "invalid": 1},
-            },
-            {
-                "id": "ft-version-2",
-                "version_label": "v2",
-                "status": "locked",
-                "row_count": 20,
-                "created_at": "2025-01-02T00:00:00Z",
-            },
-        ],
-    }
-    calls: list[tuple[str, str]] = []
-
-    def _fake_request(method, path, *, json_body=None):
-        calls.append((method, path))
-        return 200, canned
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_ft_dataset_versions("ft-dataset-1"))
-    assert decoded["ok"] is True
-    assert decoded["dataset_id"] == "ft-dataset-1"
-    assert calls == [("GET", "/ft-datasets/ft-dataset-1")]
-    versions = decoded["versions"]
-    assert len(versions) == 2
-    assert versions[0]["version_id"] == "ft-version-1"
-    assert versions[0]["version_number"] == "v1"
-    assert versions[0]["status"] == "draft"
-    assert versions[0]["row_count"] == 10
-    assert "row_summary" not in versions[0]
-
-
-def test_list_ft_dataset_versions_returns_error_envelope_for_missing() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "not found"})  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_ft_dataset_versions("missing"))
-    assert decoded["ok"] is False
-    assert decoded["action"] == "list_ft_dataset_versions"
-    assert decoded["http_status"] == 404
-
-
-def test_get_ft_dataset_version_summary_returns_summary() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned = {
-        "id": "ft-version-1",
-        "dataset_id": "ft-dataset-1",
-        "version_label": "v1",
-        "status": "validated",
-        "row_count": 50,
-        "row_summary": {"total": 50, "valid": 48, "invalid": 2},
-    }
-    calls: list[tuple[str, str]] = []
-
-    def _fake_request(method, path, *, json_body=None):
-        calls.append((method, path))
-        return 200, canned
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_ft_dataset_version_summary("ft-version-1"))
-    assert decoded["ok"] is True
-    assert calls == [("GET", "/ft-dataset-versions/ft-version-1/summary")]
-    assert decoded["summary"] == canned
-
-
-def test_get_ft_dataset_version_summary_returns_error_envelope() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "not found"})  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_ft_dataset_version_summary("missing"))
-    assert decoded["ok"] is False
-    assert decoded["action"] == "get_ft_dataset_version_summary"
-    assert decoded["http_status"] == 404
-
-
-def test_list_ft_training_jobs_returns_compact_projection() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned = [
-        {
-            "id": "ft-job-1",
-            "dataset_version_id": "ft-version-1",
-            "dataset_id": "ft-dataset-1",
-            "dataset_name": "Ops SFT",
-            "dataset_version_label": "v1",
-            "base_model_name": "llama3:8b",
-            "trainer_model_name": "axolotl",
-            "training_method": "qlora",
-            "hyperparams_json": {"lr": 0.0001},
-            "status": "succeeded",
-            "trainer_backend": "axolotl",
-            "metrics_json": {"loss": 0.5},
-            "log_text": "x" * 5000,
-            "created_at": "2025-01-01T00:00:00Z",
-            "started_at": "2025-01-01T00:01:00Z",
-            "finished_at": "2025-01-01T00:30:00Z",
-            "artifacts": [{"id": "ft-artifact-1"}],
-        }
-    ]
-    tools._request = lambda method, path, *, json_body=None: (200, canned)  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.list_ft_training_jobs())
-    assert decoded["ok"] is True
-    job = decoded["jobs"][0]
-    assert job["job_id"] == "ft-job-1"
-    assert job["status"] == "succeeded"
-    assert job["dataset_name"] == "Ops SFT"
-    assert job["base_model"] == "llama3:8b"
-    assert job["training_method"] == "qlora"
-    assert job["created_at"] == "2025-01-01T00:00:00Z"
-    assert job["finished_at"] == "2025-01-01T00:30:00Z"
-    for noisy_key in ("log_text", "metrics_json", "hyperparams_json", "artifacts"):
-        assert noisy_key not in job
-
-
-def test_get_ft_training_job_returns_detail_with_artifact_and_logs_hint() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned = {
-        "id": "ft-job-2",
-        "dataset_name": "Ops SFT",
-        "base_model_name": "llama3:8b",
-        "training_method": "qlora",
-        "status": "failed",
-        "created_at": "2025-01-01T00:00:00Z",
-        "finished_at": "2025-01-01T00:10:00Z",
-        "error_json": {"detail": "OOM on GPU"},
-        "artifacts": [
-            {"id": "ft-artifact-9", "artifact_type": "adapter_bundle"},
-        ],
-    }
-    calls: list[tuple[str, str]] = []
-
-    def _fake_request(method, path, *, json_body=None):
-        calls.append((method, path))
-        return 200, canned
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_ft_training_job("ft-job-2"))
-    assert decoded["ok"] is True
-    assert calls == [("GET", "/ft-training-jobs/ft-job-2")]
-    job = decoded["job"]
-    assert job["job_id"] == "ft-job-2"
-    assert job["status"] == "failed"
-    assert job["error"] == "OOM on GPU"
-    assert job["artifact_id"] == "ft-artifact-9"
-    assert "get_ft_training_logs" in job["logs_url_hint"]
-    assert "ft-job-2" in job["logs_url_hint"]
-
-
-def test_get_ft_training_job_returns_error_envelope_for_missing() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "not found"})  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_ft_training_job("missing"))
-    assert decoded["ok"] is False
-    assert decoded["action"] == "get_ft_training_job"
-    assert decoded["http_status"] == 404
-
-
-def test_get_ft_training_logs_returns_log_text_from_dict() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    canned = {
-        "training_job_id": "ft-job-1",
-        "status": "succeeded",
-        "log_text": "epoch 1\nepoch 2\n",
-        "report_artifact": {"id": "ft-artifact-report"},
-    }
-    calls: list[tuple[str, str]] = []
-
-    def _fake_request(method, path, *, json_body=None):
-        calls.append((method, path))
-        return 200, canned
-
-    tools._request = _fake_request  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_ft_training_logs("ft-job-1"))
-    assert decoded["ok"] is True
-    assert calls == [("GET", "/ft-training-jobs/ft-job-1/logs")]
-    assert decoded["job_id"] == "ft-job-1"
-    assert decoded["logs"] == "epoch 1\nepoch 2\n"
-
-
-def test_get_ft_training_logs_handles_raw_text_body() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-
-    tools._request = lambda method, path, *, json_body=None: (  # type: ignore[attr-defined]
-        200,
-        {"raw": "plain-text logs"},
-    )
-
-    decoded = json.loads(tools.get_ft_training_logs("ft-job-2"))
-    assert decoded["ok"] is True
-    assert decoded["logs"] == "plain-text logs"
-
-
-def test_get_ft_training_logs_returns_error_envelope_for_missing() -> None:
-    module = _load_platform_tools_module()
-    tools = module.Tools()
-    tools._request = lambda method, path, *, json_body=None: (404, {"detail": "not found"})  # type: ignore[attr-defined]
-
-    decoded = json.loads(tools.get_ft_training_logs("missing"))
-    assert decoded["ok"] is False
-    assert decoded["action"] == "get_ft_training_logs"
-    assert decoded["http_status"] == 404
-
-
-def test_list_ft_datasets_via_e2e(platform_tools_against_client) -> None:
-    """E2E: list_ft_datasets returns ok=true (possibly empty list) on a fresh DB."""
-    raw = platform_tools_against_client.list_ft_datasets()
-    decoded = json.loads(raw)
-    assert decoded["ok"] is True
-    assert isinstance(decoded["datasets"], list)
-
-
-def test_list_ft_dataset_versions_via_e2e_returns_404(platform_tools_against_client) -> None:
-    raw = platform_tools_against_client.list_ft_dataset_versions("does-not-exist")
-    decoded = json.loads(raw)
-    assert decoded["ok"] is False
-    assert decoded["http_status"] == 404
-
-
-def test_get_ft_training_job_via_e2e_returns_404(platform_tools_against_client) -> None:
-    raw = platform_tools_against_client.get_ft_training_job("does-not-exist")
-    decoded = json.loads(raw)
-    assert decoded["ok"] is False
-    assert decoded["http_status"] == 404
