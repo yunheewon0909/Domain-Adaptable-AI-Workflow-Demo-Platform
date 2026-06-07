@@ -17,7 +17,17 @@ from pathlib import Path
 from api.config import get_settings
 from api.db import get_engine
 from api.dependencies import get_llm_client
-from api.llm import LLMClient, LLMClientError, LMStudioChatClient
+from api.llm import LLMClient, LLMClientError
+
+
+def _supports_streaming(llm_client: object) -> bool:
+    """Whether the runtime can stream raw chat-completion chunks.
+
+    Any runtime that exposes ``stream_chat_messages`` (the OpenAI-compatible
+    runtimes and LM Studio) is streamed through directly; clients without it
+    (e.g. simple test fakes) fall back to buffered single-chunk SSE.
+    """
+    return callable(getattr(llm_client, "stream_chat_messages", None))
 from api.services.model_registry import list_models
 from api.services.rag.collections import preview_collection_retrieval
 
@@ -437,7 +447,7 @@ def _build_lmstudio_messages(
 
 def _stream_via_lmstudio(
     *,
-    llm_client: LLMClient,
+    llm_client: Any,
     question: str,
     context: str,
     serving_model_name: str,
@@ -448,7 +458,7 @@ def _stream_via_lmstudio(
     created: int,
     platform_meta: dict[str, Any],
 ) -> Iterator[str]:
-    if not isinstance(llm_client, LMStudioChatClient):
+    if not _supports_streaming(llm_client):
         # Fall back to buffered single-chunk SSE for non-streaming clients.
         yield from _stream_chat_completion(
             {
@@ -577,7 +587,7 @@ def post_v1_chat_completion(
     request: ChatCompletionRequest,
     llm_client: LLMClient = Depends(get_llm_client),
 ) -> Any:
-    if request.stream and isinstance(llm_client, LMStudioChatClient):
+    if request.stream and _supports_streaming(llm_client):
         with Session(get_engine()) as session:
             model = _resolve_selectable_model(session, request.model)
         question, context = _build_prompt(request.messages)

@@ -15,10 +15,8 @@ from sqlalchemy.orm import Session
 
 from api.config import get_project_root, get_settings
 from api.models import RAGCollectionRecord, RAGDocumentRecord
-from api.services.rag.embedding_client import (
-    EmbeddingClientError,
-    LMStudioEmbeddingClient,
-)
+from api.services.rag.embedding_client import EmbeddingClientError
+from api.services.runtime import EmbeddingRuntime, get_embedding_runtime
 
 try:
     from pypdf import PdfReader
@@ -84,31 +82,27 @@ def _lexical_score(query: str, text: str) -> float:
     return float(sum(counts.get(token, 0) for token in query_tokens))
 
 
-_embedding_client: LMStudioEmbeddingClient | None = None
+_embedding_client: EmbeddingRuntime | None = None
 
 
-def _get_embedding_client() -> LMStudioEmbeddingClient | None:
-    """Lazy-initialize the LM Studio embedding client.
+def _get_embedding_client() -> EmbeddingRuntime | None:
+    """Lazy-initialize the configured embedding runtime.
 
     Returns None when no embedding model is configured (e.g. test env), so
     callers can degrade to lexical scoring without forcing an HTTP call.
     """
     global _embedding_client
-    if _embedding_client is not None:
-        return _embedding_client
     settings = get_settings()
-    model = (settings.lmstudio_embed_model or "").strip()
+    model = (settings.llm_embed_model or "").strip()
     if not model:
         return None
-    _embedding_client = LMStudioEmbeddingClient(
-        base_url=settings.lmstudio_base_url,
-        model=model,
-    )
+    if _embedding_client is None:
+        _embedding_client = get_embedding_runtime()
     return _embedding_client
 
 
 def _embed_text(text: str) -> list[float] | None:
-    """Embed a single text via LM Studio, or None if unavailable."""
+    """Embed a single text via the configured runtime, or None if unavailable."""
     client = _get_embedding_client()
     if client is None:
         return None

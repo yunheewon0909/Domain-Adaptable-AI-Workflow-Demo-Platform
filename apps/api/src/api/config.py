@@ -71,6 +71,14 @@ class Settings:
     lmstudio_embed_model: str
     lmstudio_timeout_seconds: float
     lmstudio_models_dir: str
+    # Provider-agnostic runtime selection (ADR 0009). Default provider is the
+    # bundled Ollama container; LMSTUDIO_* envs are honored as deprecated
+    # fallbacks when the LLM_* equivalents are unset.
+    llm_runtime_provider: str
+    llm_base_url: str
+    llm_chat_model: str
+    llm_embed_model: str
+    llm_timeout_seconds: float
 
 
 @lru_cache
@@ -149,4 +157,29 @@ def get_settings() -> Settings:
             "LMSTUDIO_MODELS_DIR",
             str(Path.home() / ".lmstudio" / "models"),
         ),
+        llm_runtime_provider=_runtime_provider(),
+        llm_base_url=_runtime_base_url(),
+        llm_chat_model=os.getenv("LLM_CHAT_MODEL") or os.getenv("LMSTUDIO_CHAT_MODEL", ""),
+        llm_embed_model=os.getenv("LLM_EMBED_MODEL")
+        or os.getenv("LMSTUDIO_EMBED_MODEL", ""),
+        llm_timeout_seconds=_to_float(
+            os.getenv("LLM_TIMEOUT_SECONDS") or os.getenv("LMSTUDIO_TIMEOUT_SECONDS"),
+            default=600.0,
+            minimum=1.0,
+        ),
     )
+
+
+def _runtime_provider() -> str:
+    provider = (os.getenv("LLM_RUNTIME_PROVIDER") or "ollama").strip().lower()
+    return provider if provider in {"ollama", "openai_compat"} else "ollama"
+
+
+def _runtime_base_url() -> str:
+    """Resolve the runtime base URL with an LMSTUDIO_* deprecated fallback."""
+    explicit = os.getenv("LLM_BASE_URL")
+    if explicit:
+        return explicit
+    if _runtime_provider() == "ollama":
+        return "http://ollama:11434"
+    return os.getenv("LMSTUDIO_BASE_URL") or "http://localhost:1234/v1"
