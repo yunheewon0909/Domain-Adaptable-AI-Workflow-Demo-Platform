@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from api.db import get_engine
 from api.models import (
     RAGChunkRecord,
+    RAGCommunityMemberRecord,
     RAGCommunityRecord,
     RAGEntityChunkRecord,
     RAGEntityRecord,
@@ -77,6 +78,37 @@ def test_index_collection_creates_chunks_entities_relationships(client: TestClie
         # relationship + community persisted
         assert session.query(RAGRelationshipRecord).filter_by(collection_id=coll).count() == 1
         assert session.query(RAGCommunityRecord).filter_by(collection_id=coll).count() >= 1
+
+
+def test_reindexing_one_collection_preserves_another(client: TestClient) -> None:
+    """Regression: clearing a collection's graph must not wipe another's link rows."""
+    c1 = _seed_collection_with_doc(client, "Pump P-101 feeds Reactor R-200.")
+    c2 = _seed_collection_with_doc(client, "Pump P-101 feeds Reactor R-200.")
+    with Session(get_engine()) as session:
+        index_collection(session, collection_id=c1, extractor=_fake_extractor)
+        c1_entity_ids = [
+            e.id for e in session.query(RAGEntityRecord).filter_by(collection_id=c1).all()
+        ]
+        before = (
+            session.query(RAGEntityChunkRecord)
+            .filter(RAGEntityChunkRecord.entity_id.in_(c1_entity_ids))
+            .count()
+        )
+        assert before > 0
+        # Indexing c2 must not touch c1's entity_chunks / community_members.
+        index_collection(session, collection_id=c2, extractor=_fake_extractor)
+        after = (
+            session.query(RAGEntityChunkRecord)
+            .filter(RAGEntityChunkRecord.entity_id.in_(c1_entity_ids))
+            .count()
+        )
+        assert after == before, "reindexing c2 wiped c1's entity_chunk links"
+        c1_members = (
+            session.query(RAGCommunityMemberRecord)
+            .filter(RAGCommunityMemberRecord.entity_id.in_(c1_entity_ids))
+            .count()
+        )
+        assert c1_members > 0
 
 
 def test_index_collection_is_idempotent(client: TestClient) -> None:

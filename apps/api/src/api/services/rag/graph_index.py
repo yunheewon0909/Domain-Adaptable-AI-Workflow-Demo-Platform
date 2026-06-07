@@ -151,12 +151,32 @@ def deterministic_summarizer(
 def _clear_collection_graph(session: Session, collection_id: str) -> None:
     """Remove a collection's existing graph so (re)indexing is idempotent.
 
-    Link tables (entity_chunks / community_members) have no collection_id, so we
-    clear them globally before re-indexing. At demo scale this is acceptable;
-    indexing one collection rebuilds them from scratch each run.
+    The link tables (entity_chunks / community_members) have no collection_id, so
+    they are cleared by membership in THIS collection's entities/chunks/
+    communities — never globally — so reindexing one collection cannot wipe
+    another collection's graph links.
     """
-    session.execute(delete(RAGEntityChunkRecord))
-    session.execute(delete(RAGCommunityMemberRecord))
+    entity_ids = select(RAGEntityRecord.id).where(
+        RAGEntityRecord.collection_id == collection_id
+    )
+    chunk_ids = select(RAGChunkRecord.id).where(
+        RAGChunkRecord.collection_id == collection_id
+    )
+    community_ids = select(RAGCommunityRecord.id).where(
+        RAGCommunityRecord.collection_id == collection_id
+    )
+    session.execute(
+        delete(RAGEntityChunkRecord).where(
+            RAGEntityChunkRecord.entity_id.in_(entity_ids)
+            | RAGEntityChunkRecord.chunk_id.in_(chunk_ids)
+        )
+    )
+    session.execute(
+        delete(RAGCommunityMemberRecord).where(
+            RAGCommunityMemberRecord.community_id.in_(community_ids)
+            | RAGCommunityMemberRecord.entity_id.in_(entity_ids)
+        )
+    )
     session.execute(
         delete(RAGRelationshipRecord).where(
             RAGRelationshipRecord.collection_id == collection_id
