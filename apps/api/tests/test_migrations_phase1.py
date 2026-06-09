@@ -50,3 +50,20 @@ def test_alembic_upgrade_to_head_keeps_datasets_and_drops_plc(
     # jobs.plc_suite_id is gone too.
     job_columns = {column["name"] for column in inspector.get_columns("jobs")}
     assert "plc_suite_id" not in job_columns
+    # Cooperative-cancellation column landed at head (migration 0020).
+    assert "cancel_requested_at" in job_columns
+
+
+def test_migration_0020_cancel_requested_at_round_trips(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "migration-0020.db"
+    monkeypatch.setenv("API_DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
+    config = Config("apps/api/alembic.ini")
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}")
+    cols = {c["name"] for c in inspect(engine).get_columns("jobs")}
+    assert "cancel_requested_at" in cols
+
+    command.downgrade(config, "20260607_0019")
+    cols = {c["name"] for c in inspect(create_engine(f"sqlite+pysqlite:///{db_path}")).get_columns("jobs")}
+    assert "cancel_requested_at" not in cols

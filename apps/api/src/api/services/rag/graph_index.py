@@ -14,7 +14,10 @@ import json
 import re
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from api.services.jobs import JobControl
 
 import networkx as nx
 from sqlalchemy import delete, select
@@ -211,8 +214,14 @@ def index_collection(
     collection_id: str,
     extractor: Extractor | None = None,
     summarizer: Summarizer | None = None,
+    control: JobControl | None = None,
 ) -> dict[str, Any]:
-    """Build the knowledge graph for one collection. Idempotent (reindex)."""
+    """Build the knowledge graph for one collection. Idempotent (reindex).
+
+    ``control`` (optional) is checked at each chunk/community so a cancel or
+    timeout can abort cleanly. The check before ``_clear_collection_graph``
+    means an early abort leaves the existing graph intact (the clear commits).
+    """
     extractor = extractor or runtime_extractor
     summarizer = summarizer or deterministic_summarizer
 
@@ -224,6 +233,8 @@ def index_collection(
         ).all()
     )
 
+    if control is not None:
+        control.check()  # abort before destroying the existing graph
     _clear_collection_graph(session, collection_id)
 
     settings = get_settings()
@@ -260,6 +271,8 @@ def index_collection(
     raw_relationships: list[tuple[str, str, str]] = []  # (src_norm, tgt_norm, desc)
 
     for chunk in chunk_rows:
+        if control is not None:
+            control.check()
         graph = extractor(chunk.text) or {}
         for ent in graph.get("entities", []):
             if not isinstance(ent, dict):
@@ -345,6 +358,8 @@ def index_collection(
     communities = _detect_communities(entity_list, list(rel_index.values()))
     community_rows: list[RAGCommunityRecord] = []
     for members in communities:
+        if control is not None:
+            control.check()
         member_entities = [e for e in entity_list if e.id in members]
         if not member_entities:
             continue

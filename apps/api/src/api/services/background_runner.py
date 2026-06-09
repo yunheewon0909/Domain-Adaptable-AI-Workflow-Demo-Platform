@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from typing import Any
@@ -32,8 +32,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.config import get_settings
 from api.db import get_engine
 from api.models import JobRecord
+from api.services.jobs import JobAborted, JobControl, requeue_or_fail
 
 
 logger = logging.getLogger("api.background_runner")
@@ -81,7 +83,9 @@ def _claim_next_queued_job(session: Session) -> JobRecord | None:
     return job
 
 
-def _run_rag_index_collection(payload: dict[str, Any]) -> None:
+def _run_rag_index_collection(
+    payload: dict[str, Any], control: JobControl | None = None
+) -> None:
     """Build the Graph RAG knowledge graph for a collection. Runs in a thread."""
     from api.services.rag.graph_index import index_collection
 
@@ -89,10 +93,12 @@ def _run_rag_index_collection(payload: dict[str, Any]) -> None:
     if not collection_id:
         raise RuntimeError("rag_index_collection payload missing collection_id")
     with Session(get_engine()) as session:
-        index_collection(session, collection_id=collection_id)
+        index_collection(session, collection_id=collection_id, control=control)
 
 
-def _run_evaluation_run(payload: dict[str, Any]) -> None:
+def _run_evaluation_run(
+    payload: dict[str, Any], control: JobControl | None = None
+) -> None:
     """Execute a RAG evaluation run + build its report. Runs in a thread."""
     from api.services.evaluation.runner import run_evaluation
 
@@ -100,11 +106,12 @@ def _run_evaluation_run(payload: dict[str, Any]) -> None:
     if not run_id:
         raise RuntimeError("evaluation_run payload missing run_id")
     with Session(get_engine()) as session:
-        run_evaluation(session, run_id=run_id)
+        run_evaluation(session, run_id=run_id, control=control)
 
 
-# Job-type → runner registry.
-_RUNNERS: dict[str, Callable[[dict[str, Any]], None]] = {
+# Job-type → runner registry. Runners take (payload, control); `control` carries
+# the cooperative cancel/timeout signal and may be None for direct invocation.
+_RUNNERS: dict[str, Callable[[dict[str, Any], JobControl | None], None]] = {
     "rag_index_collection": _run_rag_index_collection,
     "evaluation_run": _run_evaluation_run,
 }
@@ -138,13 +145,14 @@ def reap_unsupported_queue_rows(session: Session) -> int:
 
 
 def reap_stale_running_jobs(session: Session) -> int:
-    """Fail any `running` job left over from a previous API process.
+    """Resolve any `running` job left over from a previous worker process.
 
-    The dispatcher claims a job (status=running) then awaits the runner. If
-    the API is killed mid-run, the row stays `running` forever — the next
-    dispatcher cycle only looks at `queued`. Mark such rows as `failed`
-    with a clear diagnostic so reviewers can re-enqueue if needed instead
-    of waiting on a zombie.
+    The dispatcher claims a job (status=running) then awaits the runner. If the
+    worker is killed mid-run, the row stays `running` forever — the next
+    dispatcher cycle only looks at `queued`. The previous process is dead, so it
+    is safe to *requeue* such rows (no orphan thread survives a process exit):
+    `requeue_or_fail` retries while attempts remain, else marks them `failed`.
+    A row whose cancellation was requested is marked `cancelled` instead.
 
     Limited to `_RUNNERS` types so `reap_unsupported_queue_rows` retains
     sole ownership of the legacy-type path.
@@ -159,37 +167,78 @@ def reap_stale_running_jobs(session: Session) -> int:
     now = datetime.now(timezone.utc)
     rows = session.scalars(stmt).all()
     for row in rows:
-        row.status = "failed"
-        row.finished_at = now
-        row.error = (
-            "Job left in `running` state by a previous API process. "
-            "The dispatcher does not resume in-flight jobs; re-enqueue "
-            "to retry."
+        if row.cancel_requested_at is not None:
+            row.status = "cancelled"
+            row.finished_at = now
+            row.error = "cancelled"
+            continue
+        requeue_or_fail(
+            row,
+            error=(
+                "Job left in `running` state by a previous worker process; "
+                "the dispatcher does not resume in-flight jobs."
+            ),
+            now=now,
         )
     if rows:
         session.commit()
     return len(rows)
 
 
-async def _dispatch_one(job_id: str, job_type: str, payload: dict[str, Any]) -> None:
-    """Run a single claimed job in a worker thread, recording outcome."""
+async def _dispatch_one(
+    job_id: str,
+    job_type: str,
+    payload: dict[str, Any],
+    started_at: datetime | None = None,
+) -> None:
+    """Run a single claimed job in a worker thread, recording outcome.
+
+    The runner is handed a :class:`JobControl` carrying the cooperative
+    cancel/timeout deadline. On a clean failure or a timeout the job is requeued
+    while attempts remain (else marked `failed`); a cooperative cancel marks it
+    `cancelled`. `asyncio.wait_for` is intentionally not used to enforce the
+    timeout — it cannot kill the worker thread, which would orphan an in-flight
+    reindex; the runner instead exits itself at its next checkpoint.
+    """
     runner = _RUNNERS.get(job_type)
     if runner is None:
         # Unknown job type — leave as running so an operator can investigate.
         logger.warning("background dispatcher: no runner for job type=%s", job_type)
         return
 
+    timeout = get_settings().job_timeout_seconds
+    deadline = (
+        (started_at or datetime.now(timezone.utc)) + timedelta(seconds=timeout)
+        if timeout and timeout > 0
+        else None
+    )
+    control = JobControl(job_id=job_id, deadline=deadline)
+
     try:
-        await asyncio.to_thread(runner, dict(payload))
+        await asyncio.to_thread(runner, dict(payload), control)
+    except JobAborted as aborted:
+        now = datetime.now(timezone.utc)
+        with Session(get_engine()) as session:
+            row = session.get(JobRecord, job_id)
+            if row is not None:
+                if aborted.reason == "cancelled":
+                    row.status = "cancelled"
+                    row.finished_at = now
+                    row.error = "cancelled"
+                else:  # timeout — retryable while attempts remain
+                    requeue_or_fail(
+                        row, error=f"timed out after {timeout:.0f}s", now=now
+                    )
+                session.commit()
+        logger.info("background job %s aborted (%s)", job_id, aborted.reason)
+        return
     except Exception as exc:  # surface runner failures back to the queue row
         logger.exception("background runner for job %s failed", job_id)
         now = datetime.now(timezone.utc)
         with Session(get_engine()) as session:
             row = session.get(JobRecord, job_id)
             if row is not None:
-                row.status = "failed"
-                row.finished_at = now
-                row.error = str(exc)[:4000]
+                requeue_or_fail(row, error=str(exc), now=now)
                 session.commit()
         return
 
@@ -214,7 +263,9 @@ async def dispatcher_loop(stop_event: asyncio.Event) -> None:
     logger.info("background dispatcher started (poll=%.1fs)", _POLL_INTERVAL_SECONDS)
     while not stop_event.is_set():
         try:
-            claimed_args: tuple[str, str, dict[str, Any]] | None = None
+            claimed_args: (
+                tuple[str, str, dict[str, Any], datetime | None] | None
+            ) = None
             async with _CLAIM_LOCK:
                 with Session(get_engine()) as session:
                     job = _claim_next_queued_job(session)
@@ -225,6 +276,7 @@ async def dispatcher_loop(stop_event: asyncio.Event) -> None:
                             dict(job.payload_json)
                             if isinstance(job.payload_json, dict)
                             else {},
+                            job.started_at,
                         )
             if claimed_args is None:
                 await asyncio.wait_for(stop_event.wait(), timeout=_POLL_INTERVAL_SECONDS)

@@ -44,7 +44,9 @@ Studio required.
 
 Five containers: `postgres`, `ollama`, `open-webui`, `api`, `worker`. The API serves the domain
 RAG/evaluation/report endpoints and an OpenAI-compatible shim (`/v1/*`) that Open WebUI points at.
-The worker runs long jobs (graph indexing, evaluation runs) off the shared Postgres job queue.
+The worker runs long jobs (graph indexing, evaluation runs) off the shared Postgres job queue —
+with bounded retries, a per-job timeout, and cooperative cancellation (see
+[Background jobs](#background-jobs)).
 
 ## Quick start (Docker-only)
 
@@ -134,6 +136,21 @@ We implement a lean in-repo GraphRAG (not Microsoft's `graphrag` package — its
 - **Retrieval:** *local* (seed entities/chunks → 1-hop expansion → connected chunks +
   relationships + community summaries), *global* (map-reduce over community summaries), and a
   *naive* chunk-vector fallback for answers before the graph is built.
+
+## Background jobs
+
+Long-running work (graph indexing, evaluation runs) is enqueued on the Postgres `jobs` table and
+processed by the `worker` container. The queue is reliability-aware:
+
+- **Retry.** A failed job is requeued while `attempts < max_attempts` (default 3), then marked
+  `failed`. A job left `running` by a crashed worker is requeued on the next worker start (the dead
+  process leaves no orphan), so kill+restart of the worker is a safe way to interrupt-and-retry.
+- **Timeout.** Each job is aborted at its next cooperative checkpoint once it exceeds
+  `FT_JOB_TIMEOUT_SECONDS` (default `1800`), then retried like any failure. Keep it above
+  `LLM_TIMEOUT_SECONDS` so individual model calls can finish.
+- **Cancellation.** `POST /jobs/{id}/cancel` cancels a `queued` job immediately (`200`) or asks a
+  `running` job to stop at its next chunk/question (`202`); already-finished jobs return `409`.
+  Inspect state with `GET /jobs` / `GET /jobs/{id}` (or the `get_job_status` Open WebUI tool).
 
 ## Open WebUI integration
 

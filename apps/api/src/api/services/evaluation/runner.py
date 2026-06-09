@@ -12,7 +12,10 @@ import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from api.services.jobs import JobControl
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -136,7 +139,11 @@ def _graph_stats(session: Session, collection_id: str) -> dict[str, Any]:
 
 
 def run_evaluation(
-    session: Session, *, run_id: str, answerer: Answerer | None = None
+    session: Session,
+    *,
+    run_id: str,
+    answerer: Answerer | None = None,
+    control: JobControl | None = None,
 ) -> dict[str, Any]:
     run = session.get(EvaluationRunRecord, run_id)
     if run is None:
@@ -160,6 +167,8 @@ def run_evaluation(
         coverage_scored = 0
         coverage_hits = 0
         for q in questions:
+            if control is not None:
+                control.check()
             retrieval = query_collection(
                 session,
                 collection_id=run.collection_id,

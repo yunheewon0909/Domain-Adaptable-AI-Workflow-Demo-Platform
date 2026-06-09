@@ -60,6 +60,10 @@ class Settings:
     llm_chat_model: str
     llm_embed_model: str
     llm_timeout_seconds: float
+    # Max wall-clock seconds a single background job (graph indexing / evaluation)
+    # may run before its next cooperative checkpoint aborts it (then it is retried
+    # while attempts remain). See services/background_runner + jobs.JobControl.
+    job_timeout_seconds: float
 
 
 @lru_cache
@@ -86,6 +90,11 @@ def get_settings() -> Settings:
         llm_timeout_seconds=_to_float(
             os.getenv("LLM_TIMEOUT_SECONDS") or os.getenv("LMSTUDIO_TIMEOUT_SECONDS"),
             default=600.0,
+            minimum=1.0,
+        ),
+        job_timeout_seconds=_to_float(
+            os.getenv("FT_JOB_TIMEOUT_SECONDS"),
+            default=1800.0,
             minimum=1.0,
         ),
     )

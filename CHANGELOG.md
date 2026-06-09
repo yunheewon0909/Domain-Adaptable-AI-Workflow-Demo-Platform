@@ -28,6 +28,11 @@ evaluation backend** fronted by **Open WebUI**, with **Ollama** as the default r
 - New Open WebUI tools: `list_collections`, `create_collection`, `upload_text_document`,
   `search_collection`, `get_entity`, `get_subgraph`, `generate_evaluation_set`,
   `run_rag_evaluation`, `get_evaluation_report`.
+- **Job-queue reliability**: bounded retry (requeue while `attempts < max_attempts`), a per-job
+  timeout (`FT_JOB_TIMEOUT_SECONDS`, default 1800) enforced via cooperative checkpoints in the
+  indexing/evaluation runners, and cancellation (`POST /jobs/{id}/cancel`; new
+  `jobs.cancel_requested_at` column, migration `20260609_0020`). The crash-reaper now requeues
+  interrupted jobs instead of failing them.
 
 ### Removed
 

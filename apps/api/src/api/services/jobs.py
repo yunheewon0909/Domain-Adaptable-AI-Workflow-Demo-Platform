@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import re
 from typing import Any
@@ -9,11 +10,67 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from api.db import get_engine
 from api.models import JobRecord
 
 
-JOB_TERMINAL_STATUSES = {"succeeded", "failed"}
+JOB_TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 JOB_ACTIVE_STATUSES = {"queued", "running"}
+
+
+def requeue_or_fail(job: JobRecord, *, error: str, now: datetime) -> str:
+    """Decide a failed/aborted job's next status from its remaining attempts.
+
+    `attempts` is incremented at claim time (see background_runner), so the gate
+    is simply ``attempts < max_attempts`` -> requeue, else terminal-fail. The
+    last-attempt diagnostic is kept in `error` either way. The caller commits.
+    Returns the new status.
+    """
+    job.error = (error or "")[:4000]
+    if (job.attempts or 0) < (job.max_attempts or 0):
+        job.status = "queued"
+        job.started_at = None
+        job.finished_at = None
+        return "queued"
+    job.status = "failed"
+    job.finished_at = now
+    return "failed"
+
+
+class JobAborted(Exception):
+    """Raised by a runner's cooperative checkpoint to stop work early.
+
+    ``reason`` is ``"timeout"`` (the wall-clock deadline passed) or
+    ``"cancelled"`` (a cancel was requested for this job).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass
+class JobControl:
+    """Cooperative cancel/timeout signal threaded into long-running runners.
+
+    Runners call :meth:`check` at safe checkpoints (between chunks/questions).
+    It raises :class:`JobAborted` once the deadline passes or once the job row's
+    ``cancel_requested_at`` is set. A short-lived session reads the flag fresh so
+    a cancel committed by another process (the API container) is visible under
+    READ COMMITTED. ``asyncio.wait_for`` is deliberately not used — it cannot
+    kill the worker thread, which would orphan an in-flight reindex.
+    """
+
+    job_id: str
+    deadline: datetime | None = None
+
+    def check(self) -> None:
+        if self.deadline is not None and datetime.now(timezone.utc) >= self.deadline:
+            raise JobAborted("timeout")
+        with Session(get_engine()) as session:
+            row = session.get(JobRecord, self.job_id)
+            if row is not None and row.cancel_requested_at is not None:
+                raise JobAborted("cancelled")
 
 
 def to_iso(value: datetime | None) -> str | None:
@@ -58,6 +115,7 @@ def serialize_job_detail(job: JobRecord) -> dict[str, Any]:
         "updated_at": to_iso(job.updated_at),
         "started_at": to_iso(job.started_at),
         "finished_at": to_iso(job.finished_at),
+        "cancel_requested_at": to_iso(job.cancel_requested_at),
         "error": job.error,
         "result_json": _normalized_json_object(job.result_json),
     }
