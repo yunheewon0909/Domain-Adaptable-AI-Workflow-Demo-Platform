@@ -6,10 +6,11 @@ WebUI, then **generate evaluation testsets and score retrieval/answer quality** 
 `docker compose up`, with **Ollama** as the default local runtime. No Homebrew, no MLX, no LM
 Studio required.
 
-> **Migration in progress (2026-06).** This project was previously a Mac-native MLX QLoRA
-> fine-tuning tool. It is being redirected to the Docker-first Open WebUI shape described here.
-> See [`docs/open-webui-docker-migration.md`](docs/open-webui-docker-migration.md) for the plan
-> and phase status.
+> **Migrated (2026-06, unreleased).** This project was previously a Mac-native MLX QLoRA
+> fine-tuning tool. It has been redirected to the Docker-first Open WebUI shape described here —
+> all migration phases (0–9) have landed. See
+> [`docs/open-webui-docker-migration.md`](docs/open-webui-docker-migration.md) for the phase
+> history.
 
 ## What it is (and isn't)
 
@@ -66,8 +67,10 @@ docker compose exec ollama ollama pull nomic-embed-text    # embedding model
 | Admin/debug dashboard | http://127.0.0.1:8000/demo | evaluation + debug only |
 | Ollama | http://127.0.0.1:11434/api/tags | runtime model list |
 
-Point Open WebUI's OpenAI connection at `http://api:8000/v1` (inside the compose network) and
-import the platform tool (see [Open WebUI integration](#open-webui-integration)).
+Open WebUI's OpenAI connection is already pointed at the API shim (`http://api:8000/v1`) by
+compose, so chat works out of the box once a model is pulled. To get graph-grounded RAG answers
+and the evaluation tools, import the platform tool (see
+[Open WebUI integration](#open-webui-integration)).
 
 ## Configuration
 
@@ -106,13 +109,13 @@ curl -s -X POST "http://127.0.0.1:8000/rag-collections/$COLLECTION/query" \
   -d '{"query":"What does pump P-101 feed?","mode":"local"}'
 
 # 4. Generate a reviewable evaluation testset from the collection
-curl -s -X POST http://127.0.0.1:8000/evaluation-sets/from-collection \
+SET=$(curl -s -X POST http://127.0.0.1:8000/evaluation-sets/from-collection \
   -H 'Content-Type: application/json' \
-  -d "{\"collection_id\":\"$COLLECTION\",\"name\":\"Maintenance eval\",\"questions_per_chunk\":2}"
+  -d "{\"collection_id\":\"$COLLECTION\",\"name\":\"Maintenance eval\",\"questions_per_chunk\":2}" | jq -r .id)
 
 # 5. Run an evaluation and fetch the report (groundedness, source coverage, graph stats)
 RUN=$(curl -s -X POST http://127.0.0.1:8000/evaluation-runs \
-  -H 'Content-Type: application/json' -d '{"evaluation_set_id":"<id>"}' | jq -r .id)
+  -H 'Content-Type: application/json' -d "{\"evaluation_set_id\":\"$SET\"}" | jq -r .id)
 curl -s http://127.0.0.1:8000/evaluation-runs/$RUN/report | jq
 ```
 
@@ -128,7 +131,7 @@ We implement a lean in-repo GraphRAG (not Microsoft's `graphrag` package — its
   detection.
 - **Indexing** (worker job): `parse → chunk → embed_chunks → extract_graph → detect_communities
   → summarize_communities`.
-- **Retrieval:** *local* (seed entities/chunks → 1–2 hop expansion → connected chunks +
+- **Retrieval:** *local* (seed entities/chunks → 1-hop expansion → connected chunks +
   relationships + community summaries), *global* (map-reduce over community summaries), and a
   *naive* chunk-vector fallback for answers before the graph is built.
 
@@ -136,8 +139,8 @@ We implement a lean in-repo GraphRAG (not Microsoft's `graphrag` package — its
 
 Run Open WebUI (bundled in compose) and:
 
-- point its OpenAI base URL at `http://api:8000/v1` (compose) or `http://127.0.0.1:8000/v1`
-  (native);
+- its OpenAI base URL is pre-wired to `http://api:8000/v1` by compose (override via
+  `OPENAI_API_BASE_URL`; use `http://127.0.0.1:8000/v1` for a native, non-compose run);
 - import the platform tool: `GET /openwebui/platform_tools.py`;
 - `GET /openwebui/manifest.json` lists the exposed methods: `list_collections`,
   `create_collection`, `upload_text_document`, `search_collection`, `get_entity`, `get_subgraph`,
